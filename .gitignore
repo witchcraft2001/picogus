@@ -12,3 +12,20 @@ fp-info-cache
 
 firmware.ld
 flash_firmware.h
+ultra-gs-docs/
+AGENTS.md
+CLAUDE.md
+
+# Generated Ultra GS evidence belongs in build/, not in the source index.
+__pycache__/
+*.py[cod]
+/tests/ultrags/reference/manifest.json
+/tests/ultrags/reports/**/artifacts/
+/tests/ultrags/reports/**/logs/
+/tests/ultrags/reports/**/*.json
+/tests/ultrags/reports/**/*.sha256
+/tests/ultrags/reports/**/*.map
+/tests/ultrags/reports/**/*.map.gz
+/tests/ultrags/reports/**/*.elf
+/tests/ultrags/reports/**/*.uf2
+/tests/ultrags/reports/**/*.bin

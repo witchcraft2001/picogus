@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "purpose": "Maintained source and licensing inventory; generated build hashes are local artifacts",
+  "sources": [
+    {
+      "name": "PicoGUS baseline",
+      "url": "https://github.com/polpo/picogus",
+      "revision": "74f57e56217066a5ed29bc4fb140308577e9a44e",
+      "license": "GPL-2.0-or-later for firmware; individual original headers govern",
+      "use": "Existing firmware architecture and ISA startup; own Ultra GS source changes are tracked by Git"
+    },
+    {
+      "name": "Pico SDK",
+      "url": "https://github.com/raspberrypi/pico-sdk",
+      "revision": "bddd20f928ce76142793bef434d4f75f4af6e433",
+      "tag": "2.1.1",
+      "license": "BSD-3-Clause; bundled components retain their own licenses",
+      "notice": "PICO_SDK_PATH/LICENSE.TXT",
+      "use": "Firmware toolchain dependency; located outside the source tree"
+    },
+    {
+      "name": "pico-extras",
+      "url": "https://github.com/raspberrypi/pico-extras",
+      "revision": "f05d4f7371802440cadd36744789a26944d950ac",
+      "tag": "sdk-2.1.1",
+      "license": "BSD-3-Clause",
+      "notice": "PICO_EXTRAS_PATH/LICENSE.TXT",
+      "use": "I2S PIO source; diagnostic owns its own DMA path"
+    },
+    {
+      "name": "rp2040-psram",
+      "url": "https://github.com/polpo/rp2040-psram",
+      "revision": "419375d5af2af2c72af63cdab6c6df2c558a3a9c",
+      "license": "MIT",
+      "notice": "sw/rp2040-psram/LICENSE",
+      "use": "Pinned submodule; SPI/PIO PSRAM backend"
+    },
+    {
+      "name": "tinyusb",
+      "url": "https://github.com/wbcbz7/tinyusb",
+      "revision": "4a008bd5df1bbc2e0fa8269e6504f65fa6908853",
+      "license": "MIT; bundled components retain their own licenses",
+      "notice": "sw/tinyusb/LICENSE",
+      "use": "Pinned submodule; baseline and optional diagnostic USB support"
+    },
+    {
+      "name": "tusb_xinput",
+      "url": "https://github.com/Ryzee119/tusb_xinput",
+      "revision": "0f9cbc3953431c602376d7e7f3c7a6ff2149c544",
+      "license": "MIT",
+      "notice": "sw/tusb_xinput/LICENSE",
+      "use": "Pinned submodule; baseline firmware dependency"
+    },
+    {
+      "name": "picotool",
+      "url": "https://github.com/raspberrypi/picotool",
+      "revision": "ba3df406c37774144a059b2bdae73ab52587a1d2",
+      "license": "BSD-3-Clause; bundled components retain their own licenses",
+      "notice": "LICENSE.TXT in the pinned checkout",
+      "use": "File conversion/inspection tool built under build/; this profile has no USB support"
+    },
+    {
+      "name": "Micromod",
+      "url": "https://github.com/martincameron/micromod",
+      "revision": "83b5d9aebddb528ea177e115b0afed5d75f6b92a",
+      "license": "BSD-3-Clause",
+      "notice": "tests/ultrags/reference/micromod-licence.txt",
+      "use": "Reference/license audit only in S0a; no player source copied or compiled"
+    },
+    {
+      "name": "M62429",
+      "url": "https://github.com/RobTillaart/M62429",
+      "tag": "0.3.6",
+      "license": "MIT for upstream library; original headers of existing PicoGUS adapters govern",
+      "notice": "tests/ultrags/reference/M62429-LICENSE",
+      "use": "Notice for the pre-existing library adapted in sw/M62429/ at the PicoGUS baseline"
+    }
+  ]
+}

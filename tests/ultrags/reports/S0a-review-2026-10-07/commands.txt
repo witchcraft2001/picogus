@@ -1,0 +1,21 @@
+export PICO_SDK_PATH=/Users/dmitry/dev/zx/sprinter/toolchain/pico-sdk
+export PICO_EXTRAS_PATH=/Users/dmitry/dev/zx/sprinter/toolchain/pico-extras
+export PATH=/Users/dmitry/dev/zx/sprinter/toolchain/armgcc/bin:$PATH
+export UG_PYTHON=/Users/dmitry/dev/zx/sprinter/toolchain/py313/bin/python3.13
+make -f Makefile.ultrags BUILD=build/S0a-review firmware diagnostic budgets host-test
+# An existing checkout may seed the exact picotool clone without a network download:
+# UG_PICOTOOL_SEED=build/S0a-review/ultrags-diag-release/_deps/picotool-src
+# Historical raw logs are local build/S0a-review/evidence/review/logs/ artifacts.
+# Generate full source hashes/metadata locally after building:
+"$UG_PYTHON" tools/ultrags/manifest.py --repo . \
+  --spec ultra-gs-docs/ultra-gs.md --python "$UG_PYTHON" \
+  --picotool-manifest build/S0a-review/tools/picotool/manifest.json \
+  --commands-file tests/ultrags/reports/S0a-review-2026-10-07/commands.txt \
+  --build-dirs build/S0a-review/multifw-release build/S0a-review/ne2k-release \
+    build/S0a-review/ultrags-diag-release build/S0a-review/ultrags-diag-debug \
+  --references build/S0a-review/evidence/current/source-manifest.json \
+  --out build/S0a-review/evidence/current/manifest.json \
+  --artifacts build/S0a-review/ultrags-diag-release/pg-ultrags-diag.elf \
+    build/S0a-review/ultrags-diag-release/pg-ultrags-diag.uf2 \
+    build/S0a-review/multifw-release/picogus.uf2 \
+    build/S0a-review/ne2k-release/pg-ne2k.uf2 build/S0a-review/host/budgets.json

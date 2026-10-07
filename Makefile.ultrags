@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Ultra GS build/test orchestration (S0a).
+#
+# Required environment (see AGENTS.md):
+#   PICO_SDK_PATH      Pico SDK 2.1.1 checkout
+#   PICO_EXTRAS_PATH   pico-extras sdk-2.1.1 checkout
+#   PATH               must contain arm-none-eabi-gcc 14.2.x
+#   UG_PYTHON          Python 3 interpreter with sympy/scipy/more-itertools
+#                      (needed by baseline table generators)
+#
+#   make -f Makefile.ultrags firmware     # MULTIFW + NE2K regression builds
+#   make -f Makefile.ultrags diagnostic   # standalone diag, PGDEBUG=OFF + ON
+#   make -f Makefile.ultrags host-test    # unit tests (+UBSan)
+#   make -f Makefile.ultrags budgets      # SRAM/flash/settings/PIO tables
+#
+# S0b+ targets (dss, test-dss, fixtures, package, check) exist but
+# deliberately FAIL with an explicit message -- they are not
+# implemented yet and must never pretend to pass.
+
+SHELL := /bin/bash
+.SHELLFLAGS := -eu -o pipefail -c
+ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+BUILD ?= $(ROOT)/build
+SW := $(ROOT)/sw
+
+PICO_SDK_PATH ?=
+PICO_EXTRAS_PATH ?=
+UG_PYTHON ?= python3
+CC ?= cc
+UG_PICOTOOL_SEED ?=
+PICOTOOL_ROOT := $(abspath $(BUILD))/tools/picotool
+
+export PICO_SDK_PATH PICO_EXTRAS_PATH
+
+CMAKE_COMMON := -DCMAKE_BUILD_TYPE=Release \
+	-DPython3_EXECUTABLE="$(UG_PYTHON)" \
+	-Dpicotool_DIR="$(PICOTOOL_ROOT)/install/picotool"
+
+define checkenv
+	@if [ -z "$(PICO_SDK_PATH)" ] || [ -z "$(PICO_EXTRAS_PATH)" ]; then \
+		echo "error: PICO_SDK_PATH/PICO_EXTRAS_PATH must be set" >&2; exit 2; \
+	fi
+	@command -v arm-none-eabi-gcc >/dev/null || { \
+		echo "error: arm-none-eabi-gcc not in PATH" >&2; exit 2; }
+	@"$(UG_PYTHON)" "$(ROOT)/tools/ultrags/preflight.py"
+endef
+
+.PHONY: prepare-tools firmware diagnostic diagnostic-release diagnostic-debug host-test \
+        budgets clean fixtures dss test-dss package check
+
+prepare-tools:
+	$(checkenv)
+	"$(UG_PYTHON)" "$(ROOT)/tools/ultrags/prepare_picotool.py" --root "$(PICOTOOL_ROOT)" \
+		$(if $(UG_PICOTOOL_SEED),--seed "$(UG_PICOTOOL_SEED)")
+
+firmware: prepare-tools
+	$(checkenv)
+	@mkdir -p $(BUILD)/multifw-release
+	cmake -S $(SW) -B $(BUILD)/multifw-release $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=MULTIFW -DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+	cmake --build $(BUILD)/multifw-release --parallel
+	@mkdir -p $(BUILD)/ne2k-release
+	cmake -S $(SW) -B $(BUILD)/ne2k-release $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=NE2K -DPICO_BOARD=picow_fast -DPGDEBUG=OFF
+	cmake --build $(BUILD)/ne2k-release --parallel
+
+diagnostic: diagnostic-release diagnostic-debug
+
+diagnostic-release: prepare-tools
+	$(checkenv)
+	@mkdir -p $(BUILD)/ultrags-diag-release
+	cmake -S $(SW) -B $(BUILD)/ultrags-diag-release $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=ULTRAGS_DIAG -DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+	cmake --build $(BUILD)/ultrags-diag-release --parallel
+
+diagnostic-debug: prepare-tools
+	$(checkenv)
+	@mkdir -p $(BUILD)/ultrags-diag-debug
+	cmake -S $(SW) -B $(BUILD)/ultrags-diag-debug $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=ULTRAGS_DIAG -DPICO_BOARD=picogus2 -DPGDEBUG=ON
+	cmake --build $(BUILD)/ultrags-diag-debug --parallel
+
+host-test:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/run_host_tests.py --build $(BUILD)/host --cc "$(CC)"
+
+budgets: diagnostic-release firmware
+	@mkdir -p $(BUILD)/host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/budget_report.py \
+		--build-dir $(BUILD)/ultrags-diag-release \
+		--multifw-dir $(BUILD)/multifw-release \
+		--ne2k-dir $(BUILD)/ne2k-release \
+		--sw $(SW) --tools $(ROOT)/tools/ultrags \
+		--armgcc arm-none-eabi \
+		--out $(BUILD)/host/budgets.json
+
+# --- later-stage targets: explicit NOT-IMPLEMENTED ----------------------
+NOT_READY = echo "error: '$@' belongs to a later Ultra GS stage (see ultra-gs.md) -- not implemented in S0a" >&2; exit 2
+
+fixtures:
+	@$(NOT_READY)
+dss:
+	@$(NOT_READY)
+test-dss:
+	@$(NOT_READY)
+package:
+	@$(NOT_READY)
+check:
+	@$(NOT_READY)
+
+clean:
+	@test "$(BUILD)" != "$(ROOT)" && test -n "$(BUILD)" && test "$(BUILD)" != "/"
+	rm -rf $(BUILD)/multifw-release $(BUILD)/ne2k-release \
+		$(BUILD)/ultrags-diag-release $(BUILD)/ultrags-diag-debug \
+		$(BUILD)/host

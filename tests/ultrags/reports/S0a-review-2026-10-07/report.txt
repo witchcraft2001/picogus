@@ -1,0 +1,174 @@
+Ревью S0a — 2026-10-07
+
+Результат: HOST_PASS. Выявленные дефекты исправлены, проверки на host завершены.
+Аппаратная приёмка не проводилась; статус ACCEPTED не присваивается.
+ТЗ: ultra-gs-docs/ultra-gs.md v1.7. После ревью уточнена политика хранения
+артефактов: результаты генерации сохраняются в ignored build/, исходники в Git.
+HEAD: 74f57e56217066a5ed29bc4fb140308577e9a44e, ветка ultrags.
+Ревью выполнено поверх первоначальной staged-реализации; индекс обновлён
+актуальными исходниками после исправлений и очистки артефактов.
+Коммиты, push и прошивка платы не выполнялись.
+Hash ТЗ перед обновлением строки §16: 340fd1dc62f0b5e8f2a200c0f9f2add51177243bf236a8883fa73f47702cbde4.
+Существующие пользовательские правила .gitignore сохранены, добавлен игнор
+генерируемых артефактов Ultra GS и Python bytecode.
+
+ИСПРАВЛЕННЫЕ ЗАМЕЧАНИЯ
+
+1. Высокая серьёзность — sw/ultrags/ug_audio.c.
+   PIO SM не включался: запуск DMA не запускает I2S. Очередь из трёх
+   элементов теряла состояние FULL при head==tail. Буферы не резервировались
+   при get(), операции с free_mask могли пересекаться с ISR, повторный RUN
+   перезапускал DMA. Исправлены запуск SM один раз, кольцо на N+1 позиции,
+   владение FREE/FILLING/READY/DMA и короткие критические секции core1.
+   ISR фиксирует pending-mask до W1C. STOP освобождает только READY,
+   EOF дожидается queued/in-flight данных; ожидаемая тишина не считается
+   underrun. I2S word исправлен: high16 LEFT, low16 RIGHT (pico-extras).
+   Проверки: test_device.c, реальный аудиоадаптер с mock SDK, HOST/UBSan PASS.
+
+2. Высокая серьёзность — sw/ultrags/ug_render.c.
+   Stereo lane читала соседние mono samples без stride=2; исходный span
+   переполнялся до расширения до uint64. Интерполяция округляла delta,
+   что меняло half-tie для отрицательного результата. Исправлены stride,
+   stereo bounds/ch_off, uint64 multiplication, округление всей weighted
+   суммы. FNV-1a теперь считает четыре LE-байта stereo frame со штатным seed.
+   Новые независимые проверки на исходном staged-рендере: 4101 FAILURES,
+   исходный hash 6b7a489fd3b57694b5887db1ed88c1710195ccf3587f8baca6dc18c9b9bbf136.
+   Исправленный код проходит oracle, stereo EOF, UINT32_MAX span и обе
+   реальные firmware profiles по 2048 quanta, включая повторный прогон.
+
+3. Высокая серьёзность — ug_diag_link / ug_diag_isa / ug_spike.
+   Volatile mailbox перезаписывал ещё не принятую команду, cmd/arg могли
+   относиться к разным записям. Status stream читал меняющуюся структуру.
+   Введён SRAM mailbox под Pico mutex: core0 использует try-enter, возвращает
+   BUSY; core1 принимает целую пару и публикует snapshot короткой копией.
+   На STATUS-select фиксируется снимок; конец stream возвращает FF без wrap.
+   Проверки включают конкурирующие pthread writer/reader и BUSY при contention.
+   Реальный максимум критической секции / IOCHRDY timing требует S1.
+
+4. Высокая серьёзность — ug_psram / ug_spike.
+   DMA completion не гарантировал завершение SPI и снятие CS. Следующий
+   chunk мог начать команду до окончания предыдущей. Теперь после каждой
+   транзакции проверяются DMA, TX FIFO, PC у begin и CS high. Ограничения
+   backend соблюдены: read<=31, write<=27, public call<=256 bytes.
+   normal/fudge выбираются по плате и проверяются с retry; uninit отключает
+   SM, ждёт SPI tail, освобождает DMA/program до повторных claims.
+   Неудачный probe и resource audit переводят диагностику в ERR.
+   Probe пишет все уникальные MiB-marker patterns до readback для выявления
+   aliasing; заявленные 8 MiB остаются неподтверждённой физической ёмкостью.
+   HOST проверяет край 8 MiB, chunk counts и lifecycle; электрические свойства
+   и пригодность SPI tail condition — REAL_PENDING.
+
+5. Средняя серьёзность — нагрузочный spike и достоверность отчёта.
+   Короткие исходные samples полностью помещались в cache после прогрева;
+   заявленная нагрузка с постоянными cache misses не проверялась.
+   ug_profile.c объединяет sources/setup firmware и host. Музыкальные
+   источники 1024 samples сочетают короткие boundary loops и high pitch;
+   FX находятся выше 1 MiB, mono/stereo profiles занимают 12 lanes.
+   HOST: profile A cache_fills=109418 checksum=25af1bdd;
+   profile B cache_fills=124778 checksum=77d47e07 (2048 quanta each).
+   Default run=24000 quanta, 64 s rendered audio при 48 kHz, для S1 C00.
+   cache_misses отделены от fetch_errors; per-run timing/counters reset.
+   Фоновая операция ограничена 256 bytes и выполняется после попытки render.
+   Status frames/checksum описывают rendered bytes; STOP может отбросить READY.
+
+6. Средняя серьёзность — бюджеты.
+   Первоначальный расчёт суммировал несовместимые SPI-варианты с unused QSPI,
+   не проверял PIO1, использовал guessed stack sizes и не показывал запас MVP.
+   Теперь SRAM измеряется по ELF sections/addresses для шести mode images,
+   bootloader (один core) и NE2K. Stack reserves считаются в scratch banks.
+   Flash берётся из BIN lengths + generated slot offsets с реальным upstream
+   alignment=1024, 32 KiB boot reserve и последним Settings sector=4096.
+   Settings tail проверен ARM compiler без изменения production Settings v5.
+   Будущий код, objects/extents, playlist/events, transfer buffers, MOD cache,
+   parser scratch перечислены отдельно; measured caches/DMA не дублируются.
+   Это ESTIMATE: seven-image catalog/mode8 и full-MVP linker proof — S2+.
+
+7. Средняя серьёзность — tooling / provenance / scope.
+   Make define-checkenv синтаксис исправлен для установленного GNU Make3.81:
+   прежняя форма с '=' молча не выполняла preflight. Проверяются SDK/extras
+   tags и clean state, GCC14.2.Rel1, CMake>=3.29, Python3.13 и package pins.
+   SDK fetch picotool develop заменён отдельным exact-commit install:
+   ba3df406c37774144a059b2bdae73ab52587a1d2. CMake получает absolute picotool_DIR.
+   Версия файла содержит v2.3.2-develop, но commit закреплён, ветка не обновляется.
+   Диагностические selectors перенесены из common/ в private ug_diag.h v2:
+   постоянный Ultra GS wire ABI в S0a не вводится.
+   Удалены вымышленные copyright строки; собственный новый код GPL-2.0-or-later.
+   Лицензии и закреплённые источники: tests/ultrags/reference/sources.json.
+   Полный автоматически созданный список hashes compilation inputs, PIO и
+   generated headers сохранён локально в build/S0a-review/evidence/review/.
+   Фактически доступны sjasmplus1.22.0 и Node22.13.0. Утверждение первоначального
+   отчёта об их отсутствии ошибочно; DSS EXE/harness не реализовывались (S0b).
+   Общий picogus.cpp сохранён без изменений; Settings/DOS/multifw slots не менялись.
+
+ПРОВЕРКИ И АРТЕФАКТЫ
+
+- Release MULTIFW + NE2K: PASS; diagnostic PGDEBUG=OFF + ON: PASS.
+- Release printf-leak guard остаётся обязательным и сборки прошли.
+- Scalar render oracle, device control-flow и budget negative self-tests:
+  HOST PASS, UBSan PASS с fatal sanitizer errors.
+- ASan: SKIP. Отдельная пустая ASan-программа зависает до main на macOS;
+  5 s timeout только этого probe разрешает SKIP. Ошибка/timeout самих тестов
+  остаётся fatal. Повторить ASan на работающем runtime в последующем CI.
+- Все 15 baseline BIN побайтно совпадают; picogus.bin/uf2 и NE2K bin/uf2
+  совпадают. Из 30 BIN/UF2 контейнеров совпадают 27. Три intermediate slot-UF2
+  отличаются одним байтом ELF e_shoff в padding ПЕРЕД linked image origin;
+  байты mode image совпадают. Детали/адреса/hash в локальном снимке
+  build/S0a-review/evidence/review/regression.json.
+  Причина: размер/расположение debug sections ELF зависит от build path.
+- Tool negative checks: поздний dss target, отсутствующий SDK, неверный Python
+  и пропавший artifact возвращают FAIL; локальный снимок в
+  build/S0a-review/evidence/review/logs/tool-negative.log.
+- git diff --check: PASS при ревью. Исторические raw logs сохранены в build/.
+- Linker maps находятся рядом с ELF в build/S0a-review/; локальные архивные
+  копии — build/S0a-review/evidence/review/artifacts/maps/. В Git они не входят.
+- Hash диагностического release UF2: a6f1c8d41e683c00fc6973bd09fd14fae0d5d6865feb9964667f3c401d310ee1.
+- Hash release ELF: 6fa57b0c587339797d326956c245bc46866f2a929832dc4cb53f0529bdd94fa6.
+- Hash debug UF2: 553c8b4ec28ca6fcfb0bda5809c541ab143f05875ecce0307d845fa05bd671db.
+- Standalone binary origin=0x10000000; binary end=0x10007980,
+  RP2040 family=e48bff56, SDK2.1.1, picogus2, Release (picotool info).
+- Все восемь budget checks при ревью: PASS. Снимок расчёта сохранён в
+  build/S0a-review/evidence/review/budgets.json; свежий результат target budgets
+  записывается в build/S0a-review/host/budgets.json.
+  Diagnostic main used/free: 42976 / 219168 bytes.
+  MVP estimate main/free: 145392 / 116752 bytes.
+  Settings sizeof=152, proposed tail sizeof=156, tail offset=152 (<256).
+  PIO0=19/32; PIO1 variants=17/18/21/22 из 32.
+  Future seven-image Flash estimate free=1143808 bytes.
+- Baseline main used/free (bytes): GUS 101900/160244, ADLIB 106300/155844,
+  MPU 78548/183596, PSG 89480/172664, SB 171836/90308, USB 128720/133424,
+  bootloader 8904/253240, NE2K 61000/201144. Stack reserve каждого core=2048;
+  bootloader использует один core. Исходные измерения — в локальном budgets JSON.
+- Проверенный toolchain: GCC14.2.Rel1 (14.2.1), CMake4.4.2, Python3.13.3,
+  Pico SDK2.1.1, pico-extras sdk-2.1.1, sjasmplus1.22.0, Node22.13.0.
+  Commits источников — reference/sources.json; Python pins — requirements-build.txt.
+- Команды воспроизведения: commands.txt. Build outputs и подробные машинные
+  отчёты расположены в ignored build/S0a-review/. Правила хранения и пути
+  исторических снимков: tests/ultrags/reports/README.txt.
+
+УСТАНОВКА И ВОЗВРАТ ДЛЯ S1 (КОМАНДЫ ЗДЕСЬ НЕ ВЫПОЛНЯЛИСЬ)
+
+Закреплённый build picotool собран с PICOTOOL_NO_LIBUSB=1; подходит только для
+UF2 creation и file inspection. Команды load/save у него отсутствуют.
+Нельзя использовать его как инструмент резервного копирования платы.
+Перед S1 flashing сохранить установленный bundle/settings либо явно согласовать
+их потерю; USB-capable picotool/recovery tool и его hash закрепить в S1 report.
+
+BOOTSEL mass-storage path на этом macOS, после подготовки стенда:
+  shasum -a 256 build/S0a-review/ultrags-diag-release/pg-ultrags-diag.uf2
+  cp build/S0a-review/ultrags-diag-release/pg-ultrags-diag.uf2 /Volumes/RPI-RP2/
+Возврат сохранённого baseline bundle через BOOTSEL:
+  shasum -a 256 build/S0a-review/multifw-release/picogus.uf2
+  cp build/S0a-review/multifw-release/picogus.uf2 /Volumes/RPI-RP2/
+Hash baseline bundle: 55134c52526b0b885562f881b70d0af3e01f380b4aa72d6274ed53184bf5d9a6.
+Эта команда возвращает firmware bundle; сохранность persisted Settings отдельно
+проверить на стенде. Standalone UF2 занимает начало Flash, это не slot image;
+переключение mode8 через UGCFG пока невозможно. При зависшем ISA снять питание
+стенда и выполнять BOOTSEL recovery вне зависшего хоста, как требует §15/S1.
+
+ОСТАЛОСЬ ДО АППАРАТНОЙ ПРИЁМКИ
+
+S1: DACK/IOCHRDY/tri-state, IRQ low, reset/NMI, реальные bus latency/gaps,
+normal/fudge/SCK/capacity, LRCLK/BCLK, 60 s каждого C00 profile с реальными
+cache-fill DMA и ISA traffic, max render<=75% quantum, underruns/errors=0.
+Проверки mock SDK не моделируют electrical timing, PIO pacing или DMA jitter.
+Нет claims о physical audio capabilities. S0b/S1 и последующие этапы не начаты.

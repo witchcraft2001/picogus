@@ -779,6 +779,88 @@ elseif(PROJECT_TYPE STREQUAL "ANALYZER")
 endif()
 
 ################################################################################
+# Ultra GS S0a standalone diagnostic (not a multifw slot image)
+if(PROJECT_TYPE STREQUAL "ULTRAGS_DIAG")
+    if(NOT Python3_FOUND)
+        message(FATAL_ERROR "Ultra GS diagnostic requires Python3 for printf-leak verification")
+    endif()
+    set(FW_TARGET pg-ultrags-diag)
+    add_executable(${FW_TARGET}
+        ultrags/diag_main.cpp
+        ultrags/ug_diag_isa.c
+        ultrags/ug_diag_link.c
+        ultrags/ug_hwmap.c
+        ultrags/ug_psram.c
+        ultrags/ug_render.c
+        ultrags/ug_profile.c
+        ultrags/ug_audio.c
+        ultrags/ug_spike.c
+        M62429/M62429.cpp
+    )
+    pico_set_program_name(${FW_TARGET} "picogus-ultrags-diag")
+    pico_set_program_version(${FW_TARGET} ${PICOGUS_VERSION})
+    # standalone image: executes from SRAM (PICO_COPY_TO_RAM is global),
+    # flash origin is the SDK default 0x10000000 -- NOT a slot-linked
+    # multifw image; must not be packed into picogus.uf2
+    target_include_directories(${FW_TARGET} PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}
+        ${CMAKE_CURRENT_LIST_DIR}/../common
+    )
+    target_compile_definitions(${FW_TARGET} PRIVATE
+        ULTRAGS_DIAG=1
+        PICO_AUDIO_I2S_DATA_PIN=16
+        PICO_AUDIO_I2S_CLOCK_PIN_BASE=17
+        PICO_AUDIO_I2S_PIO=1
+        PICO_AUDIO_I2S_SM=3
+        M62429_PIO=1
+        PSRAM=1
+        PSRAM_ASYNC=1
+        PSRAM_PIN_CS=1
+        PSRAM_PIN_SCK=2
+        PSRAM_PIN_MOSI=3
+        PSRAM_PIN_MISO=0
+    )
+    pico_generate_pio_header(${FW_TARGET} ${CMAKE_CURRENT_LIST_DIR}/isa/isa_io.pio)
+    pico_generate_pio_header(${FW_TARGET} ${CMAKE_CURRENT_LIST_DIR}/M62429/M62429.pio)
+    pico_generate_pio_header(${FW_TARGET}
+        ${PICO_EXTRAS_PATH}/src/rp2_common/pico_audio_i2s/audio_i2s.pio)
+    target_link_libraries(${FW_TARGET}
+        pico_stdlib
+        pico_multicore
+        rp2040-psram
+        hardware_pio
+        hardware_dma
+        hardware_pll
+        hardware_adc
+        hardware_exception
+        hardware_watchdog
+        hardware_clocks
+    )
+    pico_add_extra_outputs(${FW_TARGET})
+    if(PGDEBUG)
+        target_compile_definitions(${FW_TARGET} PRIVATE PGDEBUG=1)
+        pico_enable_stdio_uart(${FW_TARGET} 1)
+        pico_enable_stdio_usb(${FW_TARGET} 1)
+    else()
+        pico_enable_stdio_uart(${FW_TARGET} 0)
+        pico_enable_stdio_usb(${FW_TARGET} 0)
+        pico_set_printf_implementation(${FW_TARGET} none)
+    endif()
+    if(NOT PGDEBUG AND Python3_FOUND)
+        # printf is stripped in release; a leaked printf-family call would
+        # dead-loop the firmware -- fail the build instead
+        add_custom_command(TARGET ${FW_TARGET} POST_BUILD
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_printf_leak.py
+                ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE}
+                $<TARGET_FILE:${FW_TARGET}>
+            VERBATIM
+        )
+    endif()
+    pico_enable_stdio_semihosting(${FW_TARGET} 0)
+endif()
+
+################################################################################
 # Optional target to program built firmware via openocd
 add_custom_target(
     program
