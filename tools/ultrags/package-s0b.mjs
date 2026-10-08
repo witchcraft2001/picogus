@@ -21,6 +21,9 @@ import { fileURLToPath } from 'node:url';
 import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
+const stage = arg('--stage', 'S0b');
+if (!['S0b','S1'].includes(stage)) throw new Error('unknown package stage');
+const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
 const outDir = resolve(arg('--out', 'build/ultrags/package'));
@@ -73,7 +76,20 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = [
+const help = stage === 'S1' ? [
+  'Ultra GS S1 standalone diagnostic package',
+  'HOST_PASS / DSS-EXE_PASS / REAL_PENDING. Not the production mode8 bundle.',
+  'UGTEST BUS /SLOT:0 /CPU:21 (1048576 bytes in each direction).',
+  '/MIRROR means the bench is isolated; disabled by default.',
+  'UGBENCH /BYTES:65536 /LOOPS:4 /BLOCK:256 /CHECK:BOTH /CPU:UNKNOWN',
+  'Only METHOD:FIXED is implemented. METHOD:ALL prints explicit SKIP reasons.',
+  'Repeat with BLOCK:512 and 1024 and CPU:3.5. /CPU does not switch CPU.',
+  '/SPIKE:1 or 2 starts a 64-second core1 spike; /SOAK:65 supplies ISA traffic.',
+  'Time resolution is 1 second. Short intervals are insufficient for speed.',
+  'ST-*.EXE are intentionally defective harness tests: never run on hardware.',
+  'Firmware is supplied separately: standalone origin 0x10000000.',
+  'Read host/sprinter/ultrags/docs/S1-README.md for backup, BOOTSEL recovery and REAL gates.',
+].join('\r\n') : [
   'Ultra GS stage S0b package (incomplete stage artifact)',
   '=======================================================',
   '',
@@ -82,10 +98,12 @@ const help = [
   '',
   'This is a STAGE artifact, not the production bundle of TZ 13.2:',
   'UGCFG and the eight utility apps, and the seven-mode multifw image',
-  'do not exist yet (later stages). Hardware gates S1-S11 are PENDING.',
+  'are planned for later stages. REAL hardware gates remain PENDING.',
   '',
   'UGDIAG.EXE runs the register/protocol roundtrip against an Ultra GS',
   'card at base 02A0h, ISA slot 0; no CLI arguments in this stage.',
+  'UGTEST BUS and UGBENCH target the standalone S1 SRAM diagnostic.',
+  'See host/sprinter/ultrags/docs/S1-README.md before a REAL bench run.',
   'ST-*.EXE are harness self-tests, including intentionally defective',
   'programs; run them through make test-dss, not on real hardware.',
   '',
@@ -93,6 +111,7 @@ const help = [
   '',
 ].join('\r\n');
 add('HELP.TXT', Buffer.from(help, 'ascii'), 'generated');
+if (stage==='S1') add('README.MD', readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/S1-README.md')), 'host/sprinter/ultrags/docs/S1-README.md');
 const license = [
   'Ultra GS S0b package',
   '',
@@ -105,7 +124,7 @@ add('LICENSE.TXT', Buffer.from(license, 'ascii'), 'generated');
 
 // manifest.txt embedded in both containers
 function buildManifestTxt() {
-  const lines = ['Ultra GS S0b package manifest', `exes: ${exes.length}`, ''];
+  const lines = [`Ultra GS ${stage} package manifest`, `exes: ${exes.length}`, ''];
   for (const [name, p] of [...payload.entries()].sort()) {
     if (name === 'MANIFEST.TXT') continue;
     lines.push(`${name}  ${p.imgName}  ${p.buf.length}  ${sha256(p.buf)}  ${p.src}`);
@@ -196,16 +215,16 @@ const sorted = [...payload.entries()].sort(([a], [b]) => a.localeCompare(b)).map
 const imgSorted = [...payload.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([n, p]) => [p.imgName, p.buf]);
 const zipBuf = makeZip(sorted);
 const imgBuf = makeImg(imgSorted);
-writeFileSync(join(outDir, 'ug-s0b.zip'), zipBuf);
-writeFileSync(join(outDir, 'ug-s0b.img'), imgBuf);
+writeFileSync(join(outDir, `ug-${slug}.zip`), zipBuf);
+writeFileSync(join(outDir, `ug-${slug}.img`), imgBuf);
 const pman = {
   stage: 'S0b', schema: 2, deterministic: true,
   provenance: { ...provenance, fixtures: sha256(fixtureManifestBytes),
     packer: sha256(readFileSync(fileURLToPath(import.meta.url))) },
   scope: 'stage artifact; production 13.2 bundle NOT included (later stages)',
   containers: {
-    'ug-s0b.zip': { size: zipBuf.length, sha256: sha256(zipBuf) },
-    'ug-s0b.img': { size: imgBuf.length, sha256: sha256(imgBuf) },
+    [`ug-${slug}.zip`]: { size: zipBuf.length, sha256: sha256(zipBuf) },
+    [`ug-${slug}.img`]: { size: imgBuf.length, sha256: sha256(imgBuf) },
   },
   payload: sorted.map(([n, b]) => ({ name: n, imgName: payload.get(n).imgName, size: b.length, sha256: sha256(b), src: payload.get(n).src })),
 };

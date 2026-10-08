@@ -89,9 +89,15 @@ export function parseExe(file) {
 
 // ------------------------------ machine --------------------------------
 export class SprinterMachine {
-  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x21, page3Init = 0x03, cpuHz = CPU_HZ }) {
+  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x21, page3Init = 0x03, cpuHz = CPU_HZ, commandLine = null, movingClock = false, clockStart = 86390, escAfter = Infinity, logLimit = Infinity }) {
     if (![3_500_000, 21_000_000].includes(cpuHz)) throw new Error('unsupported CPU frequency');
     this.cpuHz = cpuHz;
+    this.commandLine = commandLine;
+    this.movingClock = movingClock;
+    this.clockStart = clockStart;
+    this.escAfter = escAfter;
+    this.keyCalls = 0;
+    this.logLimit = logLimit;
     this.card = card;
     this.cardSlot = cardSlot;
     this.mem = new Uint8Array(0x10000);
@@ -120,6 +126,8 @@ export class SprinterMachine {
     this.trace = [];
     this.windows = [];
     this.windowStart = null;
+    this.maxWindowUs = 0;
+    this.windowCount = 0;
   }
 
   // Arm a deferred NMI (fires after the next instruction completes).
@@ -136,7 +144,7 @@ export class SprinterMachine {
     if (a >= WIN3_BASE && this.isaOpen) {
       const isa = this.isaAddr(a);
       const v = this.card && this.isaSlot === this.cardSlot ? this.card.readPort(isa) : 0xFF;
-      this.isaLog.push({ t: this.cycles, dir: 'r', slot: this.isaSlot, isa, val: v });
+      if (this.isaLog.length < this.logLimit) this.isaLog.push({ t: this.cycles, dir: 'r', slot: this.isaSlot, isa, val: v });
       return v;
     }
     return this.mem[a];
@@ -145,7 +153,7 @@ export class SprinterMachine {
     a &= 0xFFFF; v &= 0xFF;
     if (a >= WIN3_BASE && this.isaOpen) {
       const isa = this.isaAddr(a);
-      this.isaLog.push({ t: this.cycles, dir: 'w', slot: this.isaSlot, isa, val: v });
+      if (this.isaLog.length < this.logLimit) this.isaLog.push({ t: this.cycles, dir: 'w', slot: this.isaSlot, isa, val: v });
       // NMI trigger: arms when the bus write hits the configured ISA
       // address (used to land an NMI inside a switched-SP burst)
       if (this.nmiArmIsa !== null && isa === this.nmiArmIsa && !this.nmiPending)
@@ -157,7 +165,7 @@ export class SprinterMachine {
   };
   ioRead = (p) => {
     p &= 0xFFFF;
-    this.ioLog.push({ t: this.cycles, dir: 'in', port: p });
+    if (this.ioLog.length < this.logLimit) this.ioLog.push({ t: this.cycles, dir: 'in', port: p });
     if (p === PORT_PAGE3) return this.page3;             // readable shadow
     if (p === PORT_SYSTEM) return this.system;           // DCP read-back
     if (p === PORT_ISA) return this.portIsa;
@@ -165,14 +173,16 @@ export class SprinterMachine {
   };
   ioWrite = (p, v) => {
     p &= 0xFFFF; v &= 0xFF;
-    this.ioLog.push({ t: this.cycles, dir: 'out', port: p, val: v });
+    if (this.ioLog.length < this.logLimit) this.ioLog.push({ t: this.cycles, dir: 'out', port: p, val: v });
     if (p === PORT_PAGE3 || p === PORT_SYSTEM) {
       const before = this.isaOpen;
       if (p === PORT_PAGE3) this.page3 = v;
       else this.system = v;
       if (!before && this.isaOpen) this.windowStart = this.cycles;
       if (before && !this.isaOpen && this.windowStart !== null) {
-        this.windows.push({ cycles: this.cycles - this.windowStart,
+        this.windowCount++;
+        this.maxWindowUs = Math.max(this.maxWindowUs, (this.cycles - this.windowStart) * 1e6 / this.cpuHz);
+        if (this.windows.length < this.logLimit) this.windows.push({ cycles: this.cycles - this.windowStart,
           us: (this.cycles - this.windowStart) * 1e6 / this.cpuHz });
         this.windowStart = null;
       }
@@ -203,7 +213,7 @@ export class SprinterMachine {
   dssCall(st) {
     const sp = st.sp;
     const ret = this.mem[sp] | (this.mem[sp + 1] << 8);
-    this.dssCalls.push({ fn: st.c, sp });
+    if (this.dssCalls.length < this.logLimit) this.dssCalls.push({ fn: st.c, sp });
     // hard rule: DSS must never run while the ISA window is mapped or a
     // card transfer grant is open (spec 12.1 serialization)
     if (this.isaOpen)
@@ -233,10 +243,13 @@ export class SprinterMachine {
         this.text += String.fromCharCode(st.a);
         break;
       case 0x21:                                       // SYSTIME -> H,L,B
-        st.h = 12; st.l = 34; st.b = 56;
+        if (this.movingClock) {
+          const sec = (this.clockStart + Math.floor(this.cycles / this.cpuHz)) % 86400;
+          st.h = Math.floor(sec / 3600); st.l = Math.floor(sec / 60) % 60; st.b = sec % 60;
+        } else { st.h = 12; st.l = 34; st.b = 56; }
         break;
       case 0x31:                                       // SCANKEY -> A
-        st.a = 0;
+        st.a = ++this.keyCalls >= this.escAfter ? 27 : 0;
         break;
       default:
         this.violations.push(`unimplemented DSS call C=${st.c.toString(16)}`);
@@ -260,6 +273,13 @@ export function runImage(Z80, mach, { entry, stack, iff = 1, budget = 4_000_000 
   z.reset();
   const st0 = z.getState();
   st0.pc = entry; st0.sp = stack;
+  if (mach.commandLine !== null) {
+    const bytes = Buffer.from(mach.commandLine, 'ascii');
+    if (bytes.length > 255) throw new Error('CLI too long');
+    mach.mem[0x6000] = bytes.length;
+    mach.mem.set(bytes, 0x6001);
+    st0.ix = 0x6000;
+  }
   st0.iff1 = !!iff; st0.iff2 = !!iff; st0.imode = 1;
   z.setState(st0);
 

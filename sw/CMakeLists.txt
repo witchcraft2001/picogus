@@ -787,6 +787,7 @@ if(PROJECT_TYPE STREQUAL "ULTRAGS_DIAG")
     set(FW_TARGET pg-ultrags-diag)
     add_executable(${FW_TARGET}
         ultrags/diag_main.cpp
+        ultrags/ug_diag_guard.c
         ultrags/ug_diag_isa.c
         ultrags/ug_diag_link.c
         ultrags/ug_hwmap.c
@@ -797,6 +798,19 @@ if(PROJECT_TYPE STREQUAL "ULTRAGS_DIAG")
         ultrags/ug_spike.c
         M62429/M62429.cpp
     )
+    option(UG_DIAG_NO_DACK "Standalone diagnostic without DACK gate" OFF)
+    set(UG_DIAG_GEN ${CMAKE_CURRENT_BINARY_DIR}/diag-gen)
+    add_custom_command(OUTPUT ${UG_DIAG_GEN}/ug_diag_wire.h
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/gen-diag.py
+            ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/diag-schema.json ${UG_DIAG_GEN}
+        DEPENDS ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/gen-diag.py
+            ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/diag-schema.json)
+    target_sources(${FW_TARGET} PRIVATE ${UG_DIAG_GEN}/ug_diag_wire.h)
+    target_include_directories(${FW_TARGET} PRIVATE ${UG_DIAG_GEN})
+    if(UG_DIAG_NO_DACK)
+        target_compile_definitions(${FW_TARGET} PRIVATE UG_DIAG_NO_DACK=1)
+    endif()
+    pico_generate_pio_header(${FW_TARGET} ${CMAKE_CURRENT_LIST_DIR}/ultrags/diag_iow.pio)
     pico_set_program_name(${FW_TARGET} "picogus-ultrags-diag")
     pico_set_program_version(${FW_TARGET} ${PICOGUS_VERSION})
     # standalone image: executes from SRAM (PICO_COPY_TO_RAM is global),
@@ -827,6 +841,7 @@ if(PROJECT_TYPE STREQUAL "ULTRAGS_DIAG")
     target_link_libraries(${FW_TARGET}
         pico_stdlib
         pico_multicore
+        pico_rand
         rp2040-psram
         hardware_pio
         hardware_dma
@@ -857,6 +872,15 @@ if(PROJECT_TYPE STREQUAL "ULTRAGS_DIAG")
             VERBATIM
         )
     endif()
+    # Capture the actual compile dependencies at link time. Packaging cannot
+    # manufacture a fresh manifest for a stale ELF after source changes.
+    set(UG_DIAG_EVIDENCE ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/firmware_evidence.py)
+    set_property(TARGET ${FW_TARGET} APPEND PROPERTY LINK_DEPENDS
+        ${UG_DIAG_EVIDENCE} ${CMAKE_CURRENT_LIST_FILE})
+    add_custom_command(TARGET ${FW_TARGET} POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} ${UG_DIAG_EVIDENCE}
+            --build ${CMAKE_CURRENT_BINARY_DIR} --elf $<TARGET_FILE:${FW_TARGET}>
+        VERBATIM)
     pico_enable_stdio_semihosting(${FW_TARGET} 0)
 endif()
 

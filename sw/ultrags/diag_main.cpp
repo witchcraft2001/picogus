@@ -16,6 +16,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
+#include "pico/rand.h"
 #include "hardware/clocks.h"
 #include "hardware/adc.h"
 #include "hardware/irq.h"
@@ -24,7 +25,17 @@
 #include "hardware/structs/vreg_and_chip_reset.h"
 #include "include/pg_debug.h"
 #include "system/overclock.h"
-#include "isa_io.pio.h"
+#include "diag_iow.pio.h"
+#ifdef UG_DIAG_NO_DACK
+#define iow_program diag_iow_no_dack_program
+#define iow_program_init diag_iow_no_dack_program_init
+#else
+#define iow_program diag_iow_program
+#define iow_program_init diag_iow_program_init
+#endif
+#define ior_program diag_ior_program
+#define ior_program_init diag_ior_program_init
+#include "ug_diag_guard.h"
 #include "isa/isa_bus.h"
 #include "M62429.pio.h"
 #include "picogus.h"
@@ -53,6 +64,7 @@ static M62429 *m62429;
 extern "C" void handle_iow(void);
 extern "C" void handle_ior(void);
 extern "C" void ug_diag_maybe_reboot(void);
+extern "C" void ug_diag_isa_boot(uint32_t nonce);
 
 static bool iow_has_data(void) {
     return (pio0->fstat & (1u << (PIO_FSTAT_RXEMPTY_LSB + IOW_PIO_SM))) == 0;
@@ -142,6 +154,10 @@ int main() {
     irq_set_enabled(PIO0_IRQ_1, false);
     irq_set_enabled(DMA_IRQ_0, false);
 
+    ug_diag_isa_boot(get_rand_32());
+    ug_spike_link_init();
+    multicore_launch_core1(ug_spike_core1);
+    while (!ug_diag_guard_ready()) tight_loop_contents();
     DBG_PUTS("Starting ISA PIO");
     if (!pio_can_add_program(pio0, &iow_program) ||
         !pio_can_add_program(pio0, &ior_program)) {
@@ -159,10 +175,7 @@ int main() {
     iow_program_init(pio0, IOW_PIO_SM, iow_offset, iow_clkdiv);
     ior_program_init(pio0, IOR_PIO_SM, ior_offset);
 
-    DBG_PUTS("Launching core1 spike");
-    ug_spike_link_init();
-    multicore_launch_core1(ug_spike_core1);
-
+    ug_diag_guard_bus_started();
     for (;;) {
         /* drain all pending IOW before serving IOR: keeps the
          * write-before-read ordering the control protocol expects */

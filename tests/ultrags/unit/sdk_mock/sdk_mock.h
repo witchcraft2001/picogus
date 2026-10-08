@@ -18,7 +18,7 @@ typedef unsigned uint;
 #define GPIO_FUNC_PIO0 0
 #define GPIO_FUNC_PIO1 1
 #define __dmb() __sync_synchronize()
-typedef struct { uint32_t txf[4]; unsigned used; bool claimed[4], enabled[4]; } mock_pio;
+typedef struct { uint32_t txf[4], irq; unsigned used; bool claimed[4], enabled[4]; } mock_pio;
 typedef mock_pio *PIO;
 extern mock_pio mock_pios[2];
 #define pio0 (&mock_pios[0])
@@ -43,6 +43,8 @@ void restore_interrupts(uint32_t state);
 void tight_loop_contents(void);
 bool pio_can_add_program(PIO p, const struct pio_program *program);
 uint pio_add_program(PIO p, const struct pio_program *program);
+uint32_t pio_sm_get(PIO p, uint sm);
+void pio_sm_put(PIO p, uint sm, uint32_t word);
 void pio_sm_claim(PIO p, uint sm);
 bool pio_sm_is_claimed(PIO p, uint sm);
 void pio_sm_set_enabled(PIO p, uint sm, bool enabled);

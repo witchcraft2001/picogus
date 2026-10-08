@@ -12,26 +12,16 @@
 #define UG_DIAG_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define UG_DIAG_MAGIC0   'U'
 #define UG_DIAG_MAGIC1   'G'
-#define UG_DIAG_VERSION  0x02   /* diagnostic only: adds distinct fetch_errors */
+#include "ug_diag_wire.h"
 
 /* Diagnostic-private selectors on the PicoGUS control port (0x1D0/1D2).
  * NOT allocated in common/picogus.h -- valid only while the standalone
  * diag image is loaded. */
-#define UGD_SEL_STATUS   0x80   /* DATA_HIGH: stream of ug_diag_status */
-#define UGD_SEL_CMD      0x81   /* DATA_HIGH write: 1=profile A, 2=B, 3=stop */
-#define UGD_SEL_ARG      0x82   /* DATA_LOW/HIGH: run length in quanta (LE) */
 
-#define UGD_STATE_IDLE   0
-#define UGD_STATE_RUN    1
-#define UGD_STATE_DONE   2
-#define UGD_STATE_ERR    3
-#define UGD_STATE_INIT   4
-#define UGD_CMD_OK       0
-#define UGD_CMD_BUSY     1
-#define UGD_CMD_BAD_ARGUMENT 2
 
 /* Status snapshot published by core1, read byte-wise by core0 on
  * UGD_SEL_STATUS. Packed, little-endian, fixed size. */
@@ -42,7 +32,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  board_type;          /* 0 PICO_BASED, 1 PICOGUS_2 */
     uint8_t  profile;             /* 0 none, 1 = A(8+4m), 2 = B(8+2st) */
     uint8_t  psram_backend;       /* 0 none, 1 normal, 2 fudge */
-    uint8_t  flags;               /* bit0: audit_ok, bit1: m62429 */
+    uint8_t  flags;               /* bit0: audit_ok, bit1: m62429, bit2: fatal guard */
     uint32_t sys_clk_khz;
     uint32_t i2s_div_q8;          /* SM clkdiv, Q8 */
     uint32_t lrclk_hz;            /* derived */
@@ -57,8 +47,28 @@ typedef struct __attribute__((packed)) {
     uint32_t bg_bytes, bg_errors;
     uint32_t out_checksum;        /* FNV-1a of rendered stereo S16LE bytes */
     uint32_t res_faults;          /* ug_hw_audit bitmask */
+    uint32_t elapsed_us;          /* wall duration of the current/last run */
+    uint32_t psram_div_q8, sck_hz; /* quantized divider and nominal SCK */
 } ug_diag_status;
 
 #define UG_DIAG_STATUS_SIZE (sizeof(ug_diag_status))
+#ifdef __cplusplus
+static_assert(sizeof(ug_diag_status) == UGD_SPIKE_SIZE, "private diagnostic schema size");
+#else
+_Static_assert(sizeof(ug_diag_status) == UGD_SPIKE_SIZE, "private diagnostic schema size");
+#endif
 
+/* Keep the generated ASM field offsets tied to the actual C layout. */
+#define UGD_FIELD_ASSERT(field, offset) \
+    typedef char ugd_offset_##field[(offsetof(ug_diag_status, field) == offset) ? 1 : -1]
+UGD_FIELD_ASSERT(state, UGD_SPIKE_STATE);
+UGD_FIELD_ASSERT(profile, UGD_SPIKE_PROFILE);
+UGD_FIELD_ASSERT(flags, UGD_SPIKE_FLAGS);
+UGD_FIELD_ASSERT(underruns, UGD_SPIKE_UNDERRUNS);
+UGD_FIELD_ASSERT(fetch_errors, UGD_SPIKE_FETCH_ERRORS);
+UGD_FIELD_ASSERT(render_max_us, UGD_SPIKE_RENDER_MAX_US);
+UGD_FIELD_ASSERT(bg_errors, UGD_SPIKE_BG_ERRORS);
+UGD_FIELD_ASSERT(res_faults, UGD_SPIKE_RES_FAULTS);
+UGD_FIELD_ASSERT(elapsed_us, UGD_SPIKE_ELAPSED_US);
+#undef UGD_FIELD_ASSERT
 #endif /* UG_DIAG_H */

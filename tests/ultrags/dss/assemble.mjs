@@ -23,7 +23,7 @@ const GENDIR = join(OUT, '../gen'); // <UGBUILD>/gen regardless of BUILD=
 mkdirSync(OUT, { recursive: true });
 
 const sources = [
-  join(REPO, 'host/sprinter/ultrags/apps/ugdiag.asm'),
+  ...readdirSync(join(REPO, 'host/sprinter/ultrags/apps')).filter(f => f.endsWith('.asm')).sort().map(f => join(REPO, 'host/sprinter/ultrags/apps', f)),
   ...readdirSync(STDIR).filter((f) => f.endsWith('.asm')).sort().map((f) => join(STDIR, f)),
 ];
 const sha = (b) => createHash('sha256').update(b).digest('hex');

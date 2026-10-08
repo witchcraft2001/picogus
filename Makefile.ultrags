@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Ultra GS build/test orchestration (S0a + S0b).
+# Ultra GS build/test orchestration (S0a + S0b + S1).
 #
 # Required environment (see AGENTS.md):
 #   PICO_SDK_PATH      Pico SDK 2.1.1 checkout
@@ -69,14 +69,14 @@ diagnostic-release: prepare-tools
 	$(checkenv)
 	@mkdir -p $(BUILD)/ultrags-diag-release
 	cmake -S $(SW) -B $(BUILD)/ultrags-diag-release $(CMAKE_COMMON) \
-		-DPROJECT_TYPE=ULTRAGS_DIAG -DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+		-DPROJECT_TYPE=ULTRAGS_DIAG -DPICO_BOARD=picogus2 -DPGDEBUG=OFF -DUG_DIAG_NO_DACK=OFF
 	cmake --build $(BUILD)/ultrags-diag-release --parallel
 
 diagnostic-debug: prepare-tools
 	$(checkenv)
 	@mkdir -p $(BUILD)/ultrags-diag-debug
 	cmake -S $(SW) -B $(BUILD)/ultrags-diag-debug $(CMAKE_COMMON) \
-		-DPROJECT_TYPE=ULTRAGS_DIAG -DPICO_BOARD=picogus2 -DPGDEBUG=ON
+		-DPROJECT_TYPE=ULTRAGS_DIAG -DPICO_BOARD=picogus2 -DPGDEBUG=ON -DUG_DIAG_NO_DACK=OFF
 	cmake --build $(BUILD)/ultrags-diag-debug --parallel
 
 host-test:
@@ -104,6 +104,7 @@ fixtures:
 	$(NODE) $(ROOT)/tools/ultrags/gen-fixtures.mjs --out $(UGBUILD)/fixtures
 
 dss: $(UGBUILD)/gen/ug_wire.inc
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/gen-diag.py $(ROOT)/tools/ultrags/diag-schema.json $(UGBUILD)/gen
 	$(NODE) $(ROOT)/tests/ultrags/dss/assemble.mjs $(ROOT) $(UGBUILD)/dss
 
 # test-dss executes the EXACT bytes the dss target built (byte-identity
@@ -144,3 +145,20 @@ clean:
 	rm -rf $(BUILD)/multifw-release $(BUILD)/ne2k-release \
 		$(BUILD)/ultrags-diag-release $(BUILD)/ultrags-diag-debug \
 		$(BUILD)/host
+
+# S1 stage gates: regression + real front-end/guard + standalone actual EXEs.
+.PHONY: s1-check s1-package diagnostic-no-dack
+
+diagnostic-no-dack: prepare-tools
+	$(checkenv)
+	cmake -S $(SW) -B $(BUILD)/ultrags-diag-no-dack $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=ULTRAGS_DIAG -DPICO_BOARD=picogus2 -DPGDEBUG=OFF -DUG_DIAG_NO_DACK=ON
+	cmake --build $(BUILD)/ultrags-diag-no-dack --parallel
+
+s1-check: check diagnostic diagnostic-no-dack budgets
+	$(NODE) $(ROOT)/tools/ultrags/stage-excerpt.mjs --stage S1 --output $(UGBUILD)/excerpts/ultrags-S1.md
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s1-firmware-report.py --build $(BUILD)
+	@echo "S1 HOST_PASS / DSS-EXE_PASS / REAL_PENDING (C00 not accepted)"
+
+s1-package: s1-check
+	$(NODE) $(ROOT)/tools/ultrags/package-s1.mjs --build $(BUILD)

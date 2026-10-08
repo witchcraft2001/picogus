@@ -21,6 +21,8 @@ import { join, resolve } from 'node:path';
 import { verifyExecution, verifyBuild, repoRoot } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
+const stage = arg('--stage', 'S0b');
+const slug = stage.toLowerCase();
 const pkgDir = resolve(arg('--package', 'build/ultrags/package'));
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -131,10 +133,10 @@ if (fixtureManifest.generatorSha256 !== sha256(readFileSync(join(root, 'tools/ul
 const pman = JSON.parse(readFileSync(join(pkgDir, 'package-manifest.json'), 'utf8'));
 ok(JSON.stringify(pman.provenance) === JSON.stringify({ ...provenance, fixtures:sha256(fixtureBytes),
   packer:sha256(readFileSync(join(root, 'tools/ultrags/package-s0b.mjs'))) }), 'source/build/execution/package provenance');
-const zipBuf = readFileSync(join(pkgDir, 'ug-s0b.zip'));
-const imgBuf = readFileSync(join(pkgDir, 'ug-s0b.img'));
-ok(sha256(zipBuf) === pman.containers['ug-s0b.zip'].sha256, 'zip sha256 == manifest');
-ok(sha256(imgBuf) === pman.containers['ug-s0b.img'].sha256, 'img sha256 == manifest');
+const zipBuf = readFileSync(join(pkgDir, `ug-${slug}.zip`));
+const imgBuf = readFileSync(join(pkgDir, `ug-${slug}.img`));
+ok(sha256(zipBuf) === pman.containers[`ug-${slug}.zip`].sha256, 'zip sha256 == manifest');
+ok(sha256(imgBuf) === pman.containers[`ug-${slug}.img`].sha256, 'img sha256 == manifest');
 
 const zip = readZip(zipBuf);
 const img = readFat12(imgBuf);
@@ -175,7 +177,7 @@ for (const [cont, map] of [['zip', zip], ['img', img]]) {
     const expect = pman.payload.map((e) => e.name).filter((n) => n !== 'MANIFEST.TXT').sort();
     const lines = pman.payload.filter(e=>e.name!=='MANIFEST.TXT').sort((a,b)=>a.name.localeCompare(b.name))
       .map(e=>`${e.name}  ${e.imgName}  ${e.size}  ${e.sha256}  ${e.src}`);
-    const expectedText=['Ultra GS S0b package manifest',`exes: ${build.files.length}`,'',...lines].join('\r\n')+'\r\n';
+    const expectedText=[`Ultra GS ${stage} package manifest`,`exes: ${build.files.length}`,'',...lines].join('\r\n')+'\r\n';
     ok(mt.equals(Buffer.from(expectedText,'ascii')),`${cont} MANIFEST.TXT complete values`);
     ok(JSON.stringify(listed) === JSON.stringify(expect), `${cont} MANIFEST.TXT lists all payload`);
   }

@@ -29,3 +29,4 @@ __pycache__/
 /tests/ultrags/reports/**/*.elf
 /tests/ultrags/reports/**/*.uf2
 /tests/ultrags/reports/**/*.bin
+tests/ultrags/reports/**

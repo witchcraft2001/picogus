@@ -13,12 +13,13 @@ export function treeFiles(root, dir) {
 export function buildInputs(root, exeDir) {
   const paths = [...treeFiles(root, 'host/sprinter/ultrags'),
     'tools/ultrags/wire-schema.json', 'tools/ultrags/gen-wire.mjs',
+    'tools/ultrags/diag-schema.json', 'tools/ultrags/gen-diag.py',
     'tools/ultrags/build-evidence.mjs', 'tests/ultrags/dss/assemble.mjs'].sort();
   return { sources: Object.fromEntries(paths.map(p => [p, sha256(readFileSync(join(root, p)))])),
-    generated: sha256(readFileSync(join(exeDir, '../gen/ug_wire.inc'))) };
+    generated: sha256(Buffer.concat(['ug_wire.inc','ug_diag_wire.inc'].map(p=>readFileSync(join(exeDir, '../gen',p))))) };
 }
 export function executionInputs(root) {
-  return Object.fromEntries(['Z80core.js', 'ug-card.js', 'ug-harness.mjs', 'run-ugdiag.mjs']
+  return Object.fromEntries(['Z80core.js', 'ug-card.js', 'ug-harness.mjs', 'run-ugdiag.mjs', 'diag-card.mjs', 'run-s1.mjs']
     .map(p => [`tests/ultrags/dss/${p}`, sha256(readFileSync(join(root, 'tests/ultrags/dss', p)))]));
 }
 export function verifyBuild(root, exeDir) {

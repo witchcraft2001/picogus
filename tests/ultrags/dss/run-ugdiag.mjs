@@ -485,6 +485,14 @@ for (const [file, cardOpts, , expect] of SELFTESTS) {
   else bad(`selftest ${tag}`, `${why} ctxOk=${ctxOk}`);
 }
 
+// Execute the new standalone tools and named defective EXEs before
+// publishing a combined byte-identity chain for the stage package.
+try {
+  execFileSync(process.execPath, [join(REPO, 'tests/ultrags/dss/run-s1.mjs'), REPO, BUILD], {stdio:'inherit'});
+  const s1 = JSON.parse(readFileSync(join(LOGS, 's1-run.json')));
+  for (const e of s1.executed) executed.set(e.name,e);
+  for (const r of s1.results) r.ok ? ok(`S1 ${r.name}`) : bad(`S1 ${r.name}`,r.violations.join(';'));
+} catch (e) { bad('S1 actual-EXE suite', e.message); }
 done(runs);
 
 function done(runs_) {

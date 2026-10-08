@@ -11,6 +11,7 @@
  *  the final mixer -- deterministic synthetic sources only.
  */
 #include "ug_spike.h"
+#include "ug_diag_guard.h"
 #include "picogus.h"
 #include "ug_profile.h"
 #include "ug_psram.h"
@@ -29,6 +30,7 @@ static ug_psram_t psram;
 static ug_diag_status published;
 static uint32_t bg_addr = 0x400000u;
 static bool bg_read;
+static uint32_t run_start_us;
 extern uint8_t BOARD_TYPE;
 void ug_diag_isa_stats(uint32_t *iow, uint32_t *ior);
 
@@ -102,6 +104,8 @@ static void fault(void) {
 }
 
 void ug_spike_core1(void) {
+    ug_diag_guard_init_core1();
+    ug_diag_guard_wait_bus();
     irq_set_enabled(PIO0_IRQ_1, false);
     memset(&published, 0, sizeof(published));
     published.magic0 = UG_DIAG_MAGIC0;
@@ -132,6 +136,8 @@ void ug_spike_core1(void) {
     published.psram_pool_bytes = psram.pool_bytes; /* Declared, not measured capacity. */
     published.i2s_div_q8 = ug_audio_divider_q8();
     published.lrclk_hz = ug_audio_lrclk_hz();
+    published.psram_div_q8 = psram.pio->sm[psram.sm].clkdiv >> 8;
+    published.sck_hz = (uint32_t)(((uint64_t)clock_get_hz(clk_sys) * 128) / published.psram_div_q8);
     ug_mem_if mem = {mem_read, mem_write, &psram, psram.pool_bytes};
     if (ug_profile_load(mem)) fault();
     published.res_faults = ug_hw_audit(BOARD_TYPE == PICOGUS_2);
@@ -150,6 +156,8 @@ void ug_spike_core1(void) {
             else {
                 if (ug_profile_setup(&mixer, mem, cmd)) fault();
                 published.profile = cmd;
+                run_start_us = time_us_32();
+                published.elapsed_us = 0;
                 published.quanta = published.frames = 0;
                 published.render_max_us = published.render_sum_us = 0;
                 published.bg_bytes = published.bg_errors = published.underruns = 0;
@@ -168,6 +176,7 @@ void ug_spike_core1(void) {
             ug_spike_publish();
         }
         if (published.state == UGD_STATE_RUN) {
+            published.elapsed_us = time_us_32() - run_start_us;
             if (left && render_quantum()) left--;
             if (!left) ug_audio_finish();
             ug_audio_stats audio;
@@ -180,6 +189,11 @@ void ug_spike_core1(void) {
                     published.state = UGD_STATE_DONE;
                 }
             } else bg_step();
+        }
+        if (ug_diag_guard_failed()) {
+            published.flags |= 4;
+            published.state = UGD_STATE_ERR;
+            ug_audio_set_active(false);
         }
         ug_spike_publish();
         tight_loop_contents();
