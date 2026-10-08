@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Ultra GS build/test orchestration (S0a).
+# Ultra GS build/test orchestration (S0a + S0b).
 #
 # Required environment (see AGENTS.md):
 #   PICO_SDK_PATH      Pico SDK 2.1.1 checkout
@@ -13,9 +13,8 @@
 #   make -f Makefile.ultrags host-test    # unit tests (+UBSan)
 #   make -f Makefile.ultrags budgets      # SRAM/flash/settings/PIO tables
 #
-# S0b+ targets (dss, test-dss, fixtures, package, check) exist but
-# deliberately FAIL with an explicit message -- they are not
-# implemented yet and must never pretend to pass.
+# S0b targets build and execute stage diagnostics. The production
+# bundle and MAME/REAL hardware gates remain pending.
 
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -93,19 +92,52 @@ budgets: diagnostic-release firmware
 		--armgcc arm-none-eabi \
 		--out $(BUILD)/host/budgets.json
 
-# --- later-stage targets: explicit NOT-IMPLEMENTED ----------------------
-NOT_READY = echo "error: '$@' belongs to a later Ultra GS stage (see ultra-gs.md) -- not implemented in S0a" >&2; exit 2
+# --- S0b targets: fixtures, DSS EXEs, stage package, gate suite -----------
+UGBUILD := $(BUILD)/ultrags
+NODE ?= node
+
+$(UGBUILD)/gen/ug_wire.inc: $(ROOT)/tools/ultrags/wire-schema.json $(ROOT)/tools/ultrags/gen-wire.mjs
+	@mkdir -p $(UGBUILD)/gen
+	$(NODE) $(ROOT)/tools/ultrags/gen-wire.mjs $(ROOT)/tools/ultrags/wire-schema.json $(UGBUILD)/gen
 
 fixtures:
-	@$(NOT_READY)
-dss:
-	@$(NOT_READY)
-test-dss:
-	@$(NOT_READY)
-package:
-	@$(NOT_READY)
-check:
-	@$(NOT_READY)
+	$(NODE) $(ROOT)/tools/ultrags/gen-fixtures.mjs --out $(UGBUILD)/fixtures
+
+dss: $(UGBUILD)/gen/ug_wire.inc
+	$(NODE) $(ROOT)/tests/ultrags/dss/assemble.mjs $(ROOT) $(UGBUILD)/dss
+
+# test-dss executes the EXACT bytes the dss target built (byte-identity
+# chain: packaged EXE == executed EXE is verified by verify-package.mjs)
+test-dss: dss
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-ugdiag.mjs $(ROOT) $(UGBUILD) --exe-dir=$(UGBUILD)/dss
+
+# honest S0b stage package: store-only ZIP + 1.44MiB FAT12 image,
+# independently re-extracted and byte-verified.  NOT the production
+# 13.2 bundle (no UGCFG/apps/seven-mode firmware - later stages).
+package: test-dss fixtures
+	$(NODE) $(ROOT)/tools/ultrags/package-s0b.mjs --exe-dir $(UGBUILD)/dss \
+		--fixtures $(UGBUILD)/fixtures --out $(UGBUILD)/package
+	$(NODE) $(ROOT)/tools/ultrags/verify-package.mjs --package $(UGBUILD)/package \
+		--exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures
+
+# S0b stage gate: S0a host tests + schema/vector/protocol suite +
+# fixtures determinism + stage-excerpt selftests + fresh DSS assembly +
+# actual-EXE harness + package identity/tamper checks.
+# Scope: HOST + DSS-EXE levels only; MAME/REAL hardware gates and the
+# production 13.2 package remain PENDING per TZ 16.
+check: test-dss
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/run_host_tests.py --build $(BUILD)/host --cc "$(CC)"
+	$(NODE) $(ROOT)/tests/ultrags/protocol/run-protocol-tests.mjs $(ROOT) $(UGBUILD)
+	$(NODE) $(ROOT)/tools/ultrags/gen-fixtures.mjs --out $(UGBUILD)/fixtures
+	$(NODE) $(ROOT)/tools/ultrags/gen-fixtures.mjs --out $(UGBUILD)/fixtures-check
+	$(NODE) $(ROOT)/tools/ultrags/test-fixtures.mjs $(UGBUILD)/fixtures $(UGBUILD)/fixtures-check
+	$(NODE) $(ROOT)/tools/ultrags/test-stage-excerpt.mjs --out $(UGBUILD)/excerpts
+	$(NODE) $(ROOT)/tools/ultrags/stage-excerpt.mjs --stage S0b --output $(UGBUILD)/excerpts/ultrags-S0b.md
+	$(MAKE) -f $(ROOT)/Makefile.ultrags BUILD=$(BUILD) package
+	$(NODE) $(ROOT)/tools/ultrags/test-package.mjs --package $(UGBUILD)/package \
+		--exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures
+	@echo "S0b STAGE CHECK: HOST + DSS-EXE levels only;"
+	@echo "  MAME/REAL hardware gates S1-S11 and production 13.2 package remain PENDING"
 
 clean:
 	@test "$(BUILD)" != "$(ROOT)" && test -n "$(BUILD)" && test "$(BUILD)" != "/"

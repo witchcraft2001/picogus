@@ -1,0 +1,210 @@
+Ultra GS S0b повторное независимое кодревью — 2026-10-08
+================================================================
+Результат: HOST_PASS для нормативного S0b (HOST + DSS-EXE).
+Прежняя сдача не полностью выполняла план: повторное ревью выявило 13 групп
+недочётов/улучшений ниже. Все указанные исправления применены и проверены.
+Открытых P0/P1 в проверенном S0b scope не осталось. Это не ACCEPTED MVP.
+
+ТЗ: ultra-gs-docs/ultra-gs.md v1.7; текущий SHA256 b19f4cb31f9f4a718de2045afba4895d41315d91c843708d6d79af37563c6f64
+HEAD: cc4242f11ab4186fb1a53c6cb384028dceaf1b48
+Исходный staged index уже содержал изменения пользователя на начало этого
+ревью. Его содержимое сохранено; новые правки оставлены unstaged. Commit/push,
+Git history, соседние репозитории, submodules и .gitignore не изменялись.
+
+Проверка четырёх рубежей плана
+----------------------------
+1. Schema/generation/независимые vectors: PASS. C 115, C++ consumer,
+   235 drift checks, 34 exact-diagnostic negative schema probes,
+   79 actual-Z80 byte comparisons и независимые reviewer probes.
+2. Mock transport/PSRAM/GS + actual-EXE: PASS в явно ограниченном scope
+   storage/frames/grants/latches. 45 port model assertions + независимые
+   model probes. Машинные CALL/RPC/data loops не перехватываются.
+3. ASM/context/CPU/NMI/selftests: PASS. 126 assertions / 0 FAIL,
+   37 runs на 26 различных EXE, включая именованные
+   negative defects. Все исполнявшиеся hashes — в ugdiag-run.json.
+4. Fixtures/excerpt/build/package/evidence: PASS. 81 fixtures с независимой
+   проверкой двух наборов bytes, 31 excerpt checks, 18 actual package tests;
+   26 EXE + 81 fixtures byte-identical в ZIP/IMG и build/execution evidence.
+
+Проверки
+--------
+make -f Makefile.ultrags check BUILD=build/S0b-rereview-accepted -> exit 0
+Полный raw log: build/ultrags/evidence/S0b-rereview/accepted-check.log
+S0a host normal + UBSan: PASS; budgets unit tests: 5/5 PASS.
+ASan: SKIP (standalone empty runtime probe TimeoutExpired; не PASS).
+PROTOCOL-TESTS: 11 PASS / 0 FAIL.
+SjASMPlus: SjASMPlus Z80 Cross-Assembler v1.22.0 (https://github.com/z00m128/sjasmplus)
+Node: v22.13.0
+git diff --check -> PASS.
+Дополнительные независимые fsck_msdos -n и Python stdlib zipfile проверки:
+PASS; raw log в evidence/S0b-rereview/external-package-check.log.
+
+CPU/NMI и границы доказательства
+------------------------------
+UG_CPU_PROFILE вызывается после смены режима CPU; automatic detection BIOS
+не заявляется. Профили 21MHz/3.5MHz имеют разные chunks 32/8, unknown=8/FIXED.
+Максимальное виртуальное открытое ISA-окно в 1024-byte тестах: ~985us @21MHz
+и ~5909us @3.5MHz (snapshot). Это ниже модельного 10ms предела; цель 2ms и
+физические wait states/IOCHRDY не подтверждены и остаются REAL S1/S5 gates.
+NMI-safe FIXED/ALIAS проходят с обычным SP; STACK допускается только при
+явно доказанном внешнем исключении NMI. Его hardware safety не подтверждена.
+Maskable IRQs, полное BIOS/MMU paging, DSS disk services не моделируются.
+
+Оставшиеся границы плана / scope
+------------------------------
+Минимальный UGDIAG не читает файлы и не имеет CLI arguments; file-error/ESC
+матрица восьми будущих приложений не реализована в этом S0b harness и относится
+к следующим этапам. Обязательный S0b минимальный вертикальный сценарий и
+явный transfer cancel/timeout/commit failure покрыты; не выдаются за file I/O.
+Публичные UG_WRITE/UG_READ сейчас BULK_FAST/BULK_VERIFIED; GS_FAST/GS_VERIFIED
+отклоняются честно BAD_ARGUMENT. Slow GS transport тестируется в port model,
+но его публичный ASM путь остаётся работой следующего host этапа.
+Music parsers/engine/voice scheduler, production §13.2 bundle, восемь apps,
+seven-mode firmware, MAME и REAL hardware gates S1–S11: PENDING.
+Fixture checks подтверждают layout/content, не audio/parser functionality.
+Подробный исполняемый отчёт не является доказательством всех возможных ветвей
+будущего ABI и всех аппаратных конфигураций.
+
+Hashes текущих артефактов
+------------------------
+ug-s0b.zip: 228615 bytes, SHA256 7aeac01b64c2e3f92fd737d62093da52446cbb44eed9732a2cd7b24265f8d06f
+ug-s0b.img: 1474560 bytes, SHA256 d7c06c04d3aa6bf99e620f7212af5fa063625fb51486398d31b5c76599b4c3ed
+package-manifest.json: SHA256 1260896ac40953df0ba18bb742e77cf38511f94eba4a816c6b132dd42d49fd15
+UGDIAG.EXE: 3814 bytes, SHA256 7951de1eb4721cfe2e0975e76d9dac8bc2afecedccde783b2c51a5b87a95a291
+ST-ALIAS.EXE: 3155 bytes, SHA256 cd5c05312d3eb8e1602a83d76856b023ffd8948948fc2bd52df293ccc88812ea
+ST-BADCRC.EXE: 3262 bytes, SHA256 b56fa03a1987bddc8994d6a6934cdb0afde433867a52f98818c4e4d8da26b9a4
+ST-BADSLOT.EXE: 3069 bytes, SHA256 8c7e409385f09b731a8c318eb1c3a6f7c34653b3152e3c552ef93e584bec8fe6
+ST-BUDGET.EXE: 3068 bytes, SHA256 a53666793da51dcae72d2d1be856f2fb872f10fd160966c3d6c42e05d4c08835
+ST-CANCEL.EXE: 3246 bytes, SHA256 849b4d17db4e21d019afba51f81e6d4d05a72fec2024efb67cde53a61f03fe2b
+ST-CTXIFF.EXE: 3037 bytes, SHA256 472b70b9dbef7dcbfad310584552e2b546ebce75018cbd6fe5efd2c019510575
+ST-CTXPG3.EXE: 3034 bytes, SHA256 853774d61257677683b72b4243ef439b4cb8cf1cc2d7053ceb6c264a91d6a626
+ST-CTXSP.EXE: 3039 bytes, SHA256 23dbe04e76303d11ea75d3dafcce4a6609402c61a9cd699bd2b1bef160caf632
+ST-CTXSYS.EXE: 3034 bytes, SHA256 47e661cd7784c36f7e84db2ad4b60e177a5cefcedb1bf43a18aa136f92cd4e74
+ST-DSSGRANT.EXE: 3153 bytes, SHA256 88e82dd8e500a88f46b716d6f6449a3830e5065963921e4d8951d851e8741319
+ST-DSSWIN.EXE: 3040 bytes, SHA256 c9a7ece90d6e736c67c52d0c92fc47577a4d9e1992652e9f9ed423f04df66e1b
+ST-FRAMECRC.EXE: 3123 bytes, SHA256 dbb67c9532019c9341fcaa5f25bc90f8ff63d417113555b6c307c8fe061fa3e2
+ST-LOOP.EXE: 3006 bytes, SHA256 a6b5361e623266994c7459cc2abf8a7875d9e55a93683b183e57c0950441e512
+ST-NEST.EXE: 3035 bytes, SHA256 e2264ebf67729137dac6799cbe19659eaf846d75b0734a8e3a6b527eb3dd1660
+ST-NMIHAZ.EXE: 3144 bytes, SHA256 7245a9d96944899e3c5f8564b202f18bebdfd19af98c6981b19e85ad1a5b894f
+ST-NMIUNSAFE.EXE: 3077 bytes, SHA256 9e19ddb69b35442a78a7b7d20a433e9be7d5f5acf463e9dd302bfec25b73ef52
+ST-NOSESSION.EXE: 3119 bytes, SHA256 eda513ac96d6217916d9c24cbcd83b32267ac65291c205b0a37689f5fadbefe2
+ST-OVERGRANT.EXE: 3166 bytes, SHA256 d2cc64b3e5f79336eccb220073751e373ab3c32d76ff84b32dc62af14a07b9ef
+ST-PENDING.EXE: 3074 bytes, SHA256 b69412fcfcaf0a7f74efa20af6373ec502c9980b77929e33a051538db75dea31
+ST-PROFILE.EXE: 3100 bytes, SHA256 7a4d00a68db62211bc7b69498fd393c5fcd5857971ad9c6a6153cf836038cf5c
+ST-RESPBUF.EXE: 3300 bytes, SHA256 235654a20e9bd8e7d1f3d2ad85ee884fe5f923db1425a6270309ed91e5922c9e
+ST-TRANSFER.EXE: 3286 bytes, SHA256 871a19320e1ae7572262136b951a0e2b5a1567a3f9bb1c2cf018294d08892b56
+ST-TRANSPORT.EXE: 3192 bytes, SHA256 b796f944890527b3e9fdac54e79160680dd33ab67b8264eb257a395f645e42a1
+ST-VERIFIED.EXE: 3192 bytes, SHA256 bab98b3215bcc06f2cacc9369a60542b969996a77d12d3e2439ab8875b450b6b
+ST-WRITEFAIL.EXE: 3144 bytes, SHA256 32e5b639c77cda7eaf2dfe6133ec2a105a88f659d56be7d952f076946bbaf622
+
+Находки и исправления
+---------------------
+R01 P1 — tests/ultrags/dss/run-ugdiag.mjs, loader tests.
+The old loader accepted any exception as the expected defect; the over-C000
+fixture was too short and failed the header size check. Exact diagnostic checks
+and a correctly sized crossing image now exercise the intended refusal.
+
+R02 P1 — host/sprinter/ultrags/lib/ugproto.asm, public ABI.
+UG_FRAME_CRC(1), UG_SNAPSHOT and UG_GS_COMMAND could succeed with A != 0.
+UG_XCTRL had the same issue. Success now returns CF=0/A=0; st-transfer checks
+these entries, including a GS reply of 5Ah that must not leak into success A.
+
+R03 P1 — ugproto.asm and apps/ugdiag.asm, recovery.
+Best-effort CANCEL could overwrite the primary LAST_ERROR/SOURCE. Window-open
+fail paths could close an already owned outer window. Error bookkeeping is
+preserved across cancellation, cancellation failure has a control fallback,
+and failed opens never close a window they did not acquire. Diagnostic cleanup
+now cancels before FREE/printing; X_ERROR survives ISA_CLOSE register clobbers.
+PSRAM commit failure is exercised by actual st-writefail machine bytes.
+
+R04 P1 — ugproto.asm, READY/BEGIN/END validation.
+RPC sent bytes without checking READY and could consume an old response as
+its own. WRITE/READ used a malformed successful BEGIN payload as a token;
+END accepted a nonempty successful payload. READY is now polled in bounded
+windows, stale replies and frame faults reset transport without replaying RPC,
+BEGIN lengths (4/8) and empty END are checked. st-pending and short-BEGIN
+hardware injections exercise refusal/recovery and no data writes.
+STACK's saved caller method uses separate scratch from X_CONTROL operands.
+
+R05 P1 — ugproto.asm and ug-harness.mjs, CPU profiles and NMI.
+There were no distinct CPU profiles: the report's no-turbo claim was based
+on one chunk=32 at a hardcoded 21MHz. UG_CPU_PROFILE now selects turbo=32,
+3.5MHz=8, unknown=8/FIXED, rejecting a profile change in an active transfer.
+Harness time advances at the selected 21/3.5MHz rate. Actual 1024-byte writes
+use 32 or 128 windows; reads also split. Ordinary-stack FIXED/ALIAS runs
+receive 1024/128 real NMI injections and pass. A known policy that excludes
+NMI tests STACK; unknown policy refuses STACK; the existing hazardous STACK
+run still detects implicit NMI push corruption. Loop budget now has its own
+infinite assembled EXE test with exact instruction count, PC and trace tail.
+Positive tests reject unrelated violations and check final IFF/MMU/system/SP.
+The workspace bound was corrected from BE20h to BD90h (BC00h+400).
+
+R06 P1 — tools/ultrags/gen-fixtures.mjs.
+M!K! was incorrectly encoded as eight channels. Positive FLT8 declared 64
+sample bytes but supplied 32, its halves were identical, and pattern notes
+referenced sample 0. Corrected to four-channel M!K!, distinct FLT8 halves,
+sample 1 notes and complete sample area. Added the full RAW format/channel/
+rate matrix, exact signed/unsigned endpoints, WAV rates/channel matrix and
+valid/invalid loops. Independent test-fixtures checks lengths, sample areas,
+loop bounds, endpoint values, headers and every byte/hash from two generations.
+
+R07 P1 — tools/ultrags/build-evidence.mjs, assemble, runner, pack/verify.
+Old package checks compared containers with files that happened to be present,
+without binding them to current sources/schema or successful execution. The
+old stale-EXE test merely compared two different executables. Content evidence
+now covers all ASM/include sources, schema, generator and generated ASM,
+assembler version, every built/executed EXE hash/set, harness/core/model/runner
+inputs, fixture generator and packer. Package requires test-dss and rejects
+stale/missing/failed execution. Actual verifier subprocess tests independently
+mutate source, schema, generator, generated ASM, EXE, harness, execution data,
+fixture generator, packer, ZIP and IMG; each requires its exact diagnostic.
+A second real packer invocation proves ZIP/IMG/manifest determinism.
+
+R08 P2 — package-s0b.mjs and verify-package.mjs, FAT12/ZIP structure.
+FAT12 lacked 55AA boot signature and directory reserved bytes contained spaces;
+reader ignored the second FAT and could accept damaged/cyclic chains. Corrected
+BPB/signature/reserved fields; verifier checks both FATs, names, allocation,
+chain length/termination/cycles/crosslinks. ZIP local/central metadata agree.
+Embedded MANIFEST.TXT values (not just names) are verified. HELP accurately
+states slot 0/base 02A0h/no arguments and flags defective selftests for harness
+use. Native read-only fsck_msdos and Python zipfile independently accept artifacts.
+
+R09 P1 — tools/ultrags/stage-excerpt.mjs.
+Buffer identity comparison did not protect source aliases; duplicate headings
+silently overwrote map entries, malformed tokens could disappear, and selecting
+section 15 lost its stage bodies. inode checks protect symbolic/hard aliases;
+duplicates and malformed/descending/missing references fail with diagnostics.
+Complete hierarchical source spans are included once, including all of section
+15 and unnumbered content. Fenced code is excluded from heading parsing.
+All 14 stages, D01/D02, full-parent dedup and source preservation are tested.
+
+R10 P2 — gen-wire.mjs, schema validation.
+Input could supply generator-owned _size cache; non-ASCII byte constants and
+nonboolean verifiedOnly were accepted, and variable-prefix declared size was
+not checked. Reject these with named exact-diagnostic probes (34 total).
+
+R11 P1 — ug-card.js, advertised scope.
+PCM_CONFIG returned success after partial and incorrect descriptor validation
+while CAPS advertised no playable formats. It now returns BAD_OPCODE explicitly
+until the PCM milestone; a port-level test proves no fake musical success.
+
+R12 P1 — ug-harness.mjs/run-ugdiag.mjs, ISA slots and EXE loading.
+The card answered through either slot, masking slot selection defects. Routing
+now selects the physical card slot; st-badslot requires slot 1 transactions and
+wrongslot must fail honestly with no BASE accesses. The complete DSS file is
+loaded at entry-header_size, including the consumed header, as in donor harnesses.
+
+R13 P3 — Makefile.ultrags and reports.
+Removed obsolete S0a comments claiming all S0b targets fail. check directly
+requires test-dss, package requires tested bytes. Replaced historical acceptance
+claims about profiles/freshness/fixtures with this review's actual evidence.
+
+Tester Notes
+------------
+Повторить: make -f Makefile.ultrags check BUILD=build/S0b-next-review
+Ожидание: 126/0 actual-EXE checks, 31/0 excerpt checks, 18/0 package checks;
+81 fixtures, 26 EXE. ASan на данном хосте может оставаться явно SKIP.
+Для DSS использовать UGDIAG.EXE только с последующей подходящей прошивкой:
+ISA slot 0, base 02A0h, без аргументов; ожидаемая строка roundtrip OK.
+ST-*.EXE — harness fixtures, ряд из них намеренно неисправен; аппаратный запуск
+не является инструкцией этой стадии. ZIP/IMG — S0b stage artifacts.

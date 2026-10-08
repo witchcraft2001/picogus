@@ -1,0 +1,73 @@
+S0b reproduction commands (run from repository root)
+====================================================
+
+Environment used for this report (macOS, arm64):
+  node v22.13.0, python3 3.14.6, Apple clang 17.0.0,
+  sjasmplus v1.22.0 (env override: SJASMPLUS=<path>)
+  PICO_SDK_PATH/PICO_EXTRAS_PATH were NOT set in this environment:
+  `firmware`, `diagnostic`, `budgets` (S0a) are environment-blocked here,
+  not part of S0b acceptance; their host-side suite runs via host-test.
+
+Single command covering every S0b gate:
+
+  make -f Makefile.ultrags check
+  # equivalent isolated tree:
+  make -f Makefile.ultrags check BUILD=build/S0b-review
+  # run after the UG_WIN_OPEN session-gate + pop-af error-loss fixes
+  # (Codex P1 finding + found-by-st-nosession defect) and after the
+  # runner-expectation tightening (st-nmihaz E5-marker/exit=1/zero
+  # violations, st-nmiunsafe exact allowed-trace); 20 EXEs, 97 PASS:
+  make -f Makefile.ultrags check BUILD=build/S0b-codex-review
+  # final run after the error-bookkeeping/source-ownership fixes and
+  # UG_FRAME_CRC validation (Codex findings) + new st-framecrc and the
+  # bookkeeping assertions in st-nosession/st-budget/st-badcrc;
+  # 21 EXEs, 99 PASS, package byte-identity verified:
+  make -f Makefile.ultrags check BUILD=build/S0b-final-review
+
+This runs, in order:
+  1. tools/ultrags/run_host_tests.py --build build/host --cc cc
+     (S0a unit tests + UBSan builds; ASan probed and SKIP-logged when the
+     standalone runtime probe fails on this host)
+  2. tests/ultrags/protocol/run-protocol-tests.mjs . build/ultrags
+     (gen-wire emit, C 115 checks, C++ consumer, 235 drift subchecks,
+      30 negative schema probes, 79 Z80 vector comparisons on the pinned
+      core, 44 card-model unit tests, the 99-check UGDIAG vertical,
+      reviewer model+schema probes)
+  3. gen-fixtures twice (fixtures + fixtures-check) + manifest hash compare
+  4. tools/ultrags/test-stage-excerpt.mjs   (22 self-tests, TZ 13.5)
+  5. tools/ultrags/stage-excerpt.mjs --stage S0b \
+       --output build/ultrags/excerpts/ultrags-S0b.md
+  6. make dss    -> tests/ultrags/dss/assemble.mjs  (21 EXEs + asm-manifest)
+  7. run-ugdiag.mjs . build/ultrags --exe-dir=build/ultrags/dss
+     (executes the EXACT bytes step 6 produced - the packaged bytes)
+  8. make package -> package-s0b.mjs + verify-package.mjs
+     (store-only ZIP + 1.44MiB FAT12; independent re-extraction and
+      byte-identity of every payload member)
+  9. tools/ultrags/test-package.mjs  (in-memory tamper/staleness, 8 checks)
+
+Individual targets:
+  make -f Makefile.ultrags host-test
+  make -f Makefile.ultrags fixtures
+  make -f Makefile.ultrags dss
+  make -f Makefile.ultrags test-dss
+  make -f Makefile.ultrags package
+  node tests/ultrags/dss/run-ugdiag.mjs . build/ultrags      # assemble+run
+  node tests/ultrags/dss/run-ugdiag.mjs . build/ultrags --exe-dir=build/ultrags/dss
+  node tools/ultrags/gen-fixtures.mjs --out build/ultrags/fixtures
+  node tools/ultrags/stage-excerpt.mjs --stage S7 --output /tmp/ultrags-S7.md
+  node tools/ultrags/verify-package.mjs --package build/ultrags/package \
+    --exe-dir build/ultrags/dss --fixtures build/ultrags/fixtures
+
+Evidence produced by the run:
+  build/ultrags/evidence/S0b/check-log.txt        full `check` transcript
+  build/ultrags/evidence/S0b/ugdiag-run.json      per-run evidence (hashes,
+                                                  cycles, violations, NMI
+                                                  count, card state, ISA tail)
+  build/ultrags/evidence/S0b/protocol-tests.json  schema/vector/model results
+  build/ultrags/evidence/S0b/ug-card-tests.json   44 model unit results
+  build/ultrags/evidence/S0b/z80-vectors.json     pinned-core byte vectors
+  build/ultrags/evidence/S0b/asm-manifest.json    per-EXE sha256 (executed set)
+  build/ultrags/evidence/S0b/package-manifest.json container + payload hashes
+  build/ultrags/evidence/S0b/fixtures-manifest.json fixture hashes
+  build/ultrags/evidence/S0b/ultrags-S0b.md        generated stage excerpt
+  build/ultrags/evidence/S0b/s16-proposal.diff     proposed §16 text (ignored)

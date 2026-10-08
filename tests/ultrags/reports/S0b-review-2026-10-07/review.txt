@@ -1,0 +1,109 @@
+Historical milestone review. R01–R16 ниже закрыты последующими исправлениями.
+Актуальное независимое ревью и приёмка: ../S0b-review-2026-10-08/report.txt.
+Пометки OPEN/IN_PROGRESS ниже сохранены как история промежуточных находок.
+
+Ultra GS S0b independent review — 2026-10-07
+Status: IN_PROGRESS. This document records actual review findings; it is not acceptance.
+
+Execution owner: Devin CLI 3000.11.3, session painted-region, model swe-2-max.
+Reviewer: Codex. Local configuration uses smart mode and explicit deny rules for
+Git mutations, staging, commit/push, .git writes and neighboring source writes.
+Initial HEAD/index/status/spec and launch configuration are local artifacts under
+build/ultrags/evidence/S0b/. No commit or push is authorized.
+
+Verified baseline:
+- Original S0a host suite: normal and UBSan PASS. ASan SKIP after the independent
+  empty runtime probe timed out. Raw log: evidence/S0b/baseline-host.log.
+- Copied Z80core and MIT notice are byte-identical to donor copies. Core SHA256:
+  44a0398fdf763aca6cd3608777f4b30aa53ceb4d0ec2f7234422ceb44980def0.
+- Milestone 1 independently rerun: protocol runner PASS, 115 compiled C checks,
+  C++ consumer, 235 drift subchecks, 24 negative probes with exact diagnostics,
+  and 79 comparisons of actual assembled Z80 CRC/LE/frame results.
+  Raw log: evidence/S0b/m1-independent.log. Executed binary: 1353 bytes,
+  23594 instructions. Timing counter fix and executed hash evidence requested.
+  Machine execution caught and corrected zero-length LDIR and polynomial typo.
+
+Review findings (recheck against final source before closing):
+R01 P1: Preserve original system state, PAGE3/IFF/SP; canonical 01h is not a
+        substitute. dcp_r's generic C0–EF readback must be considered alongside
+        actual DCP read mapping. Pending actual-machine-byte cleanup tests.
+R02 P1: Legacy D2 result is u8, not an EXT u16 handle. Fixed in schema; pending
+        model/EXE tests distinguishing legacy ID and LEGACY_INFO mapping.
+R03 P1: PLAY_FX payload is 8 bytes. Fixed; declared-size validation detects drift.
+R04 P1: CAPS/CLEAR_STATS are outside the active-transfer whitelist. Fixed in
+        schema; pending behavioral BUSY/preserve-grant tests.
+R05 P1: CRC fields are opcode-specific; READ_BEGIN has no request CRC field,
+        WRITE_BEGIN reply and WRITE_END request have no data CRC fields.
+        Separate schema layouts added; pending model and ASM verification.
+R06 P1: Emitted constants/lengths/field offsets collided. Fixed naming plus
+        emitted-symbol validation; independent compiled C/C++ runner passes.
+R07 P1: Five malformed-schema probes accepted after the first fixes:
+        duplicate config selectors, GS opcode 0x100, object kind 256, opcode 0.5,
+        type bytes:4junk. Fixed; independent retest rejects all five with expected
+        diagnostics. Evidence: schema-probes/retest-results.json. CLOSED.
+R08 P2: Schema must describe itself as derived from the sole normative MD;
+        GS descriptor pointer is HL; new own source needs GPL-2.0-or-later.
+        Corrections applied; final source/header/provenance audit pending.
+R09 P2: Z80 vector runner reports zero T because run_instruction resets the core
+        counter. Fixed and independently rerun: 173878 T, binary SHA256
+        370a91cedcb1c910f08136b083e5dbc72ba4629b5b0a9ba563cc70394bf4138e.
+        Raw log: evidence/S0b/m1-z80-retest.log. CLOSED.
+R10 P2: Invented copyright holder in own new headers conflicts with spec 13.3.
+        Removed; SPDX and actual donor notices preserved. CLOSED for current
+        files, pending final header audit of subsequent milestones.
+R11 P1: CRC parameters skip validation (fractional polynomial and >u32 init
+        accepted), and moving VERIFIED CRC into the middle of WRITE_BEGIN is
+        accepted although FAST offsets then have a hole. Independent probes:
+        schema-extra-probes.mjs, evidence/S0b/schema-extra/results.json.
+        Fixed including strict reflection booleans. Four independent probes PASS;
+        full protocol rerun PASS115 C, C++,235 drift,30 diagnostic negatives and
+        actual Z80 vectors. Logs: schema-accepted/ and protocol-reviewed.log.
+        CLOSED.
+R12 P0: Initial card model passes its 44 checks but fails all ten independent
+        port probes. ALLOC FFFFFFFF wraps reservation; WRITE may cross original
+        object size; prefix rewrite/READY immutability are reversed; bad-CRC
+        response lacks CRC trailer; read overflow returns successful END; reset
+        retains framing error; INFO ignores nonempty payload; decode is 14-bit;
+        token wrap issues zero. Evidence: model-extra-probes.mjs and local
+        evidence/S0b/model-extra/results.json. Devin run interrupted before EXE
+        integration and exact fixes delivered in resume-5.txt. OPEN.
+        After rewrite: 15/26 independent probes pass. Allocation still fails
+        because le32's final bitwise OR retains a signed result, defeating the
+        new size bound. Remaining concrete fixes delivered in resume-6.txt;
+        evidence/S0b/model-extra-retest-1/results.json. Subsequently fixed:
+        all30 independent model probes pass (model-all30.log); own44 cases also
+        independently rerun (card-unit-review.log). CLOSED for port-level model;
+        actual-EXE integration, public ASM API and complete stage remain pending.
+R13 P1: Additional card source audit: fabricated CAPS/audio formats, placeholder
+        STATS/snapshot fields, missing own-object transfer whitelist check,
+        obligatory FAST read CRC, GSLOAD writes/D2 during packet, legacy u8/u16
+        mapping, aligned LOAD shrink, store reset, OUT latch preservation and
+        config writes are incorrect/incomplete. Specific fixes sent in resume-5.
+        Unsupported future musical semantics must remain explicitly out of scope;
+        they must not silently publish/advertise successful implementation. OPEN.
+        Expanded probes additionally cover response-error X_ERROR, early READ,
+        GS prefetch vs GD accounting/timer, transfer pins, SNAP_DATA index128,
+        idle output_frames/playlist index and monotonically increasing seq.
+        Corrections independently confirmed by all30 probes, including PREPARING
+        grant timing, statistics saturation, no-transfer UNDERFLOW and writable
+        SNAP_INDEX bound127. CLOSED for tested minimal storage/transport/GS scope;
+        final source/provenance review and actual-EXE evidence remain pending.
+R14 P1: Initial M2 ASM prototype ugproto.asm does not yet implement spec12.1:
+        UG_OPEN leaves ISA/IFF open and probes BASE before common FW_ACTIVE=8;
+        UG_RPC ignores caller DE response/IX capacity, treats nonzero response
+        status as CF=0, may overrun scratch on response length>128, and lacks
+        READY wait/drain-reset/error context restoration. WAIT_REPLY interprets
+        sticky XERR as current-response failure and returns A=2 instead of the
+        original error. It holds ISA/DI across up to ~600k polls/CRC. Must rebuild
+        around short owned ISA chunks, exact public ABI and cleanup on all exits;
+        actual entry/error tests required in M3. UG_CURBASE lowbyte stores slot
+        A rather than L. UG_WRITE/UG_READ/public other entries still absent. OPEN.
+R15 P1: ugmem.inc UGREQ.TOKEN=BASE+38 u32 overlaps UGXFER.ID=BASE+40 u32.
+        Remove unused alias or allocate distinct bytes/assert bounds. OPEN.
+R16 P1: isa.asm UG_ISA_OPEN documents slot0..3 but only Sprinter ISA0/1 are
+        valid, and does not validate slot before switching PAGE3. Add explicit
+        refusal/named test; preserve outer context on nested-open rejection. OPEN.
+
+Full independent verification in BUILD=build/S0b-review is pending. Hardware
+gates, real ISA timing, physical PSRAM and I2S are PENDING. Future firmware/audio
+functionality must not be accepted based on this test infrastructure.

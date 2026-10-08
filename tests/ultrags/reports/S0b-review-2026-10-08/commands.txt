@@ -1,0 +1,6 @@
+make -f Makefile.ultrags check BUILD=build/S0b-rereview-accepted
+/sbin/fsck_msdos -n build/S0b-rereview-accepted/ultrags/package/ug-s0b.img
+mdir -i build/S0b-rereview-accepted/ultrags/package/ug-s0b.img ::
+python3 stdlib zipfile: testzip + member SHA256 vs package-manifest.json
+git diff --check
+node tools/ultrags/stage-excerpt.mjs --stage S0b --output build/S0b-rereview-accepted/ultrags/excerpts/ultrags-S0b.md

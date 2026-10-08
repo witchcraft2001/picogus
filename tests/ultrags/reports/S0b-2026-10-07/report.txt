@@ -1,0 +1,356 @@
+ВАЖНО: повторное ревью 2026-10-08 выявило и исправило дополнительные
+недочёты. Актуальные результаты/ограничения/ hashes находятся в
+tests/ultrags/reports/S0b-review-2026-10-08/report.txt; текст ниже —
+историческая сдача 2026-10-07 и не заменяет новый отчёт.
+
+Отчёт этапа S0b — actual-EXE harness, DSS-библиотека, fixtures, excerpt, stage package
+=====================================================================================
+
+Результат: S0b получил статус HOST_PASS после независимого Codex review и
+чистого повторного прогона; §16 ultra-gs.md обновлён. MVP/REAL ACCEPTED не
+присваивается. MAME/REAL hardware gates S1–S11 — PENDING.
+Аппаратная проверка не проводилась. Коммиты, push, staging не выполнялись;
+все изменения оставлены unstaged/uncommitted. Файлы независимого ревью
+tests/ultrags/reports/S0b-review-2026-10-07/ не изменялись.
+
+ТЗ: ultra-gs-docs/ultra-gs.md v1.7, sha256
+721d8414656ed2338ba72cafd295858033098b9e0e0341e4b25aa41f7608b300.
+HEAD: cc4242f (ultrags). Работа поверх рабочего дерева S0a.
+
+
+1. ТРЕБОВАНИЕ → РЕАЛИЗАЦИЯ → ПРОВЕРКА
+------------------------------------
+
+TZ S0b: C/ASM equates из одной проверяемой схемы; host runner/mock PSRAM;
+fixture generator и manifest; минимальный DSS EXE на sjasmplus;
+actual-machine-byte harness и дефектные self-tests §14.1; профили
+turbo/no-turbo; модель CB/DB с 7Eh; fault injection NMI с запретом STACK
+при неизвестном NMI-контракте; stage-excerpt tool и self-tests §13.5;
+без подмены EXE моделью алгоритма. Make targets: host-test, fixtures, dss,
+test-dss; честный stage package ZIP/IMG с независимой распаковкой и byte
+identity; полный §13.2 check не подменяется.
+
+Реализовано:
+
+a) Wire schema → генерируемые константы (было в M1, оставлено)
+   tools/ultrags/wire-schema.json + gen-wire.mjs ->
+   build/ultrags/gen/ug_wire.inc + ug_wire.h + vectors-expected.h.
+   Проверка: run-protocol-tests.mjs — 235 drift-субчеков схема↔вектора↔
+   C↔ASM, 30 негативных проб схемы, 79 байт-сравнений на pinned Z80.
+
+b) DSS-библиотека (host/sprinter/ultrags/):
+   include/ugmem.inc — карта workspace; UGREQ.FRAME (140B scratch),
+   UGREQ.ST (wire status сохраняется ДО копии payload — исправление
+   aliasing-дефекта ниже), disjoint TOKEN/XFER поля, ASSERT границ.
+   lib/isa.asm — ISA-8 окно: валидация слота 0/1 (2/3 отклоняются до
+   любого обращения к шине), PAGE3/SYSTEM (readback, не каноническое 01h),
+   PORT_ISA, IFF via LD A,I, WINDOW byte D4h+slot*2, без RESET-пульсов;
+   ALIAS-окно и switched-STACK burst writers.
+   lib/ugproto.asm — публичный ABI §12.1: каждый вызов сам открывает/
+   закрывает короткое окно; UG_RPC (frame → X_REQUEST → bounded X_STATUS
+   poll → response + trailer CRC); DE=response buffer, IX=capacity,
+   exact-fit допустим, меньший размер → UG_ERR_OVERFLOW без копии и с
+   TRANSPORT_RESET; UG_WAIT: REPLY проверяется до XERR, ошибочный ответ
+   консумируется; статус возвращается CF=1/A=status через UGREQ.ST.
+   UG_OPEN: сначала common-config (unlock CC→1D0, magic DD, protocol,
+   FW_ACTIVE=E4=8, alias discovery) и только затем BASE/UltraGS
+   регистры; UG_CURBASE хранит low byte базы. UG_WRITE/UG_READ: BEGIN →
+   чанки (каждый собственное открытое/закрытое окно, ≤32B FIXED/ALIAS) →
+   END, token сохраняется на всей передаче; VERIFIED добавляет host CRC
+   в 13-байтный BEGIN и проверяет card CRC на READ; откат CANCEL при
+   неудаче; UG_CLOSE отменяет живой grant. UG_METHOD_GATE: FIXED всегда,
+   ALIAS при сконфигурированном окне, STACK только при UG_NMI_PROFILE=1,
+   иначе UG_ERR_UNSAFE_NMI=0xF0 без касания шины (DI не маскирует NMI).
+   UG_SNAPSHOT, UG_GS_COMMAND (дескриптор GS по §8), UG_FRAME_CRC.
+   UG_WIN_OPEN — центральный session-gate: при UGCTX.SESS=0 возвращает
+   CF=1/A=UG_ERR_STATE ДО любой записи в порты/ISA (исправление P1
+   ревью ниже); все публичные ISA-пути (SNAPSHOT/XCTRL/GS_*/POLL_STATUS)
+   проходят через него. Обе ошибочные ветки WIN_OPEN пишут публичный
+   ABI-учёт UG_LAST_ERROR/UG_LAST_SOURCE через UG_SET_ERR (source HOST;
+   см. находку №17). UG_OPEN намеренно использует UG_ISA_OPEN
+   напрямую — common-config обязан идти до BASE-доступа.
+   UG_ISA_CLOSE при ISOPEN=0 возвращает STATE без касания железа —
+   fail-path после отказа no-session безопасен.
+   UG_LAST_SOURCE: 0=NONE 1=HOST 2=X 3=GS; X резервируется за реальным
+   wire status/X_ERROR карты, GS — за GS-latch таймауты; host
+   transport/open/CRC/timeout — HOST. UG_FRAME_CRC принимает строго
+   A∈{0,1}, прочее → BAD_ARGUMENT/HOST без изменения флага.
+   lib/ugframe.asm, ugle.asm, ugcrc.asm — framing/LE/CRC32.
+   apps/ugdiag.asm — реальный 128B DSS-header EXE (entry 8080h,
+   SP BFFEh): open→config-gate→INFO→ALLOC→UG_WRITE(256B)→OBJECT_INFO→
+   UG_READ→in-RAM compare→SNAPSHOT→GS latch→FREE→CLOSE; result record
+   BA00h, stage codes, честные fail-пути.
+
+c) Harness tests/ultrags/dss/ug-harness.mjs — только железо: seeded RAM,
+   full-16-bit IO, WIN3 C000h+ ISA routing через SYSTEM bit4 + PAGE3
+   pattern, DSS RST-10h intercept, бюджет команд, проверки стека/PC.
+   Hard violations: DSS-вызов при открытом окне ИЛИ активном grant;
+   code fetch в ISA-окне; стек в окне/workspace. NMI моделируется
+   физически: SP−2, push PC, PC←0066h, IFF1←0, счётчик nmiDelivered.
+   ug-card.js — строгая модель (grantPending/grantLive, pending-LOAD,
+   pins, CRC на END, saturating STATS, sticky X_ERROR, noWrap tokens,
+   10-bit decode, noReply/execDelay опции для timeout-путей).
+
+d) Self-tests — собранные EXE, выполняются на pinned Z80 (не модель
+   алгоритма). Положительные: ugdiag roundtrip, st-nest, st-badslot,
+   st-respbuf, st-verified, st-cancel, st-transport, st-budget,
+   st-alias, st-nmiunsafe, st-nosession (UG_LIB_INIT без UG_OPEN:
+   SNAPSHOT/XCTRL/GS_COMMAND/RPC → CF=1/STATE И после каждого вызова
+   UG_LAST_ERROR=STATE, UG_LAST_SOURCE=HOST; runner требует ioLog==0
+   И isaLog==0 — ноль записей в порты и ноль ISA-транзакций,
+   SYSTEM/PAGE3 нетронуты), st-framecrc (чистый ABI: 0/1 принимаются,
+   2/0xFF → BAD_ARGUMENT/HOST, флаг неизменен, ноль IO). Дефектные
+   (каждый ловит СВОЙ дефект):
+   st-dsswin — DSS при открытом окне (violation пойман);
+   st-dssgrant — DSS при live grant (violation + TRANSFER_CANCEL);
+   st-badcrc — VERIFIED с поддельным host CRC → X_CRC на END, pin
+   освобождён, LAST_SOURCE=X; st-budget — bounded no-reply wait
+   возвращает TIMEOUT с LAST_SOURCE=HOST; st-overgrant — байт сверх
+   grant → OVERFLOW(0x0E);
+   st-ctxpg3/st-ctxsys/st-ctxiff/st-ctxsp — порча восстановления
+   PAGE3/SYSTEM/IFF/SP ловится по полю; st-nmihaz — реальный NMI с push
+   на switched-SP буфере: доставлено 64 NMI, порча данных обнаружена,
+   маркер E5h в result+3, exit=1, сторонних violations нет.
+   Loader-негативы (parseExe): bad magic, truncated header,
+   entry/stack в C000h, stack внутри image, image за C000h.
+
+e) Tools: gen-fixtures.mjs (детерминированные RAW/WAV/MOD/FLT8 +
+   manifest.json, 39 файлов); stage-excerpt.mjs (§13.5: 14 этапов,
+   диапазоны/slash/test-ids/stage refs, обязательные §1/2/16/17+17.1,
+   dedup, sha256 исходника, ошибки на unknown/missing/malformed,
+   запрет overwrite источника); test-stage-excerpt.mjs (22 проверки);
+   package-s0b.mjs (store-only ZIP + FAT12 1.44MiB, fixed DOS date,
+   8.3 aliases ~N в manifest); verify-package.mjs (независимый разбор
+   central dir и FAT12 — без общего кода с упаковщиком);
+   test-package.mjs (in-memory tamper).
+
+f) Makefile.ultrags: host-test, fixtures, dss, test-dss (выполняет
+   именно свежесобранные байты через --exe-dir), package (pack+verify),
+   check (полный S0b gate: host-test + protocol + fixtures determinism
+   + excerpt selftests + dss + run-ugdiag на prebuilt + package verify
+   + tamper). Production §13.2 package/check НЕ подменяются — check
+   помечает scope и явно печатает PENDING-границы.
+
+
+2. ИСПРАВЛЕННЫЕ ДЕФЕКТЫ ЭТОГО РАУНДА (намеренно пойманные)
+--------------------------------------------------------
+
+1. UG_RPC response-buffer aliasing (приоритетный баг ревью): payload
+   LDIR в caller destination затирал wire status в FRAME[0], когда
+   destination==UGREQ.FRAME — token low byte 1 читался как BAD_OPCODE.
+   Статус теперь сохраняется в UGREQ.ST до копии. Покрыто st-respbuf
+   (alias+distinct destination, nonzero payload byte, nonzero status,
+   exact-fit vs OVERFLOW).
+2. UG_XFER_END: stale flags после pop af → WRITE_END слался для READ
+   (HANDLE). Исправлено: явный выбор opcode по DIR.
+3. UG_OPEN: `ld b,1` затирал slot до .nosess-восстановления; UG_ISA_OPEN
+   возвращал CF=0 при невалидном слоте. Ветка .slotok + scf.
+4. UG_SNAPSHOT: UG_REG_R клобберил HL-указатель назначения (записи падали
+   обратно в SNAP_DATA → BAD_REGISTER). Dest переведён в DE.
+5. UG_WRITE_STACK: терял transport (A), длину (BC), и не давал
+   корректный method switch; garbage UG_OFFSET в тесте. Полное сохранение
+   аргументов + stash через UGREQ.GPRE; тест зануляет UG_OFFSET.
+6. Response payload offsets после копии в caller буфер: token читается
+   из FRAME+0/+2 (payload без заголовка), не из FRAME+2/+4.
+7. UG_WAIT: проверка REPLY до XERR (оба бита могут быть подняты), wedged
+   устранён; capacity проверяется до чтения payload; oversized/malformed
+   ответ → TRANSPORT_RESET, noReply-ветка bounded (UG_WAIT_BUDGET=0x4000,
+   ~1.57M инструкций ≲0.4с@21МГц).
+8. UG_CURBASE: хранился slot вместо base low byte; diag проверяет
+   CURBASE=0xA0 при slot=0 (разные значения).
+9. ugmem.inc: UGREQ.TOKEN +38 пересекался с UGXFER.ID +40 → disjoint
+   layout + ASSERT bound/overlap (проверено сборкой: нарушение ломает
+   sjasmplus build).
+10. Заголовок st-respbuf: второй ALLOC handle читался из UGREQ.FRAME
+    после того как его перезаписал следующий RPC → дубль FREE → HANDLE.
+    Handle фиксируется сразу после ответа.
+11. st-nmihaz раньше проходил без доставленного NMI; теперь expectation
+    требует nmiDelivered>=1 — поймано 64 доставки и порча данных.
+12. Packer: DOS 8.3 имён >8 букв (ST-BADCRC и др.) молча обрезались —
+    независимый верификатор поймал; deterministic ~N aliases + маппинг
+    в manifest. Manifest list-check имел ошибочный slice (пропускал 2
+    записи) — исправлено.
+13. stage-excerpt: §9.2–9.3 терял хвост диапазона; §8.3.6 (пункт списка
+    внутри §8.3) разрешается консервативным superset в §8.3; остаточные
+    цифры после разбора = malformed error; overwrite источника запрещён;
+    ENOENT на отсутствующий output dir устранён.
+14. UG_WIN_OPEN без session-gate (P1 независимого ревью): публичные
+    SNAPSHOT/XCTRL/GS_*/POLL_STATUS открывали окно на base 0000h после
+    UG_LIB_INIT. Исправлено центрально: SESS=0 → CF=1/STATE до любого
+    IO. UG_OPEN не затронут (использует UG_ISA_OPEN напрямую по
+    контракту config-first).
+15. Потеря ошибки через `pop af` в UG_XCTRL/UG_GS_SD/UG_GS_SC:
+    fail-ветка восстанавливала caller AF поверх CF=1/A=err → ложный
+    success при любом отказе окна. Поймано st-nosession на реальном
+    EXE (XCTRL вернул CF=0). Исправлено: операнд хранится в
+    UGREQ.GPRE, ошибка возвращается через `ret c` без восстановления
+    AF. UG_SNAPSHOT использовал `pop hl` — корректен с самого начала.
+16. Риски false-positive в runner-expectations (независимое ревью):
+    st-nmihaz раньше принимал ЛЮБОЙ violation ИЛИ нечистый выход как
+    доказательство NMI-опасности — посторонний harness-violation мог
+    подменить именованный дефект. Теперь требуется строго:
+    nmiDelivered>=1 (доставлено 64), exit=1, маркер E5h в result+3
+    (тест пишет его только после повторной проверки порчи буфера) и
+    НОЛЬ сторонних violations; число доставленных NMI печатается в
+    detail каждого selftest-прогона. st-nmiunsafe раньше проверял
+    только exit/err и uploaded=0 — отсутствие data-записей само по
+    себе не доказывает отказ до шины. Теперь проверяется точный
+    допустимый трейс: ровно 7 byte-writes в X_REQUEST (один кадр
+    ALLOC op+len+5B), после последнего байта кадра только чтения,
+    ноль обращений к BULK_DATA, после ПОСЛЕДНЕГО ISA-события в ioLog
+    только close-restore PAGE3/SYSTEM (нет PORT_ISA-open, нет
+    remap-значений), card.transfer===null, uploaded===0.
+17. Публичный error-bookkeeping (независимое финальное ревью):
+    а) новый session-gate UG_WIN_OPEN возвращал STATE напрямую, не
+    записывая UG_LAST_ERROR/UG_LAST_SOURCE (ABI §12.1) — SNAPSHOT/
+    XCTRL/GS_COMMAND отвечали верным кодом, но учёт оставался
+    устаревшим. Ошибки UG_ISA_OPEN, пропущенные через WIN_OPEN,
+    тоже терялись. Исправлено: обе ветки WIN_OPEN идут через
+    UG_SET_ERR с source HOST.
+    б) Владение источником: UG_RPC помечал X (b=2) host-side сбои —
+    no-reply timeout, битый CRC принятого кадра, malformed length,
+    неудачи poll/receive/xerr-окон. Все переведены на HOST; X
+    оставлен за реальным wire status (.status) и X_ERROR-регистром
+    (.xerr); GS-таймауты остаются GS.
+    в) UG_FRAME_CRC принимал любое ненулевое A и отвечал success;
+    теперь A∈{0,1} строго, прочее → BAD_ARGUMENT/HOST до записи
+    флага. Покрыто новым st-framecrc (ноль IO за весь прогон);
+    st-nosession проверяет учёт после каждого вызова; st-budget —
+    TIMEOUT/HOST; st-badcrc — wire status CRC с source X.
+
+
+3. ВЫПОЛНЕННЫЕ КОМАНДЫ И РЕЗУЛЬТАТЫ
+-----------------------------------
+
+make -f Makefile.ultrags check                  -> exit 0 (полный лог:
+    build/ultrags/evidence/S0b/check-log.txt)
+make -f Makefile.ultrags check BUILD=build/S0b-review -> exit 0
+    (изолированное дерево, тот же pipeline)
+make -f Makefile.ultrags check BUILD=build/S0b-codex-review -> exit 0
+    (после фиксов №14–15: session-gate + pop-af error-loss;
+    run-ugdiag на prebuilt байтах: 97 PASS / 0 FAIL)
+make -f Makefile.ultrags check BUILD=build/S0b-final-review -> exit 0
+    (после фиксов №16–17: runner-tightening + error-bookkeeping +
+    FRAME_CRC validation; run-ugdiag на prebuilt байтах:
+    99 PASS / 0 FAIL; 21 EXE в package byte-identical исполненным)
+make -f Makefile.ultrags check BUILD=build/S0b-codex-final -> exit 0
+    (независимый Codex clean rerun после всех правок; полный raw log:
+    build/ultrags/evidence/S0b/codex-final-check.log; S0a host/UBSan PASS,
+    ASan SKIP, actual-EXE suite 99/0, 21 EXE + 39 fixtures identity,
+    tamper tests 8/0)
+
+Состав check (последний полный прогон):
+  run_host_tests.py: S0a unit tests PASS (render/device, cc + clang
+    UBSan; ASan SKIP — standalone probe на этом хосте падает по timeout,
+    честно зафиксировано). test_budgets.py 5/5 OK.
+  run-protocol-tests.mjs: 11/11 PASS
+    gen-wire emit+validate; vec2c; check-wire C 115 checks; C++ consumer;
+    vectors-vs-schema 235/235; 30/30 negative schema probes;
+    Z80 vectors on pinned core 4/4; ug-card units 44/44;
+    UGDIAG vertical 99/0; reviewer probes model+schema PASS.
+  gen-fixtures x2: manifest sha256 ef8b905e6857b98240ca627603f2f0fc3f0
+    fc3f0f5f08c5e621ca57c3bf709f9a3966 — идентичен обоим прогонам.
+  test-stage-excerpt: 22/0.
+  dss: 21 EXE собрано sjasmplus (UGDIAG.EXE 3634B + 20 selftests,
+    включая ST-NOSESSION.EXE 2944B и ST-FRAMECRC.EXE 2948B);
+    asm-manifest.json содержит sha256 каждого.
+  run-ugdiag --exe-dir: 99 PASS / 0 FAIL на prebuilt байтах —
+    main (256B write+read+compare, SNAP seq=1, GS latch 5A),
+    ctxB (SYSTEM 35h/PAGE3 E9h/IFF0 восстановлены), slowio (>40 реальных
+    X_STATUS polls при execDelay 200µs), absent (err 0Dh) и wrongmode
+    (err 06h) — оба honest-fail на UG_OPEN, BASE не трогался до E4=8;
+    20 selftests + loader-негативы parseExe; st-nosession: ноль IO за
+    весь прогон + LAST_ERROR=STATE/LAST_SOURCE=HOST после каждого
+    вызова; st-framecrc: ноль IO, BAD_ARGUMENT/HOST на 2/0xFF;
+    st-budget: TIMEOUT с LAST_SOURCE=HOST; st-badcrc: wire CRC с
+    LAST_SOURCE=X; DSS-во-время-window/grant violations пойманы;
+    64 NMI доставлено в st-nmihaz (exit=1, маркер E5h, viol=0).
+  package: ug-s0b.zip и ug-s0b.img 1474560B (см. manifest),
+    verify-package ALL PASS — zip/img/manifest сверены, 21 EXE +
+    39 fixtures byte-identical исполненным байтам/исходникам,
+    MANIFEST.TXT внутри контейнеров полный.
+  test-package: 8/0 — tampered IMG data byte, forged IMG EXE vs
+    исполненный EXE, tampered ZIP member (CRC32), stale EXE hash —
+    все обнаружены.  Детерминизм упаковщика проверен ранее двумя
+    прогонами (бит-идентичные zip/img); текущие контейнеры
+    final-review (полные sha256):
+    zip      2047dfe680f10cc479f102484e31512fc04c20799813a3cde01844d390275ae5
+    img      4d28b02855861d54fd8ebad537d5181dcf874f1bdea6b9f40220afe5841b01bf
+    manifest 4dd14b766651f9e1da1b45ab3e1fa6f3f5c22fc74ad534e061ab61283475ddd1
+
+Ключевые sha256 исполненных артефактов (из ugdiag-run.json /
+asm-manifest.json, BUILD=build/S0b-final-review):
+  UGDIAG.EXE        e99ca27a36017cd741aad0c5f90c9d9e490dfd314a661b0a8aaad19c84ed7d7d
+  ST-NOSESSION.EXE  626c7a9588e146482cecf9d59997f7e4acd716163b27e0a532cdb9728f432a46
+  ST-FRAMECRC.EXE   275b41e24c2dff5566b50d7fa3282d05a8ead529001157828604b89d63717d99
+  Z80core.js        44a0398fdf763aca6cd3608777f4b30aa53ceb4d0ec2f7234422ceb44980def0
+  ug-harness.mjs    f114f3e1093d82199afcda0c88d6393d12a60f762683777a5b6f5cbe1428f3f6
+  ug-card.js        cafea9fc164ac02fe7d6e13c8bce0d74c34e694313ae198bde3d22dcec6ae9a9
+  run-ugdiag.mjs    c17939f1f47c90e1f1757b9e772324f5a2aafdb7728e5563c66688caeff85a8b
+  ugproto.asm       7cc684fe1470da9f2a4cb283b8042b3d943601d737f2357a69b769c949bc2bc8
+  isa.asm           0cfb2d971a420c712e34418610b5ed312a31084ccfa4f192fa7eed93880f832c
+  ugdiag.asm        60b90d114bdbcec633fc0bb8094bca7839f3720cf83e95bfeeaa63618d8832bb
+  st-nosession.asm  5cde737c17139b16ace8110e26217ce7071e0d4af92bfda18dba0f0922dc5562
+  st-framecrc.asm   9028998cab4e1c2fef0d42e27c89a54c43ce60eb417733a73497dfb4781fdab6
+  st-budget.asm     0be1b655f6412b17bd2be9b5b4668f4021f0c85043e721dc3b5f8f26d922aa3d
+  st-badcrc.asm     a924cae4167be9a4f3f0e4c4defe2a28a22f6b24cbefc37adbda02cac2b596c9
+  ugmem.inc         a494778974c65ead4ea0a8f7295f1137c814394e0c9d6f17cca0635e3b9f976d
+  ug_wire.inc(gen)  84bd23811617c7191475d69e510aefae16e6fef79e0483ce8746b24642eef909
+
+
+4. CPU/NMI ДОПУЩЕНИЯ
+--------------------
+
+- Z80 ~21 МГц (Sprinter turbo); бюджет wait = 0x4000 итераций
+  ≈1.57M инструкций ≈0.4с — консервативный верх; полл X_STATUS между
+  опросами окно закрыто.
+- NMI НЕ маскируется DI: harness доставляет NMI аппаратно (push PC,
+  PC←0066h, IFF1←0) при обращении к отмеченному ISA-адресу. Политика
+  UG_NMI_PROFILE: UNKNOWN(0) → UG_WRITE_STACK и METHOD:STACK отказываются
+  с UNSAFE_NMI до касания шины; безопасность switched-SP окна при
+  моделируемом NMI доказана только как демонстрация опасности
+  (st-nmihaz ловит коррупцию), не как допуск — STACK остаётся refused by
+  default. FIXED/ALIAS пути при обычном SP и смоделированном NMI
+  проходят (st-alias, roundtrips).
+- TURBO/NO-TURBO профили: фиксированные консервативные чанки ≤32B
+  (ugproto UG_CHUNK=32), что подходит обоим профилям; отдельных бюджетов
+  частоты нет — профили различаются только числом кадров ожидания.
+
+
+5. SCOPE / ПРОПУЩЕНО
+--------------------
+
+- Music/audio-парсеры (MOD/FLT8/RAW decode, движок, I2S): fixtures
+  являются ФОРМАТНЫМИ, функциональность не заявлена и не проверяется.
+- UGCFG, восемь утилит, seven-mode multifw bundle: поздние этапы, в
+  package не входят, HELP.TXT это декларирует.
+- GS transports (01h/81h GS_FAST/GS_VERIFIED): не реализованы; public
+  API отклоняет их BAD_ARGUMENT без обращения к шине (st-transport).
+- STACK method: gated/refused при UNKNOWN NMI (см. §4); физическое
+  доказательство безопасности отсутствует.
+- MAME: ISA-модель не реализована — gate PENDING.
+- REAL: плата/шина/IOCHRDY/PSRAM физически — PENDING (S1+).
+- firmware/diagnostic/budgets (S0a make targets): PICO_SDK_PATH не
+  установлен в этом окружении — не входили в прогон; host-test покрывает
+  unit-уровень.
+
+
+6. TESTER NOTES
+----------------
+
+- Один вход: `make -f Makefile.ultrags check` (или BUILD=… для
+  изолированного дерева). Все подтесты итоговые строки печатают сами.
+- Отсутствие self-test FAIL detection = сломанный harness: каждый
+  дефектный selftest должен завершаться СВОИМ violation/ошибкой, не
+  таймаутом и не исключением; см. ожидания в run-ugdiag.mjs SELFTESTS.
+- Byte-identity: package собирает build/ultrags/dss/*.EXE; test-dss и
+  вертикаль исполняют именно эти байты (--exe-dir); verify-package
+  добывает их обратно из ZIP и IMG и сравнивает sha256.
+- Свежесть: asm-manifest/package-manifest хранят sha256; подменённый
+  EXE/битый ZIP/IMG детектируются (test-package.mjs, 8 кейсов in-memory,
+  файлы не изменяются).
+- Selftests оставляют свободный объект (objs=1) только там, где тест
+  о взаимодействии violation+cancel; pin-release проверен в st-cancel
+  (objs=0, transfer=null, cancel-фрейм на шине).
+- Ошибки: wire status (A=status) vs host-private (UG_ERR_* ≥0xF0) vs
+  card XERR vs harness violations — разные уровни, в логе разделены.

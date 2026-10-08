@@ -1,0 +1,652 @@
+{
+  "meta": {
+    "name": "ultrags-wire",
+    "schemaVersion": "1.0",
+    "spec": "ultra-gs.md",
+    "specVersion": "1.7",
+    "endianness": "le",
+    "note": "Derived, checked source for generated equates/layouts of the Ultra GS EXT wire protocol. ultra-gs.md remains the sole normative source; this schema must match it and is validated + cross-tested. Generator: tools/ultrags/gen-wire.mjs -> build/gen/{ug_wire.h,ug_wire.inc,ug_wire.norm.json}"
+  },
+  "crc": {
+    "name": "CRC-32/ISO-HDLC",
+    "poly": "0xEDB88320",
+    "init": "0xFFFFFFFF",
+    "refin": true,
+    "refout": true,
+    "xorout": "0xFFFFFFFF",
+    "empty": "0x00000000",
+    "checks": [
+      { "data": "313233343536373839", "crc": "0xCBF43926" },
+      { "data": "00010203", "crc": "0x8BB98613" },
+      { "data": "8000", "crc": "0x7A5A8AB4" }
+    ]
+  },
+  "limits": {
+    "MAX_PAYLOAD": { "value": 128, "note": "frame payload_length max; len 129..255 -> FAULT/LENGTH, no reply until TRANSPORT_RESET" },
+    "MAX_BLOCK": { "value": 1024, "note": "transfer block N: 1..1024" },
+    "MAX_OBJECTS": { "value": 128, "note": "live objects; handle counter limit 65535/session" },
+    "MAX_HANDLE_ISSUES": { "value": 65535 },
+    "QUEUE_MAX": { "value": 32 },
+    "SNAPSHOT_SIZE": { "value": 128 },
+    "SNAP_INDEX_MAX": { "value": 127 },
+    "FX_LANES": { "value": 16, "note": "0..7 music, 8..11 dedicated FX mandatory, 12..15 optional" },
+    "MUSIC_VOICES": { "value": 8 },
+    "MOD_CHANNELS_4": { "value": 4 },
+    "MOD_CHANNELS_8": { "value": 8 },
+    "PCM_RATE_MIN": { "value": 8000 },
+    "PCM_RATE_MAX": { "value": 48000 },
+    "FRAME_RX_MS": { "value": 1000, "note": "incomplete request frame timeout -> FAULT" },
+    "GRANT_IDLE_MS": { "value": 5000, "note": "inactivity timeout of one granted block" },
+    "OP_CMD_MS": { "value": 1000, "note": "INFO/CAPS/MEM_INFO/simple command host timeout" },
+    "OP_TRANSFER_MS": { "value": 2000, "note": "BEGIN/END host timeout" },
+    "OP_SEAL_MS": { "value": 30000 },
+    "OP_MODE_MS": { "value": 10000 },
+    "OP_MEMTEST_MS": { "value": 120000 }
+  },
+  "modes": {
+    "ULTRAGS_MODE_ID": { "value": 8 },
+    "API_MAJOR": { "value": 1 },
+    "API_MINOR": { "value": 0 },
+    "INFO_MAGIC": { "value": "0x31534755", "note": "\"UGS1\" u32 LE" },
+    "RESET_STORE_KEY": { "value": "0x55475253", "note": "\"UGRS\" as u32 LE on wire: 53 52 47 55" },
+    "CATALOG_MAGIC": { "value": "0x46434755", "note": "\"UGCF\" u32 LE" },
+    "DEFAULT_BASE": { "value": "0x02A0" },
+    "DEFAULT_ALIAS": { "value": "0xFFFF", "note": "alias off" },
+    "GS_ALIAS_DATA": { "value": "0x00B3" },
+    "GS_ALIAS_CMD": { "value": "0x00BB" },
+    "GS_STATUS_IDLE": { "value": "0x7E", "note": "STATUS & 7Eh == 7Eh when neither CB nor DB" }
+  },
+  "xStatus": {
+    "READY": { "bit": 0 },
+    "BUSY": { "bit": 1 },
+    "REPLY": { "bit": 2 },
+    "WRITE_GRANT": { "bit": 3 },
+    "READ_GRANT": { "bit": 4 },
+    "XERR": { "bit": 5 },
+    "GSERR": { "bit": 6 },
+    "AUDIO": { "bit": 7 }
+  },
+  "xControl": {
+    "TRANSPORT_RESET": { "value": "0xA0" },
+    "TRANSFER_CANCEL": { "value": "0xA1" },
+    "CLEAR_ERRORS": { "value": "0xA2" },
+    "SNAP_LATCH": { "value": "0xA3" }
+  },
+  "transport": {
+    "BULK_FAST": { "value": "0x00" },
+    "GS_FAST": { "value": "0x01" },
+    "BULK_VERIFIED": { "value": "0x80" },
+    "GS_VERIFIED": { "value": "0x81" }
+  },
+  "errors": [
+    { "value": "0x00", "name": "OK" },
+    { "value": "0x01", "name": "BAD_OPCODE" },
+    { "value": "0x02", "name": "BAD_ARGUMENT" },
+    { "value": "0x03", "name": "LENGTH" },
+    { "value": "0x04", "name": "CRC" },
+    { "value": "0x05", "name": "BUSY" },
+    { "value": "0x06", "name": "STATE" },
+    { "value": "0x07", "name": "HANDLE" },
+    { "value": "0x08", "name": "RANGE" },
+    { "value": "0x09", "name": "NO_MEMORY" },
+    { "value": "0x0A", "name": "NO_HANDLES" },
+    { "value": "0x0B", "name": "FORMAT" },
+    { "value": "0x0C", "name": "NO_VOICE" },
+    { "value": "0x0D", "name": "TIMEOUT" },
+    { "value": "0x0E", "name": "OVERFLOW" },
+    { "value": "0x0F", "name": "UNDERFLOW" },
+    { "value": "0x10", "name": "SHORT_TRANSFER" },
+    { "value": "0x11", "name": "PSRAM" },
+    { "value": "0x12", "name": "PINNED" },
+    { "value": "0x13", "name": "UNSUPPORTED_MEMORY" },
+    { "value": "0x14", "name": "BAD_REGISTER" },
+    { "value": "0x15", "name": "CANCELLED" },
+    { "value": "0x16", "name": "INTERNAL" }
+  ],
+  "objects": {
+    "kinds": [
+      { "value": 0, "name": "BLOB" },
+      { "value": 1, "name": "RAW_PCM" },
+      { "value": 2, "name": "WAV_PCM" },
+      { "value": 3, "name": "MOD" }
+    ],
+    "states": [
+      { "value": 0, "name": "UPLOADING" },
+      { "value": 1, "name": "READY" },
+      { "value": 2, "name": "INVALID" }
+    ]
+  },
+  "registers": [
+    { "off": "0x00", "name": "BULK_DATA", "read": "bulk_byte", "write": "bulk_byte" },
+    { "off": "0x01", "name": "X_STATUS", "read": "status", "write": "bad_register" },
+    { "off": "0x02", "name": "X_CONTROL", "read": "zero", "write": "control" },
+    { "off": "0x03", "name": "X_REQUEST", "read": "response_byte", "write": "request_byte" },
+    { "off": "0x04", "name": "SNAP_INDEX", "read": "index", "write": "index" },
+    { "off": "0x05", "name": "SNAP_DATA", "read": "snap_byte", "write": "bad_register" },
+    { "off": "0x06", "name": "X_ERROR", "read": "xerror", "write": "bad_register" },
+    { "off": "0x07", "name": "GS_ERROR", "read": "gserror", "write": "bad_register" },
+    { "off": "0x08", "name": "API_MAJOR", "read": "const", "write": "bad_register" },
+    { "off": "0x09", "name": "API_MINOR", "read": "const", "write": "bad_register" },
+    { "off": "0x0A", "name": "RSVD_0A", "read": "zero", "write": "bad_register", "through": "0x12" },
+    { "off": "0x13", "name": "GS_DATA", "read": "gs_data_out", "write": "gs_data_in" },
+    { "off": "0x14", "name": "RSVD_14", "read": "zero", "write": "bad_register", "through": "0x1A" },
+    { "off": "0x1B", "name": "GS_CMDSTAT", "read": "gs_status", "write": "gs_command" },
+    { "off": "0x1C", "name": "RSVD_1C", "read": "zero", "write": "bad_register", "through": "0x1F" }
+  ],
+  "configPorts": {
+    "CONTROL": { "value": "0x01D0" },
+    "DATA_LOW": { "value": "0x01D1" },
+    "DATA_HIGH": { "value": "0x01D2" },
+    "UNLOCK": { "value": "0xCC" },
+    "PROTOCOL_VER": { "value": 4 },
+    "MAGIC_BYTE": { "value": "0xDD" },
+    "selectors": {
+      "MAGIC": { "value": "0x00" },
+      "PROTOCOL": { "value": "0x01" },
+      "FWSTRING": { "value": "0x02" },
+      "BOOTMODE": { "value": "0x03" },
+      "UG_BASE": { "value": "0x76" },
+      "UG_ALIAS": { "value": "0x77" },
+      "UG_CFG_RESULT": { "value": "0x78" },
+      "UG_GS_ALIASES": { "value": "0x79" },
+      "FW_CATALOG": { "value": "0xE3" },
+      "FW_ACTIVE": { "value": "0xE4" },
+      "FW_BOOT_RESULT": { "value": "0xE5" }
+    }
+  },
+  "structs": {
+    "INFO": {
+      "size": 36,
+      "fields": [
+        { "name": "magic", "type": "bytes:4", "const": "UGS1" },
+        { "name": "api_major", "type": "u8", "const": 1 },
+        { "name": "api_minor", "type": "u8", "const": 0 },
+        { "name": "mode", "type": "u8", "const": 8 },
+        { "name": "boot_state", "type": "u8" },
+        { "name": "fw_version", "type": "u32" },
+        { "name": "session", "type": "u64" },
+        { "name": "build_id", "type": "bytes:16" }
+      ]
+    },
+    "CAPS": {
+      "size": 32,
+      "fields": [
+        { "name": "features", "type": "u32" },
+        { "name": "formats", "type": "u32" },
+        { "name": "output_hz", "type": "u32" },
+        { "name": "max_block", "type": "u16", "const": 1024 },
+        { "name": "max_payload", "type": "u16", "const": 128 },
+        { "name": "objects", "type": "u16", "const": 128 },
+        { "name": "playlist_entries", "type": "u16", "const": 32 },
+        { "name": "music_voices", "type": "u8", "const": 8 },
+        { "name": "fx_voices", "type": "u8" },
+        { "name": "gs_profile", "type": "u8", "const": 1 },
+        { "name": "reserved", "type": "u8", "const": 0 },
+        { "name": "base", "type": "u16" },
+        { "name": "alias", "type": "u16" },
+        { "name": "pcm_rate_min", "type": "u16", "const": 8000 },
+        { "name": "pcm_rate_max", "type": "u16", "const": 48000 }
+      ]
+    },
+    "MEM_INFO": {
+      "size": 20,
+      "fields": [
+        { "name": "physical", "type": "u32" },
+        { "name": "pool", "type": "u32" },
+        { "name": "free", "type": "u32" },
+        { "name": "largest", "type": "u32" },
+        { "name": "objects", "type": "u16" },
+        { "name": "limit", "type": "u16" }
+      ]
+    },
+    "STATS": {
+      "size": 64,
+      "fields": [
+        { "name": "isa_reads", "type": "u32" },
+        { "name": "isa_writes", "type": "u32" },
+        { "name": "upload_bytes", "type": "u32" },
+        { "name": "download_bytes", "type": "u32" },
+        { "name": "write_blocks", "type": "u32" },
+        { "name": "read_blocks", "type": "u32" },
+        { "name": "crc_errors", "type": "u32" },
+        { "name": "protocol_errors", "type": "u32" },
+        { "name": "transfer_timeouts", "type": "u32" },
+        { "name": "audio_underruns", "type": "u32" },
+        { "name": "psram_errors", "type": "u32" },
+        { "name": "max_render_us", "type": "u32" },
+        { "name": "max_command_us", "type": "u32" },
+        { "name": "rx_high_water", "type": "u32" },
+        { "name": "tx_high_water", "type": "u32" },
+        { "name": "clip_samples", "type": "u32" }
+      ]
+    },
+    "MEM_TEST_RESP": {
+      "size": 14,
+      "fields": [
+        { "name": "tested", "type": "u32" },
+        { "name": "first_bad", "type": "u32" },
+        { "name": "expected", "type": "u8" },
+        { "name": "actual", "type": "u8" },
+        { "name": "elapsed_ms", "type": "u32" }
+      ]
+    },
+    "RESET_STORE_REQ": {
+      "size": 5,
+      "fields": [
+        { "name": "key", "type": "u32", "const": "0x55475253" },
+        { "name": "level", "type": "u8" }
+      ]
+    },
+    "ALLOC_REQ": {
+      "size": 5,
+      "fields": [
+        { "name": "kind", "type": "u8" },
+        { "name": "size", "type": "u32" }
+      ]
+    },
+    "ALLOC_RESP": {
+      "size": 6,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "reserved", "type": "u32", "note": "actual allocated bytes rounded up to 16" }
+      ]
+    },
+    "SEAL_REQ": {
+      "size": 7,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "flags", "type": "u8", "note": "bit0=VERIFY_OBJECT" },
+        { "name": "expected_crc", "type": "u32" }
+      ]
+    },
+    "SEAL_RESP": {
+      "size": 4,
+      "fields": [ { "name": "actual_crc", "type": "u32" } ]
+    },
+    "OBJECT_INFO": {
+      "size": 38,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "kind", "type": "u8" },
+        { "name": "state", "type": "u8" },
+        { "name": "pins", "type": "u16" },
+        { "name": "size", "type": "u32" },
+        { "name": "uploaded", "type": "u32" },
+        { "name": "crc", "type": "u32" },
+        { "name": "data_offset", "type": "u32" },
+        { "name": "data_length", "type": "u32" },
+        { "name": "rate", "type": "u32" },
+        { "name": "frames", "type": "u32" },
+        { "name": "channels", "type": "u8" },
+        { "name": "bits", "type": "u8" },
+        { "name": "sample_format", "type": "u8" },
+        { "name": "mod_channels", "type": "u8" }
+      ]
+    },
+    "PCM_DESC": {
+      "size": 24,
+      "fields": [
+        { "name": "rate", "type": "u32" },
+        { "name": "channels", "type": "u8" },
+        { "name": "bits", "type": "u8" },
+        { "name": "sample_format", "type": "u8", "note": "0=U8 1=S8 2=S16LE" },
+        { "name": "flags", "type": "u8", "note": "bit0=forward loop" },
+        { "name": "data_offset", "type": "u32" },
+        { "name": "data_length", "type": "u32" },
+        { "name": "loop_start", "type": "u32" },
+        { "name": "loop_end", "type": "u32" }
+      ]
+    },
+    "PCM_CONFIG_REQ": {
+      "size": 26,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "desc", "type": "struct:PCM_DESC" }
+      ]
+    },
+    "LEGACY_INFO_RESP": {
+      "size": 10,
+      "fields": [
+        { "name": "module", "type": "u16" },
+        { "name": "fx", "type": "u16" },
+        { "name": "pending", "type": "u16" },
+        { "name": "uploaded", "type": "u32" }
+      ]
+    },
+    "WRITE_BEGIN_REQ": {
+      "size": 9,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "offset", "type": "u32" },
+        { "name": "length", "type": "u16" },
+        { "name": "transport", "type": "u8" },
+        { "name": "crc", "type": "u32", "verifiedOnly": true, "note": "VERIFIED only; +4 bytes -> 13" }
+      ]
+    },
+    "READ_BEGIN_REQ": {
+      "size": 9,
+      "note": "READ_BEGIN never carries a request CRC field (spec 6.3)",
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "offset", "type": "u32" },
+        { "name": "length", "type": "u16" },
+        { "name": "transport", "type": "u8" }
+      ]
+    },
+    "WRITE_BEGIN_RESP": {
+      "size": 4,
+      "note": "WRITE_BEGIN response never carries CRC (spec 6.3)",
+      "fields": [
+        { "name": "transfer", "type": "u32" }
+      ]
+    },
+    "READ_BEGIN_RESP": {
+      "size": 4,
+      "fields": [
+        { "name": "transfer", "type": "u32" },
+        { "name": "crc", "type": "u32", "verifiedOnly": true, "note": "VERIFIED only; +4 bytes -> 8" }
+      ]
+    },
+    "WRITE_END_REQ": {
+      "size": 4,
+      "note": "WRITE_END never carries host_crc (spec 6.3)",
+      "fields": [
+        { "name": "transfer", "type": "u32" }
+      ]
+    },
+    "READ_END_REQ": {
+      "size": 4,
+      "fields": [
+        { "name": "transfer", "type": "u32" },
+        { "name": "host_crc", "type": "u32", "verifiedOnly": true, "note": "VERIFIED only; +4 bytes -> 8" }
+      ]
+    },
+    "PLAY_PCM_REQ": {
+      "size": 6,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "repeats", "type": "u16" },
+        { "name": "gain", "type": "u8" },
+        { "name": "pan", "type": "u8" }
+      ]
+    },
+    "PLAY_MOD_REQ": {
+      "size": 3,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "flags", "type": "u8" }
+      ]
+    },
+    "CONTROL_REQ": {
+      "size": 3,
+      "fields": [
+        { "name": "play_id", "type": "u16" },
+        { "name": "action", "type": "u8" }
+      ]
+    },
+    "SEEK_MOD_REQ": {
+      "size": 5,
+      "fields": [
+        { "name": "play_id", "type": "u16" },
+        { "name": "order", "type": "u16" },
+        { "name": "row", "type": "u8" }
+      ]
+    },
+    "SET_MIX_REQ": {
+      "size": 4,
+      "fields": [
+        { "name": "music_master", "type": "u8" },
+        { "name": "fx_master", "type": "u8" },
+        { "name": "music_gain", "type": "u8" },
+        { "name": "fx_gain", "type": "u8" }
+      ]
+    },
+    "SET_TEMPO_REQ": {
+      "size": 2,
+      "fields": [
+        { "name": "speed", "type": "u8" },
+        { "name": "bpm", "type": "u8" }
+      ]
+    },
+    "PLAY_FX_REQ": {
+      "size": 8,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "voice_mask", "type": "u16" },
+        { "name": "priority", "type": "u8" },
+        { "name": "gain", "type": "u8" },
+        { "name": "pan", "type": "u8" },
+        { "name": "flags", "type": "u8" }
+      ]
+    },
+    "PLAY_FX_RESP": {
+      "size": 4,
+      "fields": [
+        { "name": "fx_id", "type": "u16" },
+        { "name": "voice_mask", "type": "u16" }
+      ]
+    },
+    "QUEUE_ADD_REQ": {
+      "size": 6,
+      "fields": [
+        { "name": "handle", "type": "u16" },
+        { "name": "repeats", "type": "u16" },
+        { "name": "gain", "type": "u8" },
+        { "name": "pan", "type": "u8" }
+      ]
+    },
+    "QUEUE_INFO_REQ": {
+      "size": 1,
+      "fields": [ { "name": "index", "type": "u8" } ]
+    },
+    "QUEUE_INFO_RESP": {
+      "size": 8,
+      "fields": [
+        { "name": "count", "type": "u8" },
+        { "name": "active_index", "type": "u8" },
+        { "name": "handle", "type": "u16" },
+        { "name": "repeats", "type": "u16" },
+        { "name": "gain", "type": "u8" },
+        { "name": "pan", "type": "u8" }
+      ]
+    },
+    "FX_STATUS_REQ": {
+      "size": 2,
+      "fields": [
+        { "name": "first_lane", "type": "u8" },
+        { "name": "count", "type": "u8", "min": 1, "max": 7 }
+      ]
+    },
+    "FXREC": {
+      "size": 16,
+      "fields": [
+        { "name": "fx_id", "type": "u16" },
+        { "name": "voice_mask", "type": "u16" },
+        { "name": "handle", "type": "u16" },
+        { "name": "state", "type": "u8", "note": "0=idle 1=playing 2=paused" },
+        { "name": "channels", "type": "u8" },
+        { "name": "source_frame", "type": "u32" },
+        { "name": "gain", "type": "u8" },
+        { "name": "pan", "type": "u8" },
+        { "name": "priority", "type": "u8" },
+        { "name": "flags", "type": "u8", "note": "bit0=legacy override, bit1=right lane stereo" }
+      ]
+    },
+    "CHANREC": {
+      "size": 8,
+      "fields": [
+        { "name": "note", "type": "u8", "note": "0..95 or 127=none" },
+        { "name": "volume", "type": "u8", "note": "0..64" },
+        { "name": "pan", "type": "u8" },
+        { "name": "flags", "type": "u8", "note": "bit0=active bit1=fx override bit2=muted" },
+        { "name": "period", "type": "u16" },
+        { "name": "peak", "type": "u16" }
+      ]
+    },
+    "SNAPSHOT": {
+      "size": 128,
+      "fields": [
+        { "name": "snapshot_seq", "type": "u32", "off": 0 },
+        { "name": "session", "type": "u64", "off": 4 },
+        { "name": "output_frames", "type": "u64", "off": 12 },
+        { "name": "play_id", "type": "u16", "off": 20 },
+        { "name": "reserved20", "type": "u16", "off": 22, "const": 0 },
+        { "name": "state", "type": "u8", "off": 24 },
+        { "name": "kind", "type": "u8", "off": 25 },
+        { "name": "channels", "type": "u8", "off": 26 },
+        { "name": "playlist_index", "type": "u8", "off": 27 },
+        { "name": "object", "type": "u16", "off": 28 },
+        { "name": "reserved30", "type": "u16", "off": 30, "const": 0 },
+        { "name": "source_frame", "type": "u32", "off": 32 },
+        { "name": "order", "type": "u16", "off": 36 },
+        { "name": "row", "type": "u8", "off": 38 },
+        { "name": "tick", "type": "u8", "off": 39 },
+        { "name": "speed", "type": "u8", "off": 40 },
+        { "name": "bpm", "type": "u8", "off": 41 },
+        { "name": "peak_left", "type": "u16", "off": 42 },
+        { "name": "peak_right", "type": "u16", "off": 44 },
+        { "name": "audio_underruns", "type": "u32", "off": 46 },
+        { "name": "last_audio_error", "type": "u8", "off": 50 },
+        { "name": "reserved51", "type": "u8", "off": 51, "const": 0 },
+        { "name": "voice_mask", "type": "u16", "off": 52 },
+        { "name": "reserved54", "type": "bytes:2", "off": 54 },
+        { "name": "chan", "type": "array:8:CHANREC", "off": 56 },
+        { "name": "transfer_id", "type": "u32", "off": 120 },
+        { "name": "transfer_done", "type": "u16", "off": 124 },
+        { "name": "transfer_length", "type": "u16", "off": 126 }
+      ]
+    },
+    "GS_DESC": {
+      "size": 9,
+      "note": "host-side ABI struct (HL pointer arg of UG_GS_COMMAND per spec 12.1), not a wire payload",
+      "fields": [
+        { "name": "command", "type": "u8" },
+        { "name": "has_pre", "type": "u8" },
+        { "name": "pre", "type": "u8" },
+        { "name": "post_count", "type": "u8" },
+        { "name": "post_ptr", "type": "u16" },
+        { "name": "reply_count", "type": "u8" },
+        { "name": "reply_ptr", "type": "u16" }
+      ]
+    },
+    "CATALOG_REC": {
+      "size": 16,
+      "fields": [
+        { "name": "mode", "type": "u8" },
+        { "name": "flags", "type": "u8", "note": "bit0=present bit1=image CRC verified this boot" },
+        { "name": "reserved", "type": "u16", "const": 0 },
+        { "name": "offset", "type": "u32" },
+        { "name": "length", "type": "u32" },
+        { "name": "crc32", "type": "u32" }
+      ]
+    },
+    "FW_CATALOG": {
+      "size": 148,
+      "note": "streamed via DATA_HIGH selector E3h, LE, no padding; header16 + 8*16 + crc4",
+      "fields": [
+        { "name": "magic", "type": "bytes:4", "const": "UGCF", "off": 0 },
+        { "name": "major", "type": "u8", "const": 1, "off": 4 },
+        { "name": "minor", "type": "u8", "const": 0, "off": 5 },
+        { "name": "count", "type": "u8", "const": 8, "off": 6 },
+        { "name": "record_size", "type": "u8", "const": 16, "off": 7 },
+        { "name": "total_bytes", "type": "u32", "const": 148, "off": 8 },
+        { "name": "reserved", "type": "u32", "const": 0, "off": 12 },
+        { "name": "records", "type": "array:8:CATALOG_REC", "off": 16 },
+        { "name": "catalog_crc32", "type": "u32", "off": 144 }
+      ]
+    }
+  },
+  "opcodes": [
+    { "hex": "0x00", "name": "INFO", "req": [], "respStruct": "INFO", "transferOk": true },
+    { "hex": "0x01", "name": "CAPS", "req": [], "respStruct": "CAPS" },
+    { "hex": "0x02", "name": "MEM_INFO", "req": [], "respStruct": "MEM_INFO", "transferOk": true },
+    { "hex": "0x03", "name": "STATS", "req": [], "respStruct": "STATS", "transferOk": true },
+    { "hex": "0x04", "name": "CLEAR_STATS", "req": [], "resp": [] },
+    { "hex": "0x05", "name": "MEM_TEST", "req": [ { "name": "mode", "type": "u8" } ], "respStruct": "MEM_TEST_RESP" },
+    { "hex": "0x06", "name": "RESET_STORE", "reqStruct": "RESET_STORE_REQ", "resp": [ { "name": "session_id", "type": "u64" } ] },
+    { "hex": "0x10", "name": "ALLOC", "reqStruct": "ALLOC_REQ", "respStruct": "ALLOC_RESP" },
+    { "hex": "0x11", "name": "FREE", "req": [ { "name": "handle", "type": "u16" } ], "resp": [] },
+    { "hex": "0x12", "name": "OBJECT_INFO", "req": [ { "name": "handle", "type": "u16" } ], "respStruct": "OBJECT_INFO", "transferOk": true },
+    { "hex": "0x13", "name": "SEAL", "reqStruct": "SEAL_REQ", "respStruct": "SEAL_RESP" },
+    { "hex": "0x14", "name": "PCM_CONFIG", "reqStruct": "PCM_CONFIG_REQ", "resp": [] },
+    { "hex": "0x15", "name": "OBJECT_ENUM", "req": [ { "name": "after_handle", "type": "u16" } ], "resp": [ { "name": "next_handle", "type": "u16" } ] },
+    { "hex": "0x16", "name": "LEGACY_INFO", "req": [], "respStruct": "LEGACY_INFO_RESP", "transferOk": true },
+    { "hex": "0x20", "name": "WRITE_BEGIN", "reqStruct": "WRITE_BEGIN_REQ", "respStruct": "WRITE_BEGIN_RESP", "transferCmd": true },
+    { "hex": "0x21", "name": "WRITE_END", "reqStruct": "WRITE_END_REQ", "resp": [], "transferCmd": true, "transferOk": true },
+    { "hex": "0x22", "name": "READ_BEGIN", "reqStruct": "READ_BEGIN_REQ", "respStruct": "READ_BEGIN_RESP", "transferCmd": true },
+    { "hex": "0x23", "name": "READ_END", "reqStruct": "READ_END_REQ", "resp": [], "transferCmd": true, "transferOk": true },
+    { "hex": "0x24", "name": "TRANSFER_CANCEL", "req": [ { "name": "transfer", "type": "u32" } ], "resp": [], "transferOk": true },
+    { "hex": "0x30", "name": "PLAY_PCM", "reqStruct": "PLAY_PCM_REQ", "resp": [ { "name": "play_id", "type": "u16" } ] },
+    { "hex": "0x31", "name": "PLAY_MOD", "reqStruct": "PLAY_MOD_REQ", "resp": [ { "name": "play_id", "type": "u16" } ] },
+    { "hex": "0x32", "name": "CONTROL", "reqStruct": "CONTROL_REQ", "resp": [] },
+    { "hex": "0x33", "name": "SEEK_MOD", "reqStruct": "SEEK_MOD_REQ", "resp": [] },
+    { "hex": "0x34", "name": "SET_MIX", "reqStruct": "SET_MIX_REQ", "resp": [] },
+    { "hex": "0x35", "name": "SET_TEMPO", "reqStruct": "SET_TEMPO_REQ", "resp": [] },
+    { "hex": "0x36", "name": "PLAY_FX", "reqStruct": "PLAY_FX_REQ", "respStruct": "PLAY_FX_RESP" },
+    { "hex": "0x37", "name": "STOP_FX", "req": [ { "name": "voice_mask", "type": "u16" } ], "resp": [] },
+    { "hex": "0x38", "name": "SET_PAN", "req": [ { "name": "channel", "type": "u8" }, { "name": "pan", "type": "u8" } ], "resp": [] },
+    { "hex": "0x39", "name": "CONTROL_FX", "req": [ { "name": "fx_id", "type": "u16" }, { "name": "action", "type": "u8" } ], "resp": [] },
+    { "hex": "0x40", "name": "QUEUE_CLEAR", "req": [], "resp": [] },
+    { "hex": "0x41", "name": "QUEUE_ADD", "reqStruct": "QUEUE_ADD_REQ", "resp": [ { "name": "index", "type": "u8" } ] },
+    { "hex": "0x42", "name": "QUEUE_PLAY", "req": [ { "name": "cycles", "type": "u16" } ], "resp": [ { "name": "play_id", "type": "u16" } ] },
+    { "hex": "0x43", "name": "QUEUE_INFO", "reqStruct": "QUEUE_INFO_REQ", "respStruct": "QUEUE_INFO_RESP" },
+    { "hex": "0x50", "name": "SNAPSHOT", "req": [], "respStruct": "SNAPSHOT", "transferOk": true },
+    { "hex": "0x51", "name": "FX_STATUS", "reqStruct": "FX_STATUS_REQ", "resp": [ { "name": "first_lane", "type": "u8" }, { "name": "count", "type": "u8" }, { "name": "records", "type": "varray:FXREC", "countField": "count" } ], "transferOk": true }
+  ],
+  "gsCommands": [
+    { "hex": "0x00", "name": "GS_RESET_FLAGS", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0x08", "name": "GS_NOP", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0x20", "name": "GS_POOL_SIZE", "pre": 0, "post": 0, "out": 3 },
+    { "hex": "0x21", "name": "GS_POOL_FREE", "pre": 0, "post": 0, "out": 3 },
+    { "hex": "0x23", "name": "GS_POOL_PAGES", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0x2A", "name": "GS_MUSIC_MASTER", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x2B", "name": "GS_FX_MASTER", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x2E", "name": "GS_SELECT_FX", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x30", "name": "GS_LOAD_MODULE", "pre": 0, "post": 0, "out": 0, "load": "module" },
+    { "hex": "0x31", "name": "GS_PLAY_MODULE", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x32", "name": "GS_PAUSE_MODULE", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0x33", "name": "GS_RESUME_MODULE", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0x35", "name": "GS_MUSIC_GAIN", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x36", "name": "GS_OUT_FF", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0x37", "name": "GS_FREE_LEGACY", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0x38", "name": "GS_LOAD_FX", "pre": 0, "post": 0, "out": 0, "load": "fx" },
+    { "hex": "0x39", "name": "GS_PLAY_FX_SEEK", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x3A", "name": "GS_STOP_FX_MASK", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x3D", "name": "GS_FX_GAIN", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x3E", "name": "GS_LOAD_FX_SIGNED", "pre": 1, "post": 0, "out": 0, "load": "fx" },
+    { "hex": "0x40", "name": "GS_FX_NOTE", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x41", "name": "GS_FX_VOLUME", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x42", "name": "GS_FX_FINETUNE", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x45", "name": "GS_FX_PRIORITY", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x46", "name": "GS_SEEK_FIRST", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x47", "name": "GS_SEEK_LAST", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x48", "name": "GS_LOOP_START", "pre": 1, "post": 2, "out": 0, "note": "pre=lo, post=mid,hi; hi=FF disables" },
+    { "hex": "0x49", "name": "GS_LOOP_END", "pre": 1, "post": 2, "out": 0 },
+    { "hex": "0x60", "name": "GS_ORDER", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0x61", "name": "GS_ROW", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0x62", "name": "GS_ORDER_ROW", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0x63", "name": "GS_NOTES", "pre": 0, "post": 0, "out": 4 },
+    { "hex": "0x64", "name": "GS_VOLUMES", "pre": 0, "post": 0, "out": 4 },
+    { "hex": "0x65", "name": "GS_SEEK_ORDER", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x66", "name": "GS_SPEED_BPM", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x67", "name": "GS_SPEED", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0x68", "name": "GS_BPM", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0x69", "name": "GS_EXTRA_TICK", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0x6A", "name": "GS_F00_MODE", "pre": 1, "post": 0, "out": 0 },
+    { "hex": "0x6B", "name": "GS_RELOOPER", "pre": -1, "post": -1, "out": 0, "note": "optional lo pre; hi post; short/long form" },
+    { "hex": "0x80", "name": "GS_FX_CH0", "pre": 1, "post": 0, "out": 0, "range": "0x80-0x83" },
+    { "hex": "0x88", "name": "GS_FX_CH_NOTE", "pre": 1, "post": 1, "out": 0, "range": "0x88-0x8B" },
+    { "hex": "0x90", "name": "GS_FX_CH_VOL", "pre": 1, "post": 1, "out": 0, "range": "0x90-0x93" },
+    { "hex": "0x98", "name": "GS_FX_CH_NV", "pre": 1, "post": 2, "out": 0, "range": "0x98-0x9B" },
+    { "hex": "0xA0", "name": "GS_SET_NOTE", "pre": 1, "post": 0, "out": 0, "range": "0xA0-0xA3" },
+    { "hex": "0xA8", "name": "GS_SET_VOL", "pre": 1, "post": 0, "out": 0, "range": "0xA8-0xAB" },
+    { "hex": "0xD0", "name": "GS_EXT_D0", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0xD1", "name": "GS_EXT_D1", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0xD2", "name": "GS_LOAD_CLOSE", "pre": 0, "post": 0, "out": 1, "note": "returns legacy u8 handle (0 on error); EXT u16 mapping via LEGACY_INFO" },
+    { "hex": "0xF0", "name": "GS_READ_ERROR", "pre": 0, "post": 0, "out": 1 },
+    { "hex": "0xF3", "name": "GS_WARM_RESET", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0xF4", "name": "GS_COLD_RESET", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0xF5", "name": "GS_BUSY_ON", "pre": 0, "post": 0, "out": 0 },
+    { "hex": "0xF6", "name": "GS_BUSY_OFF", "pre": 0, "post": 0, "out": 0 }
+  ]
+}
