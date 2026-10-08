@@ -1,3 +1,4 @@
+#include "ultrags/ug_config.h"
 /*
  *  Copyright (C) 2022-2024  Ian Scott
  *
@@ -170,6 +171,7 @@ void play_gus() {
     pwm_set_enabled(pwm_slice_num, true);
 
     for (;;) {
+        ug_maintenance_poll();
         // Check if GUS channel count changed
         uint8_t channels = GUS_timingChannels();
         if (channels != current_gus_channels) {

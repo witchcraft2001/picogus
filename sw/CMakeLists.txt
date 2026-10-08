@@ -13,7 +13,7 @@ set(PICO_COPY_TO_RAM 1)
 # (note this can come from environment, CMake cache etc)
 # to manually set Pico SDK path, uncomment this with your path.
 # Otherwise, the environment variable PICO_SDK_PATH will be used.
-#set(PICO_SDK_PATH "${CMAKE_SOURCE_DIR}/../../pico/pico-sdk")
+#set(PICO_SDK_PATH "${CMAKE_CURRENT_LIST_DIR}/../../pico/pico-sdk")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
@@ -50,7 +50,7 @@ pico_sdk_init()
 ################################################################################
 # Helper function for setting linker script
 function(set_linker_script TARGET script)
-    target_link_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/multifw)
+    target_link_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/multifw)
     pico_set_linker_script(${TARGET} ${script})
 
     # Add dependencies on the 'included' linker scripts so that the target gets
@@ -80,6 +80,7 @@ add_compile_definitions(
 function(config_target TARGET_NAME MULTIFW)
     # Add executable. Default name is the project name, version 0.1
     add_executable(${TARGET_NAME} picogus.cpp)
+    set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
     pico_set_program_version(${TARGET_NAME} ${PICOGUS_VERSION})
 
     # Add include directory for the new structure
@@ -103,9 +104,10 @@ function(config_target TARGET_NAME MULTIFW)
         target_compile_options(${TARGET_NAME} PRIVATE -flto=jobserver)
     endif()
 
-    target_sources(${TARGET_NAME} PRIVATE system/pico_reflash.c system/flash_settings.c)
+    target_sources(${TARGET_NAME} PRIVATE system/pico_reflash.c system/flash_settings.c multifw/ug_catalog.c ultrags/ug_config.c ultrags/ug_maintenance.cpp)
     # target_compile_options(${TARGET_NAME} PRIVATE -save-temps -fverbose-asm)
     if(MULTIFW)
+        target_compile_definitions(${TARGET_NAME} PRIVATE UG_BUNDLE=1)
         set_linker_script(${TARGET_NAME} ${CMAKE_BINARY_DIR}/${TARGET_NAME}.ld)
     endif()
 
@@ -257,13 +259,22 @@ function(config_target TARGET_NAME MULTIFW)
         # find one.
         add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
             COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_printf_leak.py
+                ${CMAKE_CURRENT_LIST_DIR}/scripts/check_printf_leak.py
                 ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE}
                 $<TARGET_FILE:${TARGET_NAME}>
             VERBATIM
         )
     endif()
     pico_enable_stdio_semihosting(${TARGET_NAME} 0)
+    if(NOT CMAKE_CURRENT_BINARY_DIR STREQUAL CMAKE_BINARY_DIR)
+        add_custom_command(TARGET ${TARGET_NAME} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}.uf2 ${CMAKE_BINARY_DIR}/${TARGET_NAME}.uf2)
+    endif()
+    set(UG_EVIDENCE ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/s2-evidence.py)
+    set_property(TARGET ${TARGET_NAME} APPEND PROPERTY LINK_DEPENDS ${UG_EVIDENCE} ${CMAKE_CURRENT_LIST_DIR}/CMakeLists.txt)
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} ${UG_EVIDENCE} --build ${CMAKE_BINARY_DIR}
+            --elf $<TARGET_FILE:${TARGET_NAME}> --target ${TARGET_NAME} VERBATIM)
 endfunction()
 
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/tusb_xinput)
@@ -583,6 +594,23 @@ endfunction()
 
 
 ################################################################################
+execute_process(COMMAND git rev-parse --short=16 HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR} OUTPUT_VARIABLE UG_REV OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND git diff --quiet WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR} RESULT_VARIABLE UG_DIRTY)
+if(UG_DIRTY)
+    string(SUBSTRING "${UG_REV}" 0 15 UG_REV)
+    string(APPEND UG_REV "+")
+endif()
+function(build_ultrags TARGET_NAME MULTIFW)
+    config_target(${TARGET_NAME} ${MULTIFW})
+    pico_set_program_name(${TARGET_NAME} "pg-ultrags")
+    target_compile_definitions(${TARGET_NAME} PRIVATE SOUND_ULTRAGS=1 UG_BUILD_ID="${UG_REV}" PSRAM_ASYNC=1
+        PSRAM_PIN_CS=1 PSRAM_PIN_SCK=2 PSRAM_PIN_MOSI=3 PSRAM_PIN_MISO=0)
+    target_sources(${TARGET_NAME} PRIVATE ultrags/ug_minimal.c ultrags/ug_play.cpp
+        ultrags/ug_hwmap.c ultrags/ug_audio.c ultrags/ug_psram.c)
+    target_link_libraries(${TARGET_NAME} rp2040-psram hardware_dma pico_rand)
+    pico_generate_pio_header(${TARGET_NAME} ${PICO_EXTRAS_PATH}/src/rp2_common/pico_audio_i2s/audio_i2s.pio)
+endfunction()
+
 # Build "multifw" - all firmwares in one UF2
 if(PROJECT_TYPE STREQUAL "MULTIFW")
     set(FW_TARGET picogus)
@@ -606,51 +634,19 @@ if(PROJECT_TYPE STREQUAL "MULTIFW")
     endif()
     message("Multifw OPL variant: ${MULTIFW_OPL_VARIANT} → ${ADLIB_TARGET_NAME}")
 
-    add_custom_command(
-        OUTPUT
-            "${CMAKE_BINARY_DIR}/generated/multifw/flash_firmware.h"
-            "${CMAKE_BINARY_DIR}/pg-gus-multifw.ld"
-            "${CMAKE_BINARY_DIR}/${ADLIB_TARGET_NAME}-multifw.ld"
-            "${CMAKE_BINARY_DIR}/pg-mpu-multifw.ld"
-            "${CMAKE_BINARY_DIR}/pg-psg-multifw.ld"
-            "${CMAKE_BINARY_DIR}/pg-sb-multifw.ld"
-            "${CMAKE_BINARY_DIR}/pg-usb-multifw.ld"
-        COMMAND
-            ${CMAKE_COMMAND}
-            -DFLASH_FIRMWARE_H_IN="${CMAKE_SOURCE_DIR}/multifw/flash_firmware.h.in"
-            -DFLASH_FIRMWARE_H="${CMAKE_BINARY_DIR}/generated/multifw/flash_firmware.h"
-            -DFW_LD_IN="${CMAKE_SOURCE_DIR}/multifw/firmware.ld.in"
-            -DFW_1_BIN="${CMAKE_BINARY_DIR}/pg-gus.bin"
-            -DFW_1_LD="${CMAKE_BINARY_DIR}/pg-gus-multifw.ld"
-            -DFW_2_BIN="${CMAKE_BINARY_DIR}/${ADLIB_TARGET_NAME}.bin"
-            -DFW_2_LD="${CMAKE_BINARY_DIR}/${ADLIB_TARGET_NAME}-multifw.ld"
-            -DFW_3_BIN="${CMAKE_BINARY_DIR}/pg-mpu.bin"
-            -DFW_3_LD="${CMAKE_BINARY_DIR}/pg-mpu-multifw.ld"
-            -DFW_4_BIN="${CMAKE_BINARY_DIR}/pg-psg.bin"
-            -DFW_4_LD="${CMAKE_BINARY_DIR}/pg-psg-multifw.ld"
-            -DFW_5_BIN="${CMAKE_BINARY_DIR}/pg-sb.bin"
-            -DFW_5_LD="${CMAKE_BINARY_DIR}/pg-sb-multifw.ld"
-            -DFW_6_BIN="${CMAKE_BINARY_DIR}/pg-usb.bin"
-            -DFW_6_LD="${CMAKE_BINARY_DIR}/pg-usb-multifw.ld"
-            -P ${CMAKE_SOURCE_DIR}/multifw/generate_ld.cmake
-        DEPENDS
-            "${CMAKE_SOURCE_DIR}/multifw/firmware.ld.in"
-            pg-gus
-            ${ADLIB_TARGET_NAME}
-            pg-mpu
-            pg-psg
-            pg-sb
-            pg-usb
-    )
-    add_custom_target(generate_flash_firmware_h DEPENDS
-        "${CMAKE_BINARY_DIR}/generated/multifw/flash_firmware.h"
-        "${CMAKE_BINARY_DIR}/pg-gus-multifw.ld"
-        "${CMAKE_BINARY_DIR}/${ADLIB_TARGET_NAME}-multifw.ld"
-        "${CMAKE_BINARY_DIR}/pg-mpu-multifw.ld"
-        "${CMAKE_BINARY_DIR}/pg-psg-multifw.ld"
-        "${CMAKE_BINARY_DIR}/pg-sb-multifw.ld"
-        "${CMAKE_BINARY_DIR}/pg-usb-multifw.ld"
-    )
+    set(UG_NAMES pg-gus ${ADLIB_TARGET_NAME} pg-mpu pg-psg pg-sb pg-usb pg-ultrags)
+    set(UG_LINKERS)
+    set(UG_FINAL)
+    foreach(name IN LISTS UG_NAMES)
+        list(APPEND UG_LINKERS ${CMAKE_BINARY_DIR}/${name}-multifw.ld)
+        list(APPEND UG_FINAL ${name}-multifw)
+    endforeach()
+    set(UG_PACKER ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/multifw.py)
+    set(UG_PACK_ARGS --build ${CMAKE_BINARY_DIR} --sw ${CMAKE_CURRENT_LIST_DIR} --names ${UG_NAMES})
+    add_custom_command(OUTPUT ${UG_LINKERS} ${CMAKE_BINARY_DIR}/generated/multifw/layout.json
+        COMMAND ${Python3_EXECUTABLE} ${UG_PACKER} layout ${UG_PACK_ARGS}
+        DEPENDS ${UG_NAMES} ${UG_PACKER} multifw/fw_memmap_c2ram.ld VERBATIM)
+    add_custom_target(generate_flash_firmware_h DEPENDS ${UG_LINKERS})
 
     build_gus(pg-gus FALSE)
     build_gus(pg-gus-multifw TRUE)
@@ -671,15 +667,19 @@ if(PROJECT_TYPE STREQUAL "MULTIFW")
     build_usb(pg-usb-multifw TRUE)
     add_dependencies(pg-usb-multifw pg-usb generate_flash_firmware_h)
 
-    add_executable(bootloader)
-    target_sources(bootloader PRIVATE multifw/bootloader.c system/flash_settings.c)
-    target_link_libraries(bootloader PRIVATE pico_stdlib hardware_flash pico_flash hardware_exception)
+    build_ultrags(pg-ultrags FALSE)
+    build_ultrags(pg-ultrags-multifw TRUE)
+    add_dependencies(pg-ultrags-multifw generate_flash_firmware_h)
+    add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/generated/multifw/recovery.h
+            ${CMAKE_BINARY_DIR}/generated/multifw/catalog.bin
+        COMMAND ${Python3_EXECUTABLE} ${UG_PACKER} catalog ${UG_PACK_ARGS}
+        DEPENDS ${UG_FINAL} ${UG_PACKER} VERBATIM)
+    add_custom_target(ug_manifest DEPENDS ${CMAKE_BINARY_DIR}/generated/multifw/recovery.h)
+    add_executable(bootloader multifw/bootloader.c multifw/ug_catalog.c)
+    set_target_properties(bootloader PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+    target_link_libraries(bootloader PRIVATE pico_stdlib hardware_watchdog hardware_exception)
     pico_add_extra_outputs(bootloader)
-    # set_linker_script(bootloader ${CMAKE_SOURCE_DIR}/multifw/bootloader.ld)
-    target_include_directories(bootloader PRIVATE 
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${CMAKE_BINARY_DIR}/generated/multifw
-    )
+    target_include_directories(bootloader PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_BINARY_DIR}/generated/multifw)
     pico_enable_stdio_uart(bootloader 0)
     pico_enable_stdio_usb(bootloader 0)
     pico_enable_stdio_semihosting(bootloader 0)
@@ -689,30 +689,32 @@ if(PROJECT_TYPE STREQUAL "MULTIFW")
     if(NOT PGDEBUG AND Python3_FOUND)
         add_custom_command(TARGET bootloader POST_BUILD
             COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_printf_leak.py
+                ${CMAKE_CURRENT_LIST_DIR}/scripts/check_printf_leak.py
                 ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE}
                 $<TARGET_FILE:bootloader>
             VERBATIM
         )
     endif()
-    add_dependencies(bootloader generate_flash_firmware_h)
-
-    if (NOT UF2CREATE_FOUND)
-        set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/multifw)
-        # Needs to be an external project so it can be built as a native binary outside of the Pico SDK
-        find_package(UF2CREATE)
-        # Rebuild uf2create if flash_firmware.h is regenerated
-        ExternalProject_Add_StepDependencies(UF2CREATEBuild build generate_flash_firmware_h)
+    if(NOT CMAKE_CURRENT_BINARY_DIR STREQUAL CMAKE_BINARY_DIR)
+        add_custom_command(TARGET bootloader POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_BINARY_DIR}/bootloader.uf2 ${CMAKE_BINARY_DIR}/bootloader.uf2)
     endif()
-    add_custom_command(
-        OUTPUT picogus.uf2
-        DEPENDS bootloader UF2CREATE pg-gus-multifw ${ADLIB_TARGET_NAME}-multifw pg-mpu-multifw pg-psg-multifw pg-sb-multifw pg-usb-multifw
-        COMMAND UF2CREATE bootloader.bin pg-gus-multifw.bin ${ADLIB_TARGET_NAME}-multifw.bin pg-mpu-multifw.bin pg-psg-multifw.bin pg-sb-multifw.bin pg-usb-multifw.bin picogus.uf2
-    )
-    add_custom_target(picogus ALL DEPENDS picogus.uf2)
+    set(UG_EVIDENCE ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/s2-evidence.py)
+    set_property(TARGET bootloader APPEND PROPERTY LINK_DEPENDS ${UG_EVIDENCE} ${CMAKE_CURRENT_LIST_DIR}/CMakeLists.txt)
+    add_custom_command(TARGET bootloader POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} ${UG_EVIDENCE} --build ${CMAKE_BINARY_DIR}
+            --elf $<TARGET_FILE:bootloader> --target bootloader VERBATIM)
+    add_dependencies(bootloader ug_manifest)
+    add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/picogus.uf2
+        COMMAND ${Python3_EXECUTABLE} ${UG_PACKER} pack ${UG_PACK_ARGS}
+        DEPENDS bootloader ug_manifest ${UG_FINAL} ${UG_PACKER} VERBATIM)
+    add_custom_target(picogus ALL DEPENDS ${CMAKE_BINARY_DIR}/picogus.uf2)
 
 ################################################################################
 # Builds for individual "legacy" firmware modes
+elseif(PROJECT_TYPE STREQUAL "ULTRAGS")
+    set(FW_TARGET pg-ultrags)
+    build_ultrags(pg-ultrags FALSE)
 elseif(PROJECT_TYPE STREQUAL "GUS")
     set(FW_TARGET pg-gus)
     build_gus(pg-gus FALSE)
@@ -866,7 +868,7 @@ if(PROJECT_TYPE STREQUAL "ULTRAGS_DIAG")
         # dead-loop the firmware -- fail the build instead
         add_custom_command(TARGET ${FW_TARGET} POST_BUILD
             COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_printf_leak.py
+                ${CMAKE_CURRENT_LIST_DIR}/scripts/check_printf_leak.py
                 ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE}
                 $<TARGET_FILE:${FW_TARGET}>
             VERBATIM

@@ -1,16 +1,9 @@
 cmake_minimum_required(VERSION 3.29)
-project(multifw)
-
-# add_executable(uf2create)
-# target_sources(uf2create PRIVATE uf2create.c)
-
+set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/../boards)
+if(NOT PICO_BOARD)
+    set(PICO_BOARD picogus2)
+endif()
+include(${CMAKE_CURRENT_LIST_DIR}/../pico_sdk_import.cmake)
+project(picogus_bundle VERSION 4.1.1 LANGUAGES C CXX ASM)
+set(PROJECT_TYPE MULTIFW CACHE STRING "Firmware type" FORCE)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/.. picogus)
-
-add_custom_command(
-    OUTPUT pg-multi.uf2
-    COMMAND uf2create picogus.bin pg-multi.uf2
-    DEPENDS picogus
-)
-add_custom_target(pg-multi
-    DEPENDS pg-multi.uf2
-)

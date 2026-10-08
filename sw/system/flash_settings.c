@@ -17,6 +17,8 @@
  */
 
 #include <string.h>
+#include <stddef.h>
+#include <assert.h>
 
 #include "flash_settings.h"
 #include "../include/pg_debug.h"
@@ -26,6 +28,8 @@
 #include "hardware/clocks.h"
 #include "pico/stdlib.h"
 
+_Static_assert(sizeof(Settings)==156, "Settings v6 ARM ABI size");
+_Static_assert(offsetof(Settings,UltraGS)==152, "Settings v5 tail preserved");
 static const Settings defaultSettings = {
     .magic = SETTINGS_MAGIC,
     .version = SETTINGS_VERSION,
@@ -87,6 +91,7 @@ static const Settings defaultSettings = {
         .gusVol = 100,
         .psgVol = 80
     },
+    .UltraGS = { .basePort = 0x02a0, .bulkAlias = 0xffff },
     .SB16 = {
         .irq = 5,
         .dma = 1,
@@ -139,6 +144,8 @@ static const VersionFields versionFieldsTable[] = {
     {(const FieldInfo[]){
         FIELD(SB16),
     }, 1},
+    // version 6: persisted Ultra GS ports only
+    {(const FieldInfo[]){ FIELD(UltraGS.basePort), FIELD(UltraGS.bulkAlias) }, 2},
 };
 
 // Apply default values only to fields introduced after the given version
@@ -177,7 +184,7 @@ void loadSettings(Settings* settings, bool migrate)
     memcpy(settings, (void *)(XIP_BASE + SETTINGS_SECTOR), sizeof(Settings));
     /* stdio_flush(); */
 
-    if (settings->magic != SETTINGS_MAGIC || settings->version > SETTINGS_VERSION) {
+    if (settings->magic != SETTINGS_MAGIC || settings->version == 0 || settings->version > SETTINGS_VERSION) {
         // No valid settings found, use defaults
         DBG_PUTS("No valid settings found, using defaults");
         stdio_flush();

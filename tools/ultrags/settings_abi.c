@@ -50,10 +50,13 @@ SYM(sz_SB,             sizeof(((Settings *)0)->SB));
 SYM(sz_MPU,            sizeof(((Settings *)0)->MPU));
 SYM(sz_CD,             sizeof(((Settings *)0)->CD));
 SYM(sz_SB16,           sizeof(((Settings *)0)->SB16));
-SYM(off_ug_tail,offsetof(struct UgTail, ug_tail) + 1); /* append point */
-SYM(sizeof_ugtail,     sizeof(struct UgTail));
+SYM(off_ug_tail,offsetof(Settings, UltraGS) + 1); /* append point */
+SYM(sizeof_ugtail,     sizeof(Settings));
 SYM(page_headroom,     256 - (int)sizeof(Settings)); /* FLASH_PAGE_SIZE 256 */
 
 SYM(settings_version, SETTINGS_VERSION);
 _Static_assert(sizeof(Settings) < 256, "Settings exceeds Flash page");
 _Static_assert(offsetof(struct UgTail, ug_tail) == sizeof(Settings), "tail shifted legacy layout");
+
+_Static_assert(sizeof(Settings)==156, "Settings v6 size");
+_Static_assert(offsetof(Settings,UltraGS)==152, "Settings v5 fields preserved");

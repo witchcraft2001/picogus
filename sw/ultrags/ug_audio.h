@@ -68,3 +68,11 @@ uint32_t ug_audio_lrclk_hz(void);     /* derived sample rate */
 }
 #endif
 #endif /* UG_AUDIO_H */
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* S2 explicit idle maintenance: rearm zero DMA after clock/Flash operation. */
+void ug_audio_resume_idle(void);
+#ifdef __cplusplus
+}
+#endif

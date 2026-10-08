@@ -22,7 +22,7 @@ import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
 const stage = arg('--stage', 'S0b');
-if (!['S0b','S1'].includes(stage)) throw new Error('unknown package stage');
+if (!['S0b','S1','S2'].includes(stage)) throw new Error('unknown package stage');
 const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -76,7 +76,22 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = stage === 'S1' ? [
+const help = stage === 'S2' ? [
+  'Ultra GS S2 configuration stage - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
+  'UGCFG.EXE targets PGMULTI.UF2: seven modes, protocol4 and UGCF v1.0.',
+  'UGCFG LIST -> MODE ULTRAGS -> VERIFY -> MODE GUS',
+  'MODE ULTRAGS /SAVE persists startup mode. MODE without SAVE is volatile.',
+  'PORTS 02A0 OFF /SAVE; GSALIAS ON is volatile and warns about conflicts.',
+  'SAVE, power-cycle and RESET DRV require physical Sprinter acceptance.',
+  'UGTEST/UGBENCH target ONLY standalone ULTRAGS_DIAG firmware from S1.',
+  'UGDIAG and ST-*.EXE target the HOST model; not hardware utilities.',
+  'ST-*.EXE include intentionally defective binaries. Never run on hardware.',
+  'PGULTRA.UF2 is standalone at Flash origin: it replaces the bootloader.',
+  'Standalone ULTRAGS has no multifw catalogue; UGCFG changes are refused.',
+  'Keep a full-flash backup; restore PGMULTI.UF2 using BOOTSEL/SWD for recovery.',
+  'No storage, MOD/PCM playback or complete GS dispatcher in this stage.',
+  'Read S2-README.md and flash-map.json supplied beside the firmware.',
+].join('\r\n') : stage === 'S1' ? [
   'Ultra GS S1 standalone diagnostic package',
   'HOST_PASS / DSS-EXE_PASS / REAL_PENDING. Not the production mode8 bundle.',
   'UGTEST BUS /SLOT:0 /CPU:21 (1048576 bytes in each direction).',

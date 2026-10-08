@@ -33,10 +33,11 @@ typedef enum {
     PSG_MODE     = 4,
     SB_MODE      = 5,
     USB_MODE     = 6,
-    NE2000_MODE  = 7
+    NE2000_MODE  = 7,
+    ULTRAGS_MODE = 8
 } card_mode_t;
 
-static const char *modenames[8] = {
+static const char *modenames[9] = {
     "INVALID",
     "GUS",
     "ADLIB",
@@ -44,7 +45,8 @@ static const char *modenames[8] = {
     "PSG",
     "SB",
     "USB",
-    "NE2000"
+    "NE2000",
+    "ULTRAGS"
 };
 
 #define CMD_MAGIC      0x00 // Magic string
@@ -104,3 +106,11 @@ static const char *modenames[8] = {
 #define CMD_REBOOT     0xE2 // Select reboot register
 #define CMD_HWTYPE     0xF0 // Hardware type 
 #define CMD_FLASH      0xFF // Firmware write mode
+
+#define CMD_UG_BASE 0x76
+#define CMD_UG_ALIAS 0x77
+#define CMD_UG_CFG_RESULT 0x78
+#define CMD_UG_GS_ALIASES 0x79
+#define CMD_FW_CATALOG 0xE3
+#define CMD_FW_ACTIVE 0xE4
+#define CMD_FW_BOOT_RESULT 0xE5

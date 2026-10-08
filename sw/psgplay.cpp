@@ -1,3 +1,4 @@
+#include "ultrags/ug_config.h"
 /*
  *  Copyright (C) 2022-2024  Ian Scott
  *
@@ -148,6 +149,7 @@ void play_psg() {
     pwm_set_enabled(pwm_slice_num, true);
 
     for (;;) {
+        ug_maintenance_poll();
         bool notfirst = false;
 #if SOUND_TANDY
         while (tandy_buffer.tail != tandy_buffer.head) {

@@ -1,3 +1,4 @@
+#include "ultrags/ug_config.h"
 /*
  *  Copyright (C) 2022-2024  Ian Scott
  *
@@ -114,6 +115,7 @@ void play_usb() {
 #endif
 
     for (;;) {
+        ug_maintenance_poll();
 #ifdef CDROM
         // Fill the CD audio FIFO from the active track; ISR drains it.
         cdrom_audio_callback(&cdrom, AUDIO_FIFO_SIZE - STEREO_SAMPLES_PER_SECTOR);

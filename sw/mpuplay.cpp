@@ -1,3 +1,4 @@
+#include "ultrags/ug_config.h"
 /*
  *  Copyright (C) 2022-2024  Ian Scott
  *
@@ -44,6 +45,7 @@ void play_mpu() {
     MPU401_Init(settings.MPU.delaySysex, settings.MPU.fakeAllNotesOff);
 
     for (;;) {
+        ug_maintenance_poll();
         send_midi_bytes(8);
 #ifdef USB_STACK
         // Service TinyUSB events

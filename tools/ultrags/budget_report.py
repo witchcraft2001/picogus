@@ -12,7 +12,7 @@ MAIN_BYTES = 256 * 1024
 SCRATCH_BYTES = 4096
 FLASH_BYTES = 2 * 1024 * 1024
 SETTINGS_BYTES = 4096
-IMAGES = ("pg-gus", "pg-adlib", "pg-mpu", "pg-psg", "pg-sb", "pg-usb")
+IMAGES = ("pg-gus", "pg-adlib", "pg-mpu", "pg-psg", "pg-sb", "pg-usb", "pg-ultrags")
 
 
 def run(cmd):
@@ -89,29 +89,28 @@ def settings_abi(sw, tools, prefix, work):
 
 def flash_layout(multifw):
     root = Path(multifw)
-    header = (root / "generated/multifw/flash_firmware.h").read_text()
-    offsets = {int(n): int(off) for n, off in re.findall(r"#define FLASH_FIRMWARE(\d+) (\d+)", header)}
-    if set(offsets) != set(range(1, 7)):
-        raise ValueError("baseline must have six generated image offsets")
+    manifest = root / "generated/multifw/flash-map.json"
+    if not manifest.exists():
+        raise ValueError("missing final seven-image flash map")
+    data = json.loads(manifest.read_text())
+    entries = data["images"]
+    if [e["mode"] for e in entries] != [1,2,3,4,5,6,8]:
+        raise ValueError("bundle mode IDs differ")
     boot = (root / "bootloader.bin").stat().st_size
-    if boot > offsets[1] or offsets[1] != 32768:
-        raise ValueError("invalid baseline bootloader reserve")
-    images = []
-    for i, name in enumerate(IMAGES, 1):
-        size = (root / (name + "-multifw.bin")).stat().st_size
-        off = offsets[i]
-        if off % 1024 or (images and off < images[-1]["end"]):
-            raise ValueError("overlapping or unaligned baseline images")
-        images.append({"name": name, "mode_id": i, "offset": off,
-                       "length": size, "end": off + size})
-    end = images[-1]["end"]
-    # Historical generator allocates (size//1024 + 1)*1024, even for exact multiples.
-    allocation_end = images[-1]["offset"] + (images[-1]["length"] // 1024 + 1) * 1024
-    return {"bootloader_bytes": boot, "bootloader_reserved": offsets[1], "images": images,
-            "image_end": end, "allocation_end": allocation_end,
-            "settings_start": FLASH_BYTES - SETTINGS_BYTES,
-            "free_for_future_images": FLASH_BYTES - SETTINGS_BYTES - allocation_end,
-            "prefix": "length includes the existing 256-byte image prefix"}
+    if boot > 0x7c00 or entries[0]["offset"] != 0x8000:
+        raise ValueError("bootstrap/catalogue reserve overflow")
+    images=[]
+    for e in entries:
+        size=(root/(e["name"]+"-multifw.bin")).stat().st_size
+        off=e["offset"]
+        if size!=e["length"] or size>e["capacity"] or off%1024 or (images and off<images[-1]["end"]):
+            raise ValueError("overlapping/unaligned/stale final image")
+        images.append(dict(name=e["name"],mode_id=e["mode"],offset=off,length=size,end=off+size))
+    allocation_end=entries[-1]["offset"]+entries[-1]["capacity"]
+    return dict(bootloader_bytes=boot,bootloader_reserved=0x7c00,catalogue_offset=0x7c00,
+        images=images,image_end=images[-1]["end"],allocation_end=allocation_end,
+        settings_start=FLASH_BYTES-SETTINGS_BYTES,free_for_future_images=FLASH_BYTES-SETTINGS_BYTES-allocation_end,
+        prefix="length includes existing 256-byte image prefix")
 
 
 def target_estimate(diag, flash, diag_bytes):

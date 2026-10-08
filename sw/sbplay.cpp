@@ -1,3 +1,4 @@
+#include "ultrags/ug_config.h"
 /*
  *  Copyright (C) 2022-2024  Ian Scott
  *
@@ -294,6 +295,7 @@ void play_adlib() {
 #endif
 
     for (;;) {
+        ug_maintenance_poll();
 #if CDROM
         cdrom_audio_callback(&cdrom, AUDIO_FIFO_SIZE - STEREO_SAMPLES_PER_SECTOR);
 #endif

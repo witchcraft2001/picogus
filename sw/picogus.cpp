@@ -155,22 +155,58 @@ void play_usb(void);
 #endif
 
 
+#include "ultrags/ug_config.h"
+#ifdef SOUND_ULTRAGS
+#include "ultrags/ug_minimal.h"
+#include "ultrags/ug_hwmap.h"
+void play_ultrags(void);
+#endif
+#if defined(SOUND_ULTRAGS)
+#define ACTIVE_MODE ULTRAGS_MODE
+#elif defined(SOUND_GUS)
+#define ACTIVE_MODE GUS_MODE
+#elif SOUND_TANDY || SOUND_CMS
+#define ACTIVE_MODE PSG_MODE
+#elif defined(SOUND_SB)
+#define ACTIVE_MODE SB_MODE
+#elif defined(SOUND_OPL)
+#define ACTIVE_MODE ADLIB_MODE
+#elif defined(MPU_ONLY)
+#define ACTIVE_MODE MPU_MODE
+#elif defined(USB_ONLY)
+#define ACTIVE_MODE USB_MODE
+#elif defined(NE2000)
+#define ACTIVE_MODE NE2000_MODE
+#else
+#define ACTIVE_MODE INVALID_MODE
+#endif
+
 // PicoGUS control and data ports
 static bool control_active = false;
 static uint8_t sel_reg = 0;
 static uint32_t cur_read = 0;
 static uint32_t cur_write = 0;
-static bool queueSaveSettings = false;
 static bool queueReboot = false;
 
 Settings settings;
 void processSettings(void);
 
+#ifdef SOUND_ULTRAGS
+static unsigned ug_pending_wtvol;
+void ug_board_maintenance(void) {
+    unsigned pending=__atomic_exchange_n(&ug_pending_wtvol,0,__ATOMIC_ACQUIRE);
+    if(pending && BOARD_TYPE==PICOGUS_2) m62429->setVolume(M62429_BOTH,pending-1);
+}
+#endif
 static void wtvol_from_mixer(uint8_t volume) {
     settings.Global.waveTableVolume = volume;
+#ifdef SOUND_ULTRAGS
+    __atomic_store_n(&ug_pending_wtvol,(unsigned)volume+1,__ATOMIC_RELEASE);
+#else
     if (BOARD_TYPE == PICOGUS_2) {
         m62429->setVolume(M62429_BOTH, volume);
     }
+#endif
 }
 
 #define IOW_PIO_SM 0
@@ -185,6 +221,9 @@ static uint8_t picogus_dataLatch_low;
 __force_inline void select_picogus(uint8_t value) {
     // printf("select picogus %x\n", value);
     sel_reg = value;
+    ug_config_select(&ug_cfg,value);
+    if (ug_config_selector(value)) return;
+    if (ug_config_busy(&ug_cfg)) return;
     switch (sel_reg) {
     case CMD_MAGIC: // Magic string
     case CMD_PROTOCOL: // Protocol version
@@ -286,6 +325,8 @@ __force_inline void select_picogus(uint8_t value) {
 }
 
 __force_inline void write_picogus_low(uint8_t value) {
+    if (ug_config_busy(&ug_cfg)) return;
+    if (ug_config_selector(sel_reg)) { ug_config_write(&ug_cfg,false,value,ug_runtime_idle()); return; }
     switch (sel_reg) {
     case CMD_GUSPORT: // GUS Base port
     case CMD_OPLPORT: // Adlib Base port
@@ -304,6 +345,11 @@ __force_inline void write_picogus_low(uint8_t value) {
 }
 
 __force_inline void write_picogus_high(uint8_t value) {
+    if (ug_config_busy(&ug_cfg)) return;
+    if (ug_config_selector(sel_reg) || sel_reg==CMD_BOOTMODE || sel_reg==CMD_SAVE) {
+        bool idle=sel_reg==CMD_UG_GS_ALIASES?ug_runtime_gs_idle():ug_runtime_idle();
+        ug_config_write(&ug_cfg,true,value,idle); return;
+    }
     switch (sel_reg) {
     case CMD_GUSPORT: // GUS Base port
         settings.GUS.basePort = (value || basePort_low) ? ((value << 8) | basePort_low) : 0xFFFF;
@@ -505,19 +551,11 @@ __force_inline void write_picogus_high(uint8_t value) {
         break;
 
     // For multifw
-    case CMD_BOOTMODE:
-        settings.startupMode = value;
-        DBG_PRINTF("requesting startup mode: %u\n", value);
-        break;
-    case CMD_SAVE:
-        queueSaveSettings = true;
-        break;
     case CMD_REBOOT:
-        watchdog_hw->scratch[3] = settings.startupMode;
-        DBG_PRINTF("rebooting into mode: %u\n", settings.startupMode);
-        watchdog_reboot(0, 0, 0);
+        queueReboot = true;
         break;
     case CMD_DEFAULTS:
+        if (!ug_runtime_idle()) { ug_cfg.result=5; break; }
         getDefaultSettings(&settings);
         processSettings();
         break;
@@ -528,6 +566,7 @@ __force_inline void write_picogus_high(uint8_t value) {
 }
 
 __force_inline uint8_t read_picogus_low(void) {
+    if (ug_config_selector(sel_reg)) return ug_config_read(&ug_cfg,false);
     switch (sel_reg) {
     case CMD_GUSPORT: // GUS Base port
         return settings.GUS.basePort == 0xFFFF ? 0 : (settings.GUS.basePort & 0xFF);
@@ -555,6 +594,7 @@ __force_inline uint8_t read_picogus_low(void) {
 }
 
 __force_inline uint8_t read_picogus_high(void) {
+    if (ug_config_selector(sel_reg)) return ug_config_read(&ug_cfg,true);
     uint8_t ret;
     switch (sel_reg) {
     case CMD_MAGIC:  // PicoGUS magic string
@@ -690,26 +730,18 @@ __force_inline uint8_t read_picogus_high(void) {
 
 void processSettings(void) {
 #if defined(SOUND_GUS)
-    settings.startupMode = GUS_MODE;
     set_volume(CMD_GUSVOL);
 #elif (SOUND_TANDY || SOUND_CMS)
-    settings.startupMode = PSG_MODE;
     set_volume(CMD_PSGVOL);
 #elif defined(SOUND_SB)
-    settings.startupMode = SB_MODE;
     set_volume(CMD_SBVOL);
     set_volume(CMD_OPLVOL);
 #elif defined(SOUND_OPL)
-    settings.startupMode = ADLIB_MODE;
     set_volume(CMD_OPLVOL);
 #elif defined(MPU_ONLY)
-    settings.startupMode = MPU_MODE;
 #elif defined(USB_ONLY)
-    settings.startupMode = USB_MODE;
 #elif defined(NE2000)
-    settings.startupMode = NE2000_MODE;
 #else
-    settings.startupMode = INVALID_MODE;
 #endif
 #ifdef SOUND_SB
     sb_port_test = settings.SB.basePort >> 4;
@@ -730,9 +762,7 @@ void processSettings(void) {
     DBG_PRINTF("cdrom base port: %x\n", settings.CD.basePort);
     cdman_set_autoadvance(settings.CD.autoAdvance);
 #endif
-    if (BOARD_TYPE == PICOGUS_2) {
-        m62429->setVolume(M62429_BOTH, settings.Global.waveTableVolume);
-    }
+    wtvol_from_mixer(settings.Global.waveTableVolume);
 #ifdef SOUND_SB
     sbdsp_set_wtvol_passthrough(&settings.Global.waveTableVolume, wtvol_from_mixer);
 #endif
@@ -748,6 +778,12 @@ __force_inline void handle_iow(void) {
     uint32_t iow_read = pio_sm_get(pio0, IOW_PIO_SM); //>> 16;
     // printf("%x", iow_read);
     uint16_t port = (iow_read >> 8) & 0x3FF;
+#ifdef SOUND_ULTRAGS
+    if (ug_minimal_port(port)) {
+        ug_minimal_write(port,(uint8_t)iow_read,time_us_32());
+        pio_sm_put(pio0,IOW_PIO_SM,IO_END); return;
+    }
+#endif
     // printf("IOW: %x %x\n", port, iow_read & 0xFF);
 #ifdef SOUND_GUS
     if ((port >> 4 | 0x10) == gus_port_test) {
@@ -1027,15 +1063,18 @@ __force_inline void handle_iow(void) {
     }
     // Fallthrough if no match, or for slow write, reset PIO
     pio_sm_put(pio0, IOW_PIO_SM, IO_END);
-    if (queueSaveSettings) {
-        saveSettings(&settings);
-        queueSaveSettings = false;
-    }
+
 }
 
 __force_inline void handle_ior(void) {
     uint8_t x;
     uint16_t port = pio_sm_get(pio0, IOR_PIO_SM) & 0x3FF;
+#ifdef SOUND_ULTRAGS
+    if (ug_minimal_port(port)) {
+        pio_sm_put(pio0,IOR_PIO_SM,IO_WAIT);
+        pio_sm_put(pio0,IOR_PIO_SM,IOR_SET_VALUE|ug_minimal_read(port)); return;
+    }
+#endif
 #if defined(SOUND_GUS)
     if ((port >> 4 | 0x10) == gus_port_test) {
         // Tell PIO to wait for data
@@ -1240,6 +1279,10 @@ int main()
 
     // Load settings from flash
     loadSettings(&settings, true /* migrate */);
+    ug_runtime_init(&settings, ACTIVE_MODE);
+#ifdef SOUND_ULTRAGS
+    ug_minimal_init();
+#endif
     hw_clear_bits(&xip_ctrl_hw->ctrl, XIP_CTRL_EN_BITS);
 
     // Determine board type. GPIO 29 is grounded on PicoGUS v2.0, and on a Pico, it's VSYS/3 (~1.666V)
@@ -1282,7 +1325,12 @@ int main()
         m62429 = new M62429();
         // Data pin = GPIO24, data pin = GPIO25
 #ifdef M62429_PIO
+#ifdef SOUND_ULTRAGS
+        if (ug_hw_claim_m62429(pio1)) panic("M62429 SM0 unavailable");
+        m62429->begin(24, 25, pio1, UG_M62429_SM);
+#else
         m62429->begin(24, 25, pio1, -1);
+#endif
 #else
         m62429->begin(24, 25);
         // Initial volume is set in processSettings()
@@ -1409,6 +1457,11 @@ extern void PIC_DeActivateIRQ(void);
     multicore_launch_core1(&play_usb);
 #endif // USBONLY
 
+#ifdef SOUND_ULTRAGS
+    gpio_init(21); gpio_set_dir(21,GPIO_OUT); gpio_put(21,0);
+    multicore_launch_core1(&play_ultrags);
+#endif
+
     for(int i=AD0_PIN; i<(AD0_PIN + 10); ++i) {
         gpio_disable_pulls(i);
     }
@@ -1475,6 +1528,15 @@ extern void PIC_DeActivateIRQ(void);
             handle_ior();
         }
 #endif
+#ifdef SOUND_ULTRAGS
+        ug_minimal_poll(time_us_32());
+#endif
+        if (queueReboot && !ug_config_busy(&ug_cfg) && gpio_get(IOW_PIN) && pio_sm_is_tx_fifo_empty(pio0,IOW_PIO_SM)) {
+            queueReboot=false;
+            watchdog_hw->scratch[3]=settings.startupMode;
+            watchdog_reboot(0,0,0);
+            for (;;) tight_loop_contents();
+        }
 #ifdef POLLING_DMA
         process_dma();
 #endif

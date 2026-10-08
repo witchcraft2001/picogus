@@ -206,3 +206,12 @@ uint32_t ug_audio_lrclk_hz(void) {
     /* SM runs sysclk/(div/256); one stereo frame = 64 SM instructions */
     return a_divider_q8 ? (clock_get_hz(clk_sys) * 4u) / a_divider_q8 : 0;
 }
+
+void ug_audio_resume_idle(void) {
+    for(unsigned i=0;i<2;++i) {
+        uint ch=ch_of(i);
+        dma_channel_set_read_addr(ch,zero_frame,false);
+        dma_channel_set_trans_count(ch,UG_AUDIO_FRAMES,false);
+    }
+    dma_channel_start(a_ch0);
+}

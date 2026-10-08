@@ -109,8 +109,8 @@ dss: $(UGBUILD)/gen/ug_wire.inc
 
 # test-dss executes the EXACT bytes the dss target built (byte-identity
 # chain: packaged EXE == executed EXE is verified by verify-package.mjs)
-test-dss: dss
-	$(NODE) $(ROOT)/tests/ultrags/dss/run-ugdiag.mjs $(ROOT) $(UGBUILD) --exe-dir=$(UGBUILD)/dss
+test-dss: dss s2-host
+	UG_S2_CATALOG="$(abspath $(BUILD))/host/s2-catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-ugdiag.mjs $(ROOT) $(UGBUILD) --exe-dir=$(UGBUILD)/dss
 
 # honest S0b stage package: store-only ZIP + 1.44MiB FAT12 image,
 # independently re-extracted and byte-verified.  NOT the production
@@ -134,7 +134,10 @@ check: test-dss
 	$(NODE) $(ROOT)/tools/ultrags/test-fixtures.mjs $(UGBUILD)/fixtures $(UGBUILD)/fixtures-check
 	$(NODE) $(ROOT)/tools/ultrags/test-stage-excerpt.mjs --out $(UGBUILD)/excerpts
 	$(NODE) $(ROOT)/tools/ultrags/stage-excerpt.mjs --stage S0b --output $(UGBUILD)/excerpts/ultrags-S0b.md
-	$(MAKE) -f $(ROOT)/Makefile.ultrags BUILD=$(BUILD) package
+	$(NODE) $(ROOT)/tools/ultrags/package-s0b.mjs --exe-dir $(UGBUILD)/dss \
+		--fixtures $(UGBUILD)/fixtures --out $(UGBUILD)/package
+	$(NODE) $(ROOT)/tools/ultrags/verify-package.mjs --package $(UGBUILD)/package \
+		--exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures
 	$(NODE) $(ROOT)/tools/ultrags/test-package.mjs --package $(UGBUILD)/package \
 		--exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures
 	@echo "S0b STAGE CHECK: HOST + DSS-EXE levels only;"
@@ -162,3 +165,29 @@ s1-check: check diagnostic diagnostic-no-dack budgets
 
 s1-package: s1-check
 	$(NODE) $(ROOT)/tools/ultrags/package-s1.mjs --build $(BUILD)
+
+.PHONY: s2-host s2-check s2-package ultrags
+s2-host:
+	@mkdir -p $(BUILD)/host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s2-host.py --build $(BUILD)/host --cc "$(CC)"
+	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_s2_pack.py $(BUILD)/host/s2-pack
+
+
+ultrags: prepare-tools
+	cmake -S $(SW) -B $(BUILD)/ultrags-release $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=ULTRAGS -DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+	cmake --build $(BUILD)/ultrags-release --parallel
+
+s2-check: s1-check ultrags s2-entrypoint
+	UG_S2_CATALOG="$(abspath $(BUILD))/multifw-release/generated/multifw/catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-s2.mjs $(ROOT) $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s2-report.py --build $(BUILD)
+	@echo "S2 HOST_PASS / DSS-EXE_PASS / REAL_PENDING"
+
+s2-package: s2-check
+	$(NODE) $(ROOT)/tools/ultrags/package-s2.mjs --build $(BUILD)
+
+.PHONY: s2-entrypoint
+s2-entrypoint: prepare-tools
+	cmake -S $(SW)/multifw -B $(BUILD)/s2-entrypoint $(CMAKE_COMMON) \
+		-DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+	cmake --build $(BUILD)/s2-entrypoint --parallel

@@ -1,3 +1,4 @@
+#include "ultrags/ug_config.h"
 /*
  *  Copyright (C) 2022-2024  Ian Scott
  *  Copyright (C) 2024       Kevin Moonlight
@@ -56,6 +57,7 @@ void play_ne2000() {
 
     static bool flag = false;
     while(1) {
+        ug_maintenance_poll();
         if (multicore_fifo_rvalid()) {
             switch(multicore_fifo_pop_blocking()) {
             case FIFO_NE2K_SEND:

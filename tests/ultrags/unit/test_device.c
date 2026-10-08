@@ -46,6 +46,9 @@ static void test_audio(void) {
     ug_audio_finish(); mock_complete(1);
     assert(ug_audio_get_stats()->underruns == 1); /* Expected EOF silence. */
     assert(ug_audio_pack_frame(-1234, 5678) == 0xfb2e162eu);
+    ug_audio_resume_idle();
+    assert(mock_starts[0]==2 && mock_counts[0]==UG_AUDIO_FRAMES && mock_counts[1]==UG_AUDIO_FRAMES);
+    for(unsigned i=0;i<UG_AUDIO_FRAMES;i++) assert(!mock_dma_src[0][i] && !mock_dma_src[1][i]);
     assert(!mock_irq_disabled);
     puts("audio: full queue, ownership, continuous SM, STOP/EOF, LR packing PASS");
 }
