@@ -27,6 +27,9 @@
 #include "ug_hwmap.h"
 #include "ug_diag_guard.h"
 #include <string.h>
+#ifdef UG_ISA_POSTED
+#include "ug_posted.h"
+#endif
 
 #define IO_WAIT       0xffffffffu
 #define IO_END        0x0u
@@ -50,6 +53,8 @@ static uint8_t sram[UGD_MAX_BLOCK], bus_snapshot[UGD_BUS_SIZE];
 static uint16_t length, position, stored_length;
 static uint8_t bus_state, write_pattern = 7, read_pattern = 7;
 static uint32_t session = 1, written, read_bytes, errors, blocks;
+static bool posted_fault;
+void ug_diag_transport_fault(void) { posted_fault=true; errors++; bus_state=0; stored_length=0; }
 static uint16_t assertion_us, response_us, staged_delay;
 static void put32(uint8_t *dst, uint32_t n) {
     for (unsigned i = 0; i < 4; i++) dst[i] = (uint8_t)(n >> (8*i));
@@ -72,7 +77,7 @@ static void bus_latch(void) {
 static void bus_command(uint8_t cmd) {
     if (ug_diag_guard_failed()) { errors++; return; }
     if (cmd == UGD_RESET) {
-        session++; written = read_bytes = errors = blocks = 0;
+        posted_fault=false; session++; written = read_bytes = errors = blocks = 0;
         length = position = stored_length = 0; bus_state = 0;
         write_pattern = read_pattern = 7; return;
     }
@@ -82,7 +87,7 @@ static void bus_command(uint8_t cmd) {
         if (bus_state == UGD_WRITE) stored_length = length;
         blocks++; bus_state = 0; return;
     }
-    if (bus_state || !length || length > UGD_MAX_BLOCK ||
+    if (posted_fault || bus_state || !length || length > UGD_MAX_BLOCK ||
         cmd < UGD_WRITE || cmd > UGD_PATTERN ||
         (cmd == UGD_ECHO && stored_length != length)) { errors++; return; }
     /* A new WRITE immediately supersedes the previous echo grant. CANCEL
@@ -121,18 +126,26 @@ void ug_diag_isa_boot(uint32_t nonce) {
 
 /* verdict helpers ---------------------------------------------------- */
 static inline void iow_end(void) {
+#ifndef UG_ISA_POSTED
     if (!ug_diag_guard_failed()) pio_sm_put(pio0, UG_IOW_SM, IO_END);
+#endif
 }
 static inline bool iow_wait(void) {
+#ifdef UG_ISA_POSTED
+    return true;
+#else
     ug_diag_guard_arm(4);
     if (!ug_diag_guard_delay(assertion_us)) return false;
     pio_sm_put(pio0, UG_IOW_SM, IO_WAIT);
     return true;
+#endif
 }
 static inline void iow_done(void) {
+#ifndef UG_ISA_POSTED
     /* second word finishes a WAITed write */
     if (!ug_diag_guard_delay(response_us)) return;
     if (!ug_diag_guard_failed()) pio_sm_put(pio0, UG_IOW_SM, IO_END);
+#endif
 }
 static inline bool ior_wait(void) {
     ug_diag_guard_arm(5);
@@ -175,8 +188,7 @@ static uint8_t diag_read_high(void) {
     }
 }
 
-void __time_critical_func(handle_iow)(void) {
-    uint32_t iow_read = pio_sm_get(pio0, UG_IOW_SM);
+static void apply_iow(uint32_t iow_read) {
     /* autopushed word = addr(10)<<8 | data(8), same as baseline */
     uint16_t port = (iow_read >> 8) & 0x3FF;
     uint8_t value = iow_read & 0xFF;
@@ -250,9 +262,62 @@ void __time_critical_func(handle_iow)(void) {
     }
 }
 
+void __time_critical_func(handle_iow)(void) {
+    uint32_t word=pio_sm_get(pio0,UG_IOW_SM);
+#ifdef UG_ISA_POSTED
+    ug_posted_write(word,apply_iow);
+#else
+    apply_iow(word);
+#endif
+}
+#ifdef UG_ISA_POSTED
+static uint16_t read_assertion_us,read_response_us;
+static bool posted_owns(uint16_t port,const uint32_t *words,unsigned n) {
+    bool unlocked=control_active; uint8_t selector=sel_reg; uint16_t low=staged_delay;
+    read_assertion_us=assertion_us; read_response_us=response_us;
+    /* Preserve locked CONFIG passthrough and apply queued delay settings to
+     * this very read. These SRAM-only decisions precede the early verdict. */
+    for(unsigned i=0;i<n;i++) {
+        uint16_t p=(words[i]>>8)&1023; uint8_t v=words[i];
+        if(p==CONTROL_PORT) {
+            if(!unlocked) unlocked=v==0xcc;
+            else { selector=v; if(v==UGD_SEL_ASSERT_US || v==UGD_SEL_RESPONSE_US) low=0; }
+        } else if(unlocked && (selector==UGD_SEL_ASSERT_US || selector==UGD_SEL_RESPONSE_US)) {
+            if(p==DATA_PORT_LOW) low=v;
+            else if(p==DATA_PORT_HIGH && ((uint32_t)low|((uint32_t)v<<8))<=UGD_MAX_DELAY_US) {
+                if(selector==UGD_SEL_ASSERT_US) read_assertion_us=low|((uint16_t)v<<8);
+                else read_response_us=low|((uint16_t)v<<8);
+            }
+        }
+    }
+    return (port>=UGD_BASE && port<=UGD_BASE+UGD_REG_SNAPSHOT) || port==CONTROL_PORT ||
+           (unlocked && (port==DATA_PORT_LOW || port==DATA_PORT_HIGH));
+}
+static bool posted_guard(bool value_phase) {
+    if(!value_phase) ug_diag_guard_arm(5);
+    return ug_diag_guard_delay(value_phase?read_response_us:read_assertion_us);
+}
+static uint8_t posted_read(uint16_t port) {
+    switch(port-UGD_BASE) {
+    case UGD_REG_DATA: return bus_read();
+    case UGD_REG_CMD: return errors?0x80:bus_state;
+    case UGD_REG_LEN_LO: return length;
+    case UGD_REG_LEN_HI: return length>>8;
+    case UGD_REG_SNAPSHOT: return cur_read<UGD_BUS_SIZE?bus_snapshot[cur_read++]:0xff;
+    }
+    if(port==CONTROL_PORT) return sel_reg;
+    if(port==DATA_PORT_HIGH) return control_active?diag_read_high():255;
+    return control_active?(sel_reg==UGD_SEL_BASE?UGD_BASE&255:sel_reg==UGD_SEL_CMD?cmd_result:0):255;
+}
+#endif
+
 void __time_critical_func(handle_ior)(void) {
     uint16_t port = pio_sm_get(pio0, UG_IOR_SM) & 0x3FF;
-    n_ior++;
+    n_ior++; /* Count every captured read in either profile, including foreign ports. */
+#ifdef UG_ISA_POSTED
+    if(!ug_diag_guard_failed()) ug_posted_read_guarded(port,posted_owns,apply_iow,posted_read,ug_diag_transport_fault,posted_guard);
+    return;
+#endif
     if (ug_diag_guard_failed()) return;
     if (port >= UGD_BASE && port <= UGD_BASE + UGD_REG_SNAPSHOT) {
         /* Guard and assert IOCHRDY before processing the selected read. */

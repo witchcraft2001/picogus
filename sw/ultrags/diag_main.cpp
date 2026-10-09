@@ -26,7 +26,17 @@
 #include "include/pg_debug.h"
 #include "system/overclock.h"
 #include "diag_iow.pio.h"
+#ifdef UG_ISA_POSTED
+#include "ug_posted_iow.pio.h"
+#include "ug_posted.h"
 #ifdef UG_DIAG_NO_DACK
+#define iow_program ug_posted_iow_no_dack_program
+#define iow_program_init ug_posted_iow_no_dack_program_init
+#else
+#define iow_program ug_posted_iow_program
+#define iow_program_init ug_posted_iow_program_init
+#endif
+#elif defined(UG_DIAG_NO_DACK)
 #define iow_program diag_iow_no_dack_program
 #define iow_program_init diag_iow_no_dack_program_init
 #else
@@ -62,6 +72,7 @@ const char *firmware_string = PICO_PROGRAM_NAME " v" PICO_PROGRAM_VERSION_STRING
 static M62429 *m62429;
 
 extern "C" void handle_iow(void);
+extern "C" void ug_diag_transport_fault(void);
 extern "C" void handle_ior(void);
 extern "C" void ug_diag_maybe_reboot(void);
 extern "C" void ug_diag_isa_boot(uint32_t nonce);
@@ -174,13 +185,22 @@ int main() {
     constexpr float iow_clkdiv = (float)RP2_CLOCK_SPEED / 183000.0f;
     iow_program_init(pio0, IOW_PIO_SM, iow_offset, iow_clkdiv);
     ior_program_init(pio0, IOR_PIO_SM, ior_offset);
+#ifdef UG_ISA_POSTED
+    ug_posted_init(iow_offset);
+#endif
 
     ug_diag_guard_bus_started();
     for (;;) {
         /* drain all pending IOW before serving IOR: keeps the
          * write-before-read ordering the control protocol expects */
+#ifdef UG_ISA_POSTED
+        ug_posted_check(ug_diag_transport_fault);
+        if(ior_has_data()) handle_ior();
+        else if(iow_has_data()) handle_iow();
+#else
         while (iow_has_data()) handle_iow();
         if (ior_has_data()) handle_ior();
+#endif
         ug_diag_maybe_reboot();
     }
 }

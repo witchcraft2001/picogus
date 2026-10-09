@@ -93,3 +93,54 @@ void ug_config_save_done(ug_config *c,bool verified) {
     c->result=verified?0:0x16;
     __atomic_store_n(&c->maintenance,0,__ATOMIC_RELEASE);
 }
+
+bool ug_config_posted_selector(uint8_t s) { return s!=CMD_FLASH; }
+
+static bool known_selector(uint8_t v) {
+    return v<=9 || (v>=15 && v<=18) || (v>=32 && v<=34) ||
+        (v>=48 && v<=52) || (v>=64 && v<=67) || (v>=80 && v<=84) ||
+        (v>=96 && v<=102) || (v>=112 && v<=121) || (v>=224 && v<=229) || v==240 || v==255;
+}
+bool ug_config_preview_fence(const ug_config *c,bool unlocked,bool idle,bool gs_idle,
+                            const Settings *defaults,uint16_t port,const uint32_t *words,
+                            unsigned count,ug_config_fence *fence) {
+    Settings shadow=*c->settings;
+    /* Core1 changes result and publishes maintenance. A whole
+     * struct copy would read those fields without synchronization, even if
+     * the preview subsequently overwrites the atomic flags. Only core0 owns
+     * the descriptor fields needed to predict the address map. */
+    ug_config config={0}; config.settings=&shadow;
+    config.selector=c->selector; config.low=c->low; config.active=c->active;
+    config.maintenance=__atomic_load_n(&c->maintenance,__ATOMIC_ACQUIRE);
+    config.aliases=ug_config_aliases(c);
+    if(count>9) return false;
+    for(unsigned i=0;i<count;i++) {
+        uint16_t p=(words[i]>>8)&1023; uint8_t v=words[i];
+        bool blocked=ug_config_busy(&config);
+        bool write_idle=config.selector==CMD_UG_GS_ALIASES?gs_idle:idle;
+        if(fence) { fence->blocked[i]=blocked; fence->idle[i]=write_idle; }
+        if(p==CONTROL_PORT) {
+            if(v==0xcc) unlocked=true;
+            else if(unlocked) {
+                ug_config_select(&config,v);
+                if(!blocked && (!known_selector(v) || !ug_config_posted_selector(v))) unlocked=false;
+            }
+        } else if(unlocked && (p==DATA_PORT_LOW || p==DATA_PORT_HIGH)) {
+            if(config.selector==CMD_UG_BASE || config.selector==CMD_UG_ALIAS || config.selector==CMD_UG_GS_ALIASES || config.selector==CMD_SAVE)
+                ug_config_write(&config,p==DATA_PORT_HIGH,v,write_idle);
+            else if(!blocked && p==DATA_PORT_HIGH && config.selector==CMD_DEFAULTS && idle && defaults) shadow=*defaults;
+            else if(p==DATA_PORT_LOW) config.low=v;
+        } else if(!blocked) {
+            if(p==shadow.UltraGS.basePort+3) idle=false;
+            if(p==shadow.UltraGS.basePort+0x13 || p==shadow.UltraGS.basePort+0x1b ||
+               (config.aliases && (p==0xb3 || p==0xbb))) idle=gs_idle=false;
+        }
+    }
+    uint16_t base=shadow.UltraGS.basePort, alias=shadow.UltraGS.bulkAlias;
+    return (port>=CONTROL_PORT && port<=DATA_PORT_HIGH) ||
+        (port>=base && port-base<32) || (alias!=65535 && port>=alias && port-alias<32) ||
+        (config.aliases && (port==0xb3 || port==0xbb));
+}
+bool ug_config_preview_port(const ug_config *c,bool unlocked,bool idle,uint16_t port,const uint32_t *words,unsigned count) {
+    return ug_config_preview_fence(c,unlocked,idle,idle,NULL,port,words,count,NULL);
+}

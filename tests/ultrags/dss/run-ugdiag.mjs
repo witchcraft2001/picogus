@@ -507,6 +507,12 @@ try {
     for(const e of s4.executed)executed.set(e.name,e);
     for(const r of s4.results)r.ok?ok(`S4 ${r.name}`):bad(`S4 ${r.name}`,r.errors.join(';'));
   }
+  if(assemblyEvidence.files.some(e=>e.name==='ST-S1-BENCH.EXE')) {
+    execFileSync(process.execPath,[join(REPO,'tests/ultrags/dss/run-s5.mjs'),REPO,parentBuild],{stdio:'inherit'});
+    const s5=JSON.parse(readFileSync(join(LOGS,'s5-run.json')));
+    for(const e of s5.executed)executed.set(e.name,e);
+    for(const r of s5.results)r.ok?ok(`S5 ${r.name}`):bad(`S5 ${r.name}`,r.errors.join(';'));
+  }
   for (const r of s3.results) r.ok ? ok(`S3 ${r.name}`) : bad(`S3 ${r.name}`,r.errors.join(';'));
 
   for (const r of s2.results) r.ok ? ok(`S2 ${r.name}`) : bad(`S2 ${r.name}`,r.errors.join(';'));

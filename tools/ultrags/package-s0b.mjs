@@ -22,7 +22,7 @@ import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
 const stage = arg('--stage', 'S0b');
-if (!['S0b','S1','S2','S3','S4'].includes(stage)) throw new Error('unknown package stage');
+if (!['S0b','S1','S2','S3','S4','S5'].includes(stage)) throw new Error('unknown package stage');
 const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -76,7 +76,29 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = stage === 'S4' ? [
+const help = stage === 'S5' ? [
+ 'Ultra GS S5 - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
+ 'UGCFG MODE ULTRAGS',
+ 'UGMEM ROUNDTRIP 8388608',
+ 'UGMEM ROUNDTRIP 65536 /SLOW',
+ 'UGLOAD TEST.BIN /TYPE:BLOB /VERIFY',
+ 'UGDUMP <handle> BACK.BIN /VERIFY',
+ 'UGMEM FREE <handle>',
+ 'UGCFG PORTS 02A0 0280',
+ 'UGBENCH /METHOD:ALL /DIRECTION:BOTH /BLOCK:256',
+ 'UGBENCH /METHOD:ALL /DIRECTION:BOTH /BLOCK:32',
+ 'UGBENCH /METHOD:ALL /DIRECTION:BOTH /BLOCK:512',
+ 'UGBENCH /METHOD:ALL /DIRECTION:BOTH /BLOCK:1024',
+ 'UGCFG PORTS 02A0 OFF',
+ 'UGTEST PROTO',
+ 'Expected: MATCH, temporary BLOB freed, pool restored, aliases OFF; recovery without reboot.',
+ 'Default BULK, /SLOW GS_DATA; FAST has no host CRC. /VERIFY includes CRC.',
+ 'STACK unknown NMI: SKIP; explicit STACK: UNSAFE_NMI. READ: NOT_APPLICABLE.',
+ 'HANDSHAKE release default. PGPOST/PGPMULT/PGPDIAG/PGPNOD are experimental POSTED.',
+ 'Standalone UF2 replaces all flash. Restore PGMULTI to recover the seven-mode bundle.',
+ 'C00/P06/B05/B06 and all physical speed/electrical budgets REAL_PENDING.',
+ 'IMG is a FAT12 data disk. Model timings are not physical Sprinter evidence.',
+].join('\r\n') : stage === 'S4' ? [
  'Ultra GS S4 - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
  'UGCFG MODE ULTRAGS',
  'UGMEM ROUNDTRIP 65536 /SLOW',

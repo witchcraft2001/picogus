@@ -66,6 +66,15 @@ ENTRY:
     call PRINT
     jp PASS
 .run:
+    IFDEF APP_BENCH
+    ld a,(BMETHOD)
+    cp 3
+    jr nz,.bench_safe
+    ld hl,unsafe_text
+    ld (REASON),hl
+    jp PROTOCOL
+.bench_safe:
+    ENDIF
     call DISCOVER
     jp c,EXIT
     call UG_LIB_INIT
@@ -114,6 +123,9 @@ ENTRY:
     jp DUMP_FILE
     ENDIF
     ENDIF
+    IFDEF APP_BENCH
+    jp BENCH_RUN
+    ENDIF
     ld a,(CMD)
     cp 1
     jp z,INFO
@@ -148,6 +160,9 @@ INIT:
     ld (hl),0
     ldir
     call UG_LIB_INIT
+    IFDEF APP_BENCH
+    call BENCH_INIT
+    ENDIF
     ld hl,0x2A0
     ld (BASE),hl
     ld hl,generic_reason
@@ -217,6 +232,13 @@ PARSE:
     ld a,(HELP)
     or a
     ret nz
+    IFDEF APP_BENCH
+    ld a,(ARGC)
+    or a
+    jp nz,.bad
+    xor a
+    ret
+    ENDIF
     ld a,(ARGC)
     or a
     jp z,.bad
@@ -298,11 +320,21 @@ PARSE:
     scf
     ret
 OPTION:
+    IFDEF APP_BENCH
+    push hl
+    call BENCH_OPTION
+    pop hl
+    ret nc
+    ENDIF
     push hl
     ld de,options
     call LOOKUP
     pop hl
     jr c,.prefix
+    IFDEF APP_BENCH
+    cp 3
+    jr nc,.invalidbench
+    ENDIF
     cp 1
     jr nz,.help
     ld (QUIET),a
@@ -324,6 +356,8 @@ OPTION:
 .slow:
     cp 4
     jr nz,.overwrite
+    ld a,1
+    ld (SLOW),a
     or a
     ret
 .overwrite:
@@ -346,6 +380,11 @@ OPTION:
     or a
     ENDIF
     ret
+    IFDEF APP_BENCH
+.invalidbench:
+    scf
+    ret
+    ENDIF
 .prefix:
     push hl
     call BLOB_OPTION
@@ -1020,9 +1059,14 @@ reset_modes: DB "WARM",0,1,"COLD",0,2,0
 slot_prefix: DB "/SLOT:",0
 base_prefix: DB "/BASE:",0
 info_magic: DB "UGS1",1,0,8
+    IFDEF APP_BENCH
+help_text: DB "UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024 /METHOD:ALL|SLOW|FIXED|ALIAS|STACK",13,10
+    DB "/DIRECTION:BOTH|WRITE|READ /CHECK:NONE|CRC|BOTH /SOAK:seconds /SLOT:0|1 /BASE:hex /QUIET",13,10,0
+    ELSE
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
     DB "ROUNDTRIP bytes /SLOW /VERIFY /SLOT:0|1 /BASE:hex /QUIET /?",13,10
     DB "UGLOAD file /TYPE:BLOB [/CRC:hhhhhhhh] | UGDUMP handle file [/OFFSET:N /LENGTH:N /OVERWRITE]",13,10,0
+    ENDIF
 warning_text: DB "WARNING RESET destroys all loaded objects",13,10,0
 unavailable_text: DB "ROUNDTRIP_UNAVAILABLE_UNTIL_S4",0
 generic_reason: DB "MEMORY_OR_PROTOCOL",0
@@ -1050,6 +1094,9 @@ newline: DB 13,10,0
     INCLUDE "ugblob.asm"
     IFDEF APP_PROTO
     INCLUDE "ugtestproto.asm"
+    ENDIF
+    IFDEF APP_BENCH
+    INCLUDE "ugbench_blob.asm"
     ENDIF
     INCLUDE "ugproto.asm"
     ASSERT $ < 0xB800

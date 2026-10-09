@@ -63,6 +63,14 @@
 	jp c,st_failA
 	or a
 	jp nz,st_fail
+	; STACK is write-only. Read back through FIXED while retaining the
+	; known-NMI STACK write/context test above.
+	ld a,(UG_METHOD)
+	cp 2
+	jr nz,.read
+	xor a
+	ld (UG_METHOD),a
+.read:
 	ld hl,(ST_RESULT+4)
 	ld de,0xB000
 	ld bc,1024

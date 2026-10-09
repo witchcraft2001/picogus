@@ -683,11 +683,6 @@ UG_XFER_SAVE:
 UG_XFER_VALIDATE:
     and 0x7E
     jr nz,.badarg
-    xor a
-	or	a			; BULK_FAST
-	jr	z,.t_ok
-	cp	UG_TRANSPORT_BULK_VERIFIED
-	jr	nz,.badarg		; GS transports rejected explicitly
 .t_ok:
 	ld	a,(UGCTX.SESS)
 	or	a
@@ -784,6 +779,9 @@ UG_WRITE:
 	ld	bc,(UGXFER.N)
 	call	UG_XFER_VALIDATE
 	jp	c,.w_done_fail
+    IFDEF UG_BENCH_TIMING
+    call BENCH_SETUP
+    ENDIF
 	; ---- BEGIN request into ARG buffer ----
 	ld	de,UG_ARGBUF
 	pop	hl			; handle
@@ -849,6 +847,9 @@ UG_WRITE:
 	call	UG_ISA_CLOSE
 	pop	af
 	jp	z,.w_nogrant
+    IFDEF UG_BENCH_TIMING
+    call BENCH_PAYLOAD
+    ENDIF
     ld a,(UGXFER.TRANS)
     bit 0,a
     jr z,.w_loop
@@ -857,6 +858,10 @@ UG_WRITE:
     jp .w_data_done
 	; ---- data: N bytes as <=UG_CHUNK bounded windows ----
 .w_loop:
+    IFDEF UG_DSS_TIMED
+    call UG_BULK_YIELD
+    jp c,.w_fail
+    ENDIF
 	ld	hl,(UGXFER.N)
 	ld	de,(UGXFER.SENT)
 	or	a
@@ -926,6 +931,9 @@ UG_WRITE:
 	jp	c,.w_fail
 	xor	a
 	ld	(UGXFER.DIR),a
+    IFDEF UG_BENCH_TIMING
+    call BENCH_FINISH
+    ENDIF
 	pop	hl
 	pop	ix
 	ret
@@ -960,6 +968,9 @@ UG_WRITE:
 ; in : A=0 -> WRITE_END; nz -> READ_END (VERIFIED appends host_crc)
 ; out: CF=0 ok; CF=1 A=err
 UG_XFER_END:
+    IFDEF UG_BENCH_TIMING
+    call BENCH_END
+    ENDIF
 	push	ix
 	push	af
 	ld	de,UG_ARGBUF
@@ -1034,6 +1045,23 @@ UG_READ:
 	ld	bc,(UGXFER.N)
 	call	UG_XFER_VALIDATE
 	jp	c,.r_done_fail
+    ld a,(UGXFER.TRANS)
+    bit 0,a
+    jr nz,.r_methodok
+    ld a,(UG_METHOD)
+    cp 2
+    jr nz,.r_gate
+    ld a,UG_ERR_BAD_ARGUMENT
+    ld b,1
+    call UG_SET_ERR
+    jp .r_done_fail
+.r_gate:
+    call UG_METHOD_GATE
+    jp c,.r_done_fail
+.r_methodok:
+    IFDEF UG_BENCH_TIMING
+    call BENCH_SETUP
+    ENDIF
 	; BEGIN req (no host crc ever - spec 6.3)
 	ld	de,UG_ARGBUF
 	pop	hl
@@ -1093,6 +1121,9 @@ UG_READ:
 	call	UG_ISA_CLOSE
 	pop	af
 	jp	z,.r_nogrant
+    IFDEF UG_BENCH_TIMING
+    call BENCH_PAYLOAD
+    ENDIF
     ld a,(UGXFER.TRANS)
     bit 0,a
     jr z,.r_loop
@@ -1101,6 +1132,10 @@ UG_READ:
     jp .r_data_done
 	; chunks
 .r_loop:
+    IFDEF UG_DSS_TIMED
+    call UG_BULK_YIELD
+    jp c,.r_fail
+    ENDIF
 	ld	hl,(UGXFER.N)
 	ld	de,(UGXFER.SENT)
 	or	a
@@ -1113,7 +1148,19 @@ UG_READ:
 	add	hl,bc
 	ld	b,h
 	ld	c,l
-.r_usechunk:				; BC = k
+.r_usechunk:
+    ld a,(UG_METHOD)
+    cp 1
+    jr nz,.r_pushchunk
+    ld a,b
+    or a
+    jr nz,.r_cap32
+    ld a,c
+    cp 33
+    jr c,.r_pushchunk
+.r_cap32:
+    ld bc,32
+.r_pushchunk:
 	push	bc
 	call	UG_WIN_OPEN
 	jp	c,.r_failpop
@@ -1122,7 +1169,14 @@ UG_READ:
 	add	hl,de
 	pop	bc
 	push	bc
-	call	UG_BULK_READ		; k bytes from BULK_DATA
+    ld a,(UG_METHOD)
+    cp 1
+    jr nz,.r_fixed
+    call UG_BULK_READ_ALIAS
+    jr .r_copied
+.r_fixed:
+    call UG_BULK_READ
+.r_copied:
 	call	UG_ISA_CLOSE
 	pop	bc
 	ld	hl,(UGXFER.SENT)
@@ -1145,6 +1199,9 @@ UG_READ:
 	jp	c,.r_fail
 	xor	a
 	ld	(UGXFER.DIR),a
+    IFDEF UG_BENCH_TIMING
+    call BENCH_FINISH
+    ENDIF
 	pop	hl
 	pop	ix
 	ret
@@ -1172,6 +1229,31 @@ UG_READ:
 	pop	hl
 	pop	ix
 	ret
+
+    IFDEF UG_DSS_TIMED
+; Keyboard/deadline opportunity between payload chunks, with context restored.
+UG_BULK_YIELD:
+    push bc
+    push de
+    push hl
+    push ix
+    push iy
+    ld c,0x31
+    rst 0x10
+    cp 27
+    pop iy
+    pop ix
+    pop hl
+    pop de
+    pop bc
+    jr z,.cancel
+    xor a
+    ret
+.cancel:
+    ld a,UG_ERR_CANCELLED
+    ld b,1
+    jp UG_SET_ERR
+    ENDIF
 
  ; GS_DATA uses one-byte windows and closed-window latch waits.
 UG_SLOW_DATA:

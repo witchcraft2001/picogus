@@ -11,7 +11,7 @@ root=Path(args.build).resolve(); results=[]
 for variant in ['release','debug','no-dack']:
     directory=root/('ultrags-diag-'+variant); elf=directory/'pg-ultrags-diag.elf'
     evidence=verify(directory,elf)
-    assert evidence['configuration']=={'PROJECT_TYPE':'ULTRAGS_DIAG','PGDEBUG':'ON' if variant=='debug' else 'OFF','UG_DIAG_NO_DACK':'ON' if variant=='no-dack' else 'OFF'}, evidence['configuration']
+    assert evidence['configuration']=={'PROJECT_TYPE':'ULTRAGS_DIAG','PGDEBUG':'ON' if variant=='debug' else 'OFF','UG_DIAG_NO_DACK':'ON' if variant=='no-dack' else 'OFF','UG_ISA_WRITE_PROFILE':'HANDSHAKE'}, evidence['configuration']
     nm=subprocess.check_output(['arm-none-eabi-nm',str(elf)],text=True)
     symbols={line.split()[-1]:int(line.split()[0],16) for line in nm.splitlines() if len(line.split())==3}
     origin=symbols['__flash_binary_start'];assert origin==0x10000000,hex(origin)

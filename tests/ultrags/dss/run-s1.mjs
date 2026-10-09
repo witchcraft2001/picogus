@@ -8,7 +8,7 @@ import {DiagCard} from './diag-card.mjs';
 const root=resolve(process.argv[2]||'.'), build=resolve(process.argv[3]||'build/ultrags');
 verifyBuild(root,join(build,'dss'));
 const Z80=loadZ80(root), results=[], executed=[];
-for(const name of ['UGTEST','UGBENCH','ST-S1-DROP','ST-S1-DUP','ST-S1-COUNTER','ST-S1-OVERBLOCK','ST-S1-DSSWIN','ST-S1-CLEANUP','ST-S1-FUSE']) {const bytes=readFileSync(join(build,'dss',name+'.EXE'));executed.push({name:name+'.EXE',size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});}
+for(const name of ['UGTEST','ST-S1-BENCH','ST-S1-DROP','ST-S1-DUP','ST-S1-COUNTER','ST-S1-OVERBLOCK','ST-S1-DSSWIN','ST-S1-CLEANUP','ST-S1-FUSE']) {const bytes=readFileSync(join(build,'dss',name+'.EXE'));executed.push({name:name+'.EXE',size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});}
 function test(name,exe,cli,expected=0,opts={}) {
   const bytes=readFileSync(join(build,'dss',exe+'.EXE')), h=parseExe(bytes);
   const card=opts.absent?null:new DiagCard(opts.card);
@@ -31,43 +31,43 @@ function test(name,exe,cli,expected=0,opts={}) {
   return results.at(-1);
 }
 // Small smoke first; million-byte machine runs are intentionally real loops.
-test('smoke','UGBENCH','/BYTES:256 /LOOPS:1 /CHECK:NONE',0,{shortTiming:true});
+test('smoke','ST-S1-BENCH','/BYTES:256 /LOOPS:1 /CHECK:NONE',0,{shortTiming:true});
 if(!results[0].ok) {mkdirSync(join(build,'logs'),{recursive:true});writeFileSync(join(build,'logs/s1-run.json'),JSON.stringify({results,executed},null,2));process.exit(1);}
 for(const slot of [0,1]) for(const [cpuHz,cpu] of [[21000000,'21'],[3500000,'3.5']]) for(const iff of [0,1])
-  test(`slot${slot}-${cpu}-IFF${iff}`,'UGBENCH',`/SLOT:${slot} /CPU:${cpu} /BYTES:1025 /BLOCK:512 /LOOPS:1 /CHECK:BOTH`,0,{slot,cpuHz,iff,shortTiming:cpuHz===3500000,nonzeroTiming:cpuHz===3500000});
-for(const block of [1,256,512,1024])test(`block${block}`,'UGBENCH',`/BYTES:1025 /BLOCK:${block} /LOOPS:1 /CHECK:BOTH`);
+  test(`slot${slot}-${cpu}-IFF${iff}`,'ST-S1-BENCH',`/SLOT:${slot} /CPU:${cpu} /BYTES:1025 /BLOCK:512 /LOOPS:1 /CHECK:BOTH`,0,{slot,cpuHz,iff,shortTiming:cpuHz===3500000,nonzeroTiming:cpuHz===3500000});
+for(const block of [1,256,512,1024])test(`block${block}`,'ST-S1-BENCH',`/BYTES:1025 /BLOCK:${block} /LOOPS:1 /CHECK:BOTH`);
 for(const [name,cli,code,opts] of [
   ['absent','BUS',2,{absent:true}],['wrong-mode','BUS',2,{card:{mode:8}}],['wrong-version','BUS',3,{card:{version:2}}],['wrong-protocol','BUS',3,{card:{protocol:5}}],
   ['corrupt','/BYTES:256 /LOOPS:1',9,{card:{corrupt:true}}],['lost-byte','/BYTES:256 /LOOPS:1',9,{card:{drop:true}}],['duplicate-byte','/BYTES:256 /LOOPS:1',9,{card:{duplicate:true}}],['wrong-counter','/BYTES:256 /LOOPS:1',9,{card:{badCounter:true}}],['unhandled-fuse','/BYTES:256 /LOOPS:1',9,{card:{fuse:true}}],
   ['cancel','/BYTES:65536 /LOOPS:1',10,{escAfter:1}],['clock-stopped','/BYTES:1 /LOOPS:1 /SOAK:1',8,{stopped:true}],
-])test(name,['absent','wrong-mode','wrong-version','wrong-protocol'].includes(name)?'UGTEST':'UGBENCH',cli,code,opts);
-for(const cli of ['/SLOT:2','/BASE:06A0','/BYTES:0','/BYTES:4294967296','/BLOCK:1025','/LOOPS:0','/CPU:7','/WHAT','BUSX'])test('CLI '+cli,'UGBENCH',cli,1);
-for(const method of ['STACK','ALIAS','SLOW'])test('unsupported-'+method,'UGBENCH','/METHOD:'+method,3,{noNative:true});
-test('timeout','UGBENCH','/BYTES:256 /LOOPS:1',8,{card:{timeout:true}});
-test('fuse-reported','UGBENCH','/BYTES:256 /LOOPS:1',9,{card:{fuseReported:true}});
+])test(name,['absent','wrong-mode','wrong-version','wrong-protocol'].includes(name)?'UGTEST':'ST-S1-BENCH',cli,code,opts);
+for(const cli of ['/SLOT:2','/BASE:06A0','/BYTES:0','/BYTES:4294967296','/BLOCK:1025','/LOOPS:0','/CPU:7','/WHAT','BUSX'])test('CLI '+cli,'ST-S1-BENCH',cli,1);
+for(const method of ['STACK','ALIAS','SLOW'])test('unsupported-'+method,'ST-S1-BENCH','/METHOD:'+method,3,{noNative:true});
+test('timeout','ST-S1-BENCH','/BYTES:256 /LOOPS:1',8,{card:{timeout:true}});
+test('fuse-reported','ST-S1-BENCH','/BYTES:256 /LOOPS:1',9,{card:{fuseReported:true}});
 for(const [name,code,opts] of [['DROP',9,{}],['DUP',9,{}],['COUNTER',9,{}],['OVERBLOCK',9,{}],['DSSWIN',0,{expectedViolation:/DSS call .* while ISA window open/}],['CLEANUP',0,{expectedViolation:/DSS call .* while ISA window open|cleanup context mismatch/}],['FUSE',0,{card:{fuseReported:true},expectedViolation:/unhandled diagnostic fuse/}]])
   test('defective-selftest-'+name,'ST-S1-'+name,'/BYTES:256 /LOOPS:1 /CHECK:NONE',code,opts);
-test('finite-delay-CLI','UGBENCH','/ASSERT:1000 /RESPONSE:1000 /BYTES:33 /BLOCK:32 /LOOPS:1 /CHECK:NONE');
-test('delay-over-limit','UGBENCH','/ASSERT:1001',1);
-test('aggregate-overflow','UGBENCH','/BYTES:4294967295 /LOOPS:2',1);
-test('hex-and-case','UGBENCH','/slot:0 /bytes:0x101 /loops:1 /block:0x100 /check:none');
-test('spike1','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE');
-test('spike2','UGBENCH','/SPIKE:2 /BYTES:32 /LOOPS:1 /CHECK:NONE');
-test('spike-command-busy-retry','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',0,{card:{spikeBusy:2}});
-test('spike-command-busy-timeout','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeBusy:1000}});
-test('spike-snapshot-busy-retry','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',0,{card:{spikeSnapshotBusy:2}});
-test('spike-snapshot-busy-timeout','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeSnapshotBusy:1000}});
-test('spike-wrong-profile','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeWrongProfile:true}});
-test('spike-not-started','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeInit:true}});
-test('spike-cancel-cleanup','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',10,{escAfter:1,card:{spikeSnapshotBusy:2}});
+test('finite-delay-CLI','ST-S1-BENCH','/ASSERT:1000 /RESPONSE:1000 /BYTES:33 /BLOCK:32 /LOOPS:1 /CHECK:NONE');
+test('delay-over-limit','ST-S1-BENCH','/ASSERT:1001',1);
+test('aggregate-overflow','ST-S1-BENCH','/BYTES:4294967295 /LOOPS:2',1);
+test('hex-and-case','ST-S1-BENCH','/slot:0 /bytes:0x101 /loops:1 /block:0x100 /check:none');
+test('spike1','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE');
+test('spike2','ST-S1-BENCH','/SPIKE:2 /BYTES:32 /LOOPS:1 /CHECK:NONE');
+test('spike-command-busy-retry','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',0,{card:{spikeBusy:2}});
+test('spike-command-busy-timeout','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeBusy:1000}});
+test('spike-snapshot-busy-retry','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',0,{card:{spikeSnapshotBusy:2}});
+test('spike-snapshot-busy-timeout','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeSnapshotBusy:1000}});
+test('spike-wrong-profile','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeWrongProfile:true}});
+test('spike-not-started','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',8,{card:{spikeInit:true}});
+test('spike-cancel-cleanup','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',10,{escAfter:1,card:{spikeSnapshotBusy:2}});
 for(const fault of ['spikeUnderruns','spikeFetchErrors','spikeBgErrors','spikeResFaults','spikeNoAudit','spikeFuse'])
-  test(fault,'UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',7,{card:{[fault]:true}});
+  test(fault,'ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',7,{card:{[fault]:true}});
 test('mirror-corruption-cleanup','UGTEST','BUS /MIRROR',9,{card:{mirrorCorrupt:true}});
-test('spike-fault','UGBENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',7,{card:{spikeFault:true}});
-test('moving-clock-midnight','UGBENCH','/BYTES:1 /LOOPS:1 /SOAK:2 /CHECK:NONE',0,{clockStart:86399});
-test('moving-clock-midnight-lowcpu','UGBENCH','/BYTES:1 /LOOPS:1 /SOAK:2 /CHECK:NONE /CPU:3.5',0,{clockStart:86399,cpuHz:3500000,iff:0});
-test('help','UGBENCH','/?');
-test('quiet','UGBENCH','/QUIET /BYTES:256 /LOOPS:1 /CHECK:NONE');
+test('spike-fault','ST-S1-BENCH','/SPIKE:1 /BYTES:32 /LOOPS:1 /CHECK:NONE',7,{card:{spikeFault:true}});
+test('moving-clock-midnight','ST-S1-BENCH','/BYTES:1 /LOOPS:1 /SOAK:2 /CHECK:NONE',0,{clockStart:86399});
+test('moving-clock-midnight-lowcpu','ST-S1-BENCH','/BYTES:1 /LOOPS:1 /SOAK:2 /CHECK:NONE /CPU:3.5',0,{clockStart:86399,cpuHz:3500000,iff:0});
+test('help','ST-S1-BENCH','/?');
+test('quiet','ST-S1-BENCH','/QUIET /BYTES:256 /LOOPS:1 /CHECK:NONE');
 for(const slot of [0,1])for(const [cpuHz,cpu] of [[21000000,'21'],[3500000,'3.5']])test(`million-byte-slot${slot}-${cpu}`,'UGTEST',`BUS /SLOT:${slot} /CPU:${cpu} /QUIET${slot?' /MIRROR':''}`,0,{slot,cpuHz,iff:slot?0:1});
 const fail=results.filter(r=>!r.ok).length;
 mkdirSync(join(build,'logs'),{recursive:true});writeFileSync(join(build,'logs/s1-run.json'),JSON.stringify({executed,results,pass:results.length-fail,fail},null,2));

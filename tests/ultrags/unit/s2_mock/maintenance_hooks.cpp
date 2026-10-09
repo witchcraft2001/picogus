@@ -26,3 +26,5 @@ extern "C" void ug_storage_snap_init(void) {}
 
 extern "C" void ug_storage_touch(uint32_t) {}
 extern "C" void ug_storage_data_overflow(void) {}
+
+extern "C" bool ug_storage_bulk(void) { return false; }

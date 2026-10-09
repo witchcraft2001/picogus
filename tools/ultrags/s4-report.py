@@ -21,7 +21,7 @@ for log in ['s4-run.json','s4-full.json']:
  assert all(r['maxWindowUs']<10000 for r in run['results']);runs+=run['results']
 assert any(r['name']=='8MiB actual EXE' for r in runs)
 assert any(r['name']=='non-DSS sticky error delayed reply' for r in runs),'missing non-DSS sticky-error regression'
-report={**s3,'stage':'S4','host_s4':host,'s4_host_evidence':ev,'s4_exe_checks':len(runs),'s4_max_window_us':max(r['maxWindowUs'] for r in runs),'real_pending':s3['real_pending']+['C00 early 12-lane physical gate','8MiB SEAL <=30s on hardware','maximum physical uninterrupted service interval'],'diagnostic_symbols':['ug_seal_elapsed_us','ug_service_max_us','ug_spi_slice_max_us'],'features':226,'musical_formats':0}
+report={**s3,'stage':'S4','host_s4':host,'s4_host_evidence':ev,'s4_exe_checks':len(runs),'s4_max_window_us':max(r['maxWindowUs'] for r in runs),'real_pending':s3['real_pending']+['C00 early 12-lane physical gate','8MiB SEAL <=30s on hardware','maximum physical uninterrupted service interval'],'diagnostic_symbols':['ug_seal_elapsed_us','ug_service_max_us','ug_spi_slice_max_us'],'features':230,'musical_formats':0}
 report['timing_diagnostics']={}
 for entry in report['images']:
  directory=b/entry['directory'];elf=directory/'pg-ultrags.elf'

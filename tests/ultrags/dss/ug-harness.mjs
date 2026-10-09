@@ -341,6 +341,7 @@ export function runImage(Z80, mach, { entry, stack, iff = 1, budget = 4_000_000 
       mach.violations.push(`stack inside library workspace: SP=${st.sp.toString(16)}`);
     if (st.sp < mach.minSpSeen) mach.minSpSeen = st.sp;
     if (st.sp > mach.maxSpSeen) mach.maxSpSeen = st.sp;
+    if(mach.beforeStep) mach.beforeStep(st);
     if(mach.crcEntries.has(st.pc))mach.crcCalls++;
     mach.trace.push({ pc: st.pc, sp: st.sp, iff1: st.iff1 });
     if (mach.trace.length > 16) mach.trace.shift();

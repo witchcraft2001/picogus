@@ -23,6 +23,17 @@ extern volatile uint32_t ug_raw_watchdog_reason,ug_raw_chip_reset;
 void ug_config_init(ug_config *c, Settings *s, uint8_t active, const uint8_t *catalog,
                     uint32_t magic, uint32_t packed, uint32_t checked);
 bool ug_config_selector(uint8_t s);
+/* Legacy ISA reflashing stops core1 and blocks on its FIFO. POSTED cannot
+ * service that command inside a bounded read fence. */
+bool ug_config_posted_selector(uint8_t s);
+/* Core0-only SRAM preview for the read ownership decode before posted fence. */
+bool ug_config_preview_port(const ug_config *c,bool unlocked,bool idle,uint16_t port,const uint32_t *words,unsigned count);
+typedef struct { bool blocked[9], idle[9]; } ug_config_fence;
+/* Bind each queued CONFIG write to the same idle/maintenance snapshot used
+ * for ownership. Core1 may finish work while core0 applies the finite queue. */
+bool ug_config_preview_fence(const ug_config *c,bool unlocked,bool idle,bool gs_idle,
+                            const Settings *defaults,uint16_t port,const uint32_t *words,
+                            unsigned count,ug_config_fence *fence);
 void ug_config_select(ug_config *c, uint8_t selector);
 uint8_t ug_config_read(ug_config *c, bool high);
 void ug_config_write(ug_config *c, bool high, uint8_t value, bool idle);

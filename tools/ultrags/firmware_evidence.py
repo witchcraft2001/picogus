@@ -19,7 +19,7 @@ def configuration(build):
         if ':' in line and '=' in line and not line.startswith(('#', '//')):
             key, value = line.split('=', 1)
             values[key.split(':', 1)[0]] = value
-    return {key: values[key] for key in ('PROJECT_TYPE', 'PGDEBUG', 'UG_DIAG_NO_DACK')}
+    return {key: values.get(key, 'HANDSHAKE' if key=='UG_ISA_WRITE_PROFILE' else '') for key in ('PROJECT_TYPE', 'PGDEBUG', 'UG_DIAG_NO_DACK', 'UG_ISA_WRITE_PROFILE')}
 
 
 def capture(build, elf):

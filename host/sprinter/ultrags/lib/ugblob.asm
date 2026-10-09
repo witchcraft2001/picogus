@@ -34,6 +34,8 @@ TIMEMIN EQU V+156
 TIMESEC EQU V+157
 SAVEDSOURCE EQU V+158
 FILEOUTPUT EQU V+159
+SLOW EQU V+160
+DATATRANS EQU V+161
 
 ; Parse decimal or 0x with overflow detected on every multiply/add.
 NUMBER32:
@@ -215,7 +217,21 @@ BLOB_SETUP:
     ld a,(RESP)
     and 2
     jp z,PROTOCOL
+    ld a,(SLOW)
+    or a
+    jr nz,.slow
+    ld a,(RESP)
+    and 4
+    jr z,.slow
+    xor a
+    ld (DATATRANS),a
+    ld hl,bulk_text
+    jr .showtransport
+.slow:
+    ld a,1
+    ld (DATATRANS),a
     ld hl,path_text
+.showtransport:
     call SHOW
     call NL
     ld a,0
@@ -464,9 +480,9 @@ ADVANCE:
 TRANSPORT:
     ld a,(VERIFY)
     or a
-    ld a,1
+    ld a,(DATATRANS)
     ret z
-    ld a,0x81
+    or 0x80
     ret
 WRITE_BLOCK:
     ld hl,(HANDLE)
@@ -1107,6 +1123,7 @@ APP_SPEED:
 crc_prefix: DB "/CRC:",0
 offset_prefix: DB "/OFFSET:",0
 length_prefix: DB "/LENGTH:",0
+bulk_text: DB "transport=BULK",0
 path_text: DB "transport=GS_DATA",0
 file_reason: DB "FILE_IO",0
 verify_reason: DB "DATA_MISMATCH",0

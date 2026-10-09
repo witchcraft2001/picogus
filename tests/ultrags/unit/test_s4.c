@@ -96,9 +96,9 @@ int main(int argc,char **argv) {
     begin(other,0,32,false,false,0);
     unsigned foreign_token=ug_get32(r);data(32,false);end(foreign_token,false,false,0);
     /* Unsupported BULK variants refuse before issuing or pinning a grant. */
-    q[0]=h;q[1]=0;ug_put32(q+2,0);q[6]=1;q[7]=0;q[8]=0;
-    rpc(32,9,UG_ERR_BAD_OPCODE,0);CHECK(!ug_storage_transfer());
-    q[8]=128;ug_put32(q+9,0);rpc(32,13,UG_ERR_BAD_OPCODE,0);
+    q[0]=h;q[1]=0;ug_put32(q+2,0);q[6]=1;q[7]=0;q[8]=2;
+    rpc(32,9,UG_ERR_BAD_ARGUMENT,0);CHECK(!ug_storage_transfer());
+    q[8]=130;ug_put32(q+9,0);rpc(32,13,UG_ERR_BAD_ARGUMENT,0);
     CHECK(!ug_storage_transfer());obj(h);CHECK(!r[4]&&!ug_get32(r+10));
     /* Grant waits for complete BEGIN response; EXEC/REPLY reject writes. */
     q[0]=h;q[1]=0;ug_put32(q+2,0);q[6]=0;q[7]=4;q[8]=1;send(32,9,false);

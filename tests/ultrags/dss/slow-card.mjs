@@ -7,20 +7,20 @@ export class SlowCard extends MemoryCard {
  tickUs(us) {super.tickUs(us);if(this.transfer?.granted && this.now-this.transfer.last>=5000000){this.cancel();this.error=13;this.stats[8]++;}}
  cancel(){if(this.transfer)this.objects.get(this.transfer.h).pins--;this.transfer=null;this.ackToken=0;}
  readPort(p) {
-  const off=p-this.base;
+  const off=this.alias!==65535&&p>=this.alias&&p<this.alias+32?0:p-this.base;
   if(off===3){const v=super.readPort(p);if(!this.response.length && this.ackToken && this.transfer?.id===this.ackToken){this.transfer.granted=true;this.transfer.last=this.now;this.ackToken=0;}return v;}
   if(off===1)return (this.fault?0:super.readPort(p))|(this.transfer?.granted?(this.transfer.rd?16:8):0);
   if(off===0x1b)return 0x7e|(this.transfer?.granted&&this.transfer.rd&&this.transfer.done<this.transfer.n?128:0);
-  if(off===0x13){const t=this.transfer;if(!t?.granted||!t.rd){this.error=6;return 255;}if(t.done===t.n){t.fault=14;this.error=15;return 255;}t.last=this.now;return t.data[t.done++];}
+  if(off===0||off===0x13){const t=this.transfer;if(!t?.granted||!t.rd||t.bulk!==(off===0)){this.error=6;return 255;}if(t.done===t.n){t.fault=14;this.error=15;return 255;}t.last=this.now;return t.data[t.done++];}
   if(off===4)return this.index;
   if(off===5){if(this.index===128){this.error=15;return 255;}return this.snapshot[this.index++];}
   return super.readPort(p);
  }
  writePort(p,v) {
-  const off=p-this.base;
+  const off=this.alias!==65535&&p>=this.alias&&p<this.alias+32?0:p-this.base;
   if(off===2){if(v===0xa0){this.cancel();this.fault=false;}if(v===0xa1){this.cancel();return;}if(v===0xa3){this.snapshot=this.snap();this.index=0;return;}if(v===0xa2){this.error=0;return;}}
   if(off===4){if(v>127)this.error=8;else this.index=v;return;}
-  if(off===0x13){const t=this.transfer;if(!t?.granted||t.rd){this.error=6;return;}if(t.done===t.n){this.error=t.fault=14;return;}t.data[t.done++]=v;t.last=this.now;return;}
+  if(off===0||off===0x13){const t=this.transfer;if(!t?.granted||t.rd||t.bulk!==(off===0)){this.error=6;return;}if(t.done===t.n){this.error=t.fault=14;return;}t.data[t.done++]=v;t.last=this.now;return;}
   if(off===0x1b){if([0,0xf3,0xf4].includes(v)){this.cancel();if(v){this.objects.clear();this.session++;this.next=1;this.nextToken=1;}}else this.gsError=this.transfer?5:1;return;}
   if(off===3 && this.fault)return;
   if(off===3 && this.frame.length===1 && v>128){this.frame=[];this.fault=true;this.error=3;return;}
@@ -39,14 +39,14 @@ export class SlowCard extends MemoryCard {
   if(op===32||op===34) {
    if(q.length<9 || q.length!==(op===32&&(q[8]&128)?13:9))return err(3);
    const h=q.readUInt16LE(),off=q.readUInt32LE(2),n=q.readUInt16LE(6),tr=q[8],o=this.objects.get(h),rd=op===34;
-   if(tr&126)return err(2);if(!(tr&1))return err(1);if(!o)return err(7);
+   if(tr&126)return err(2);if(!o)return err(7);
    if(!n||n>1024)return err(3);if(o.state===2||(!rd&&o.state))return err(6);
    if(off>o.size||n>o.size-off)return err(8);
    const uploaded=o.uploaded??0;
    if(rd ? off>uploaded||n>uploaded-off : off!==uploaded&&!(o.kind===0&&off<=uploaded&&n<=uploaded-off))return err(8);
    if(!this.nextToken)return err(14);
    const id=this.nextToken;this.nextToken=(id+1)>>>0;o.pins++;
-   this.transfer={h,off,n,id,rd,verify:!!(tr&128),crc:op===32&&tr&128?q.readUInt32LE(9):0,data:rd?Buffer.from(o.data.subarray(off,off+n)):Buffer.alloc(n),done:0,granted:false,last:this.now};this.ackToken=id;
+   this.transfer={h,off,n,id,rd,bulk:!(tr&1),verify:!!(tr&128),crc:op===32&&tr&128?q.readUInt32LE(9):0,data:rd?Buffer.from(o.data.subarray(off,off+n)):Buffer.alloc(n),done:0,granted:false,last:this.now};this.ackToken=id;
    const r=Buffer.alloc(rd&&tr&128?8:4);r.writeUInt32LE(id);if(r.length===8)r.writeUInt32LE((crc32(this.transfer.data)^(this.o.badReadCrc?1:0))>>>0,4);return ok(r);
   }
   if([33,35,36].includes(op)) {

@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import {execFileSync} from 'node:child_process';
 import { verifyExecution, verifyBuild, repoRoot } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
@@ -131,6 +132,49 @@ const fixtureManifest = JSON.parse(fixtureBytes);
 if (fixtureManifest.generatorSha256 !== sha256(readFileSync(join(root, 'tools/ultrags/gen-fixtures.mjs'))))
   throw new Error('stale fixture generator inputs');
 const pman = JSON.parse(readFileSync(join(pkgDir, 'package-manifest.json'), 'utf8'));
+if (stage === 'S5') {
+  // S5 ships firmware/evidence beside its DOS containers. They belong to
+  // the same delivery and must pass the verifier, too.
+  const outer = JSON.parse(readFileSync(join(pkgDir, 'manifest.json')));
+  ok(outer.status === 'HOST_PASS / DSS-EXE_PASS / REAL_PENDING', 'S5 outer status');
+  const names = new Set();
+  for (const e of outer.files) {
+    if (names.has(e.name) || resolve(pkgDir,e.name) !== join(pkgDir,e.name) || e.name.startsWith('..'))
+      throw new Error('invalid/duplicate S5 package path '+e.name);
+    names.add(e.name);
+    const data = readFileSync(join(pkgDir,e.name));
+    ok(data.length === e.size && sha256(data) === e.sha256, 'S5 outer bytes '+e.name);
+  }
+  for (const name of ['PGMULTI.UF2','PGULTRA.UF2','PGSLOW.UF2','PGDEBUG.UF2',
+      'PGDIAG.UF2','PGDDBG.UF2','PGNODACK.UF2','PGPOST.UF2','PGPMULT.UF2','PGPDIAG.UF2','PGPNOD.UF2',
+      'flash-map.json','posted-flash-map.json','firmware-report.json','s5-full.json','s5-variants.json','REPORT.txt',
+      'ultra-gs.md','posted-front-test.txt','posted-diagnostic-test.txt','posted-no-dack-test.txt','posted-pio-test.json','dss-report.json','c-model-fixtures.json',
+      's5-host.json','s5-c-model-fixtures.json','s5-host-evidence.json','s5-variants.mjs','backend-test.json','S5-README.md'])
+    ok(names.has(name),'S5 required outer file '+name);
+  ok(JSON.stringify(outer.containers) === JSON.stringify(pman.containers),'S5 outer container provenance');
+  const build = resolve(exeDir,'../..');
+  const requiredProvenance = ['ultrags-release/pg-ultrags.evidence.json',
+    'ultrags-slow/pg-ultrags.evidence.json','ultrags-debug/pg-ultrags.evidence.json',
+    'ultrags-posted/pg-ultrags.evidence.json','diag-posted/standalone-evidence.json',
+    'diag-posted-no-dack/standalone-evidence.json'];
+  for (const variant of ['release','debug','no-dack'])
+    requiredProvenance.push('ultrags-diag-'+variant+'/standalone-evidence.json');
+  for (const directory of ['multifw-release','multifw-posted']) {
+    requiredProvenance.push(directory+'/bootloader.evidence.json');
+    for (const mode of ['gus','adlib','mpu','psg','sb','usb','ultrags'])
+      requiredProvenance.push(directory+'/pg-'+mode+'-multifw.evidence.json');
+  }
+  for (const source of requiredProvenance) {
+    const name = 'provenance/'+source.replace('/','-');
+    ok(names.has(name),'S5 required provenance '+name);
+    ok(readFileSync(join(pkgDir,name)).equals(readFileSync(join(build,source))),
+       'S5 current packaged provenance '+name);
+  }
+  execFileSync(process.env.UG_PYTHON || 'python3',[join(root,'tools/ultrags/s5-report.py'),'--build',build],{stdio:'inherit'});
+  ok(readFileSync(join(pkgDir,'firmware-report.json')).equals(readFileSync(join(build,'ultrags/logs/s5-firmware.json'))),
+     'S5 current firmware evidence');
+}
+
 ok(JSON.stringify(pman.provenance) === JSON.stringify({ ...provenance, fixtures:sha256(fixtureBytes),
   packer:sha256(readFileSync(join(root, 'tools/ultrags/package-s0b.mjs'))) }), 'source/build/execution/package provenance');
 const zipBuf = readFileSync(join(pkgDir, `ug-${slug}.zip`));

@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 void ug_minimal_init(void);
+void ug_minimal_transport_fault(void);
 bool ug_minimal_idle(void);
 bool ug_minimal_gs_idle(void);
 bool ug_minimal_port(uint16_t port);

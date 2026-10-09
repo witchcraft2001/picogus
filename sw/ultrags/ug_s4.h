@@ -9,6 +9,7 @@ extern "C" {
 #endif
 /* Core0 only accesses SRAM. Core1 alone prepares/commits PSRAM. */
 uint8_t ug_storage_grant(void);
+bool ug_storage_bulk(void);
 bool ug_storage_read_available(void);
 bool ug_storage_transfer(void);
 void ug_storage_grant_ack(uint32_t now);

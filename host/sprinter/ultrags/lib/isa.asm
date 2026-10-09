@@ -171,6 +171,9 @@ UG_PORT_W:
 
 ; UG_REG_R: in A = register offset; out A = value read; clobbers AF,HL
 UG_REG_R:
+    IFDEF UG_BENCH_TIMING
+    call BENCH_STATUS_COUNT
+    ENDIF
 	call	UG_REG_ADDR
 	ld	a,(hl)
 	ret
@@ -184,39 +187,85 @@ UG_REG_W:
 	ld	(hl),a
 	ret
 
-; UG_BULK_WRITE: stream BC bytes from HL to BULK_DATA (reg 0)
-; clobbers AF,BC,DE,HL
 UG_BULK_WRITE:
-	ld	de,(UGCTX.BASE)
-	set	6,d
-	set	7,d			; DE -> 0C000h+base+BULK_DATA
-.wr:	ld	a,b
-	or	c
-	ret	z
-	ld	a,(hl)
-	ld	(de),a
-	inc	hl
-	dec	bc
-	jr	.wr
+    ld de,(UGCTX.BASE)
+    set 6,d
+    set 7,d
+    ld a,c
+    and 7
+    ld (UGTM.LO),a
+    srl b
+    rr c
+    srl b
+    rr c
+    srl b
+    rr c
+    ld b,c
+    ld a,b
+    or a
+    jr z,.tail
+.loop:
+    DUP 8
+    ld a,(hl)
+    ld (de),a
+    inc hl
+    EDUP
+    djnz .loop
+.tail:
+    ld a,(UGTM.LO)
+    ld b,a
+    or a
+    ret z
+.bytes:
+    ld a,(hl)
+    ld (de),a
+    inc hl
+    djnz .bytes
+    ret
 
-; UG_BULK_READ: stream BC bytes from BULK_DATA (reg 0) to HL
-; clobbers AF,BC,DE,HL
+; Eight unrolled reads per iteration; only the SRAM destination advances.
 UG_BULK_READ:
-	ld	de,(UGCTX.BASE)
-	set	6,d
-	set	7,d
-.rd:	ld	a,b
-	or	c
-	ret	z
-	ld	a,(de)
-	ld	(hl),a
-	inc	hl
-	dec	bc
-	jr	.rd
+    ld de,(UGCTX.BASE)
+    set 6,d
+    set 7,d
+    ld a,c
+    and 7
+    ld (UGTM.LO),a
+    srl b
+    rr c
+    srl b
+    rr c
+    srl b
+    rr c
+    ld b,c
+    ld a,b
+    or a
+    jr z,.tail
+.loop:
+    DUP 8
+    ld a,(de)
+    ld (hl),a
+    inc hl
+    EDUP
+    djnz .loop
+.tail:
+    ld a,(UGTM.LO)
+    ld b,a
+    or a
+    ret z
+.bytes:
+    ld a,(de)
+    ld (hl),a
+    inc hl
+    djnz .bytes
+    ret
 
 ; UG_REQ_WRITE: stream BC bytes from HL to X_REQUEST (reg 3)
 ; clobbers AF,BC,DE,HL
 UG_REQ_WRITE:
+    IFDEF UG_BENCH_TIMING
+    call BENCH_COMMAND_COUNT
+    ENDIF
 	ld	de,(UGCTX.BASE)
 	inc	de
 	inc	de
@@ -238,6 +287,9 @@ UG_REQ_WRITE:
 ; UG_RESP_READ: read BC response bytes from X_REQUEST (reg 3) to DE
 ; clobbers AF,BC,HL; DE advances
 UG_RESP_READ:
+    IFDEF UG_BENCH_TIMING
+    call BENCH_RESPONSE_COUNT
+    ENDIF
 	ld	hl,(UGCTX.BASE)
 	inc	hl
 	inc	hl
@@ -276,19 +328,33 @@ UG_RESP_SKIP:
 	jr	.rd
 
 ; ---------------------------------------------- optional write methods
-; UG_BULK_WRITE_ALIAS: LDIR BC bytes (<=32) from HL into the configured
-; 32-byte alias window; every alias address decodes to BULK_DATA (spec
-; 12.3.4 METHOD:ALIAS).  Requires UG_ALIASCFG != FFFFh (caller checked).
-; clobbers AF,BC,DE,HL
 UG_BULK_WRITE_ALIAS:
-	ld	de,(UG_ALIASCFG)
-	set	6,d
-	set	7,d			; DE = C000h+alias
-	ld	a,b
-	or	c
-	ret	z
-	ldir				; HL/DE advance; BC -> 0
-	ret
+    ld de,(UG_ALIASCFG)
+    set 6,d
+    set 7,d
+    jp UG_ALIAS_COPY
+UG_BULK_READ_ALIAS:
+    ex de,hl
+    ld hl,(UG_ALIASCFG)
+    set 6,h
+    set 7,h
+UG_ALIAS_COPY:
+    ld a,c
+    cp 8
+    jr c,.tail
+.loop:
+    DUP 8
+    ldi
+    EDUP
+    ld a,c
+    cp 8
+    jr nc,.loop
+.tail:
+    ld a,b
+    or c
+    ret z
+    ldi
+    jr .tail
 
 ; UG_BULK_WRITE_STACK: switched-SP burst (spec 11.4).  SP <- source for
 ; the duration of the burst; pairs are POPped and written as two bytes
@@ -305,18 +371,38 @@ UG_BULK_WRITE_STACK:
 	ld	hl,(UGCTX.BASE)
 	set	6,h
 	set	7,h			; HL -> window BULK_DATA
-	srl	b
-	rr	c			; BC = n/2
-.sw:	ld	a,b
-	or	c
-	jr	z,.sw_done
-	pop	de			; E = first byte, D = second
-	ld	a,e
-	ld	(hl),a
-	ld	a,d
-	ld	(hl),a
-	dec	bc
-	jr	.sw
+    srl b
+    rr c
+    ld a,c
+    and 7
+    ld (UGTM.LO+1),a
+    srl b
+    rr c
+    srl b
+    rr c
+    srl b
+    rr c
+    ld b,c
+    ld a,b
+    or a
+    jr z,.pairs
+.sw:
+    DUP 8
+    pop de
+    ld (hl),e
+    ld (hl),d
+    EDUP
+    djnz .sw
+.pairs:
+    ld a,(UGTM.LO+1)
+    ld b,a
+    or a
+    jr z,.sw_done
+.pair:
+    pop de
+    ld (hl),e
+    ld (hl),d
+    djnz .pair
 .sw_done:
 	ld	hl,0
 	add	hl,sp			; HL = odd-byte address (src+2k)

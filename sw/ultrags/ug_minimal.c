@@ -6,6 +6,7 @@
 #include "ug_config.h"
 #include "ug_storage.h"
 #include "ug_s4.h"
+#include "ultrags_protocol.h"
 #include "pico/stdlib.h"
 #include <string.h>
 #ifndef UG_BUILD_ID
@@ -30,6 +31,13 @@ void ug_minimal_error(uint8_t v) {
     __atomic_store_n(&error,v,__ATOMIC_RELAXED);
     if(v) ug_stat_add(v==4?6:7,1);
 }
+/* RXSTALL is a sticky transport failure; only A0 reopens framing. */
+static bool transport_fault;
+void ug_minimal_transport_fault(void) {
+    transport_fault=true;
+    ug_storage_data_overflow();
+    ERROR(UG_ERR_OVERFLOW);
+}
 static uint8_t snap_index;
 static uint32_t command_started;
 static bool had_transfer;
@@ -38,7 +46,7 @@ static uint32_t last_byte;
 static uint8_t boot_state;
 static uint64_t session_id;
 void ug_minimal_init(void) {
-    ug_storage_snap_init(); SET_STATE(IDLE); error=gs_error=gs_flags=used=total=read_index=snap_index=0;
+    transport_fault=false; ug_storage_snap_init(); SET_STATE(IDLE); error=gs_error=gs_flags=used=total=read_index=snap_index=0;
     gs_in=gs_out=gs_command=0; boot_state=2; session_id=0; had_transfer=false; reset_gs=0;
 }
 void ug_minimal_ready(uint8_t s,uint64_t session) {
@@ -58,10 +66,16 @@ bool ug_minimal_port(uint16_t p) { return reg(p)>=0; }
 void ug_minimal_write(uint16_t p,uint8_t v,uint32_t now) {
     ug_stat_add(1,1);
     if(ug_config_busy(&ug_cfg)) { ERROR(5); return; }
+    if(transport_fault && reg(p)!=2) { ERROR(UG_ERR_OVERFLOW); return; }
     switch(reg(p)) {
-    case 0: ERROR(6); break; /* BULK unsupported in S4 */
+    case 0: {
+        uint8_t e=!ug_storage_bulk()?UG_ERR_STATE:ug_storage_data_write(v,now);
+        if(e) ERROR(e);
+        break;
+    }
     case 2:
         if(v==0xa0) {
+            transport_fault=false;
             unsigned current=__atomic_load_n(&frame_state,__ATOMIC_ACQUIRE);
             ug_storage_request_cancel();
             __atomic_store_n(&frame_state,(current==EXEC || current==CANCEL)?CANCEL:IDLE,__ATOMIC_RELEASE);
@@ -85,7 +99,7 @@ void ug_minimal_write(uint16_t p,uint8_t v,uint32_t now) {
         break;
     case 4: if(v>127) ERROR(8); else snap_index=v; break;
     case 0x13:
-        if(ug_storage_transfer() && ug_storage_grant()!=8) { ERROR(6); break; }
+        if(ug_storage_transfer() && (ug_storage_bulk() || ug_storage_grant()!=8)) { ERROR(6); break; }
         if(gs_status()&129) { GS_ERROR(0x0e); ug_storage_data_overflow(); }
         else { gs_in=v; ug_storage_touch(now); __atomic_fetch_or(&gs_flags,128,__ATOMIC_RELEASE); }
         break;
@@ -99,9 +113,15 @@ void ug_minimal_write(uint16_t p,uint8_t v,uint32_t now) {
 uint8_t ug_minimal_read(uint16_t p) {
     ug_stat_add(0,1);
     unsigned current=__atomic_load_n(&frame_state,__ATOMIC_ACQUIRE);
+    if(transport_fault && (reg(p)==0 || reg(p)==3 || reg(p)==0x13)) { ERROR(UG_ERR_OVERFLOW); return 255; }
     switch(reg(p)) {
-    case 0: ERROR(15); return 255;
-    case 1: return (current==IDLE && !ug_config_busy(&ug_cfg)?1:0)|(current==EXEC?2:0)|(current==REPLY?4:0)|ug_storage_grant()|(__atomic_load_n(&error,__ATOMIC_RELAXED)?32:0)|(__atomic_load_n(&gs_error,__ATOMIC_RELAXED)?64:0);
+    case 0: {
+        uint8_t v=255;
+        uint8_t e=!ug_storage_bulk()?UG_ERR_STATE:ug_storage_data_read(&v,time_us_32());
+        if(e) ERROR(e);
+        return v;
+    }
+    case 1: return (current==IDLE && !transport_fault && !ug_config_busy(&ug_cfg)?1:0)|(current==EXEC?2:0)|(current==REPLY?4:0)|(transport_fault?0:ug_storage_grant())|(__atomic_load_n(&error,__ATOMIC_RELAXED)?32:0)|(__atomic_load_n(&gs_error,__ATOMIC_RELAXED)?64:0);
     case 3:
         if(current!=REPLY) { if(current!=FAULT) ERROR(15); return 255; }
         { uint8_t v=response[read_index++]; if(read_index==total) { ug_storage_grant_ack(time_us_32()); __atomic_store_n(&frame_state,IDLE,__ATOMIC_RELEASE); } return v; }
@@ -114,7 +134,7 @@ uint8_t ug_minimal_read(uint16_t p) {
     case 0x13:
         if(ug_storage_transfer()) {
             uint8_t v=255;
-            uint8_t e=ug_storage_grant()!=16?6:(!(gs_status()&128) && ug_storage_read_available())?15:ug_storage_data_read(&v,time_us_32());
+            uint8_t e=(ug_storage_bulk() || ug_storage_grant()!=16)?6:(!(gs_status()&128) && ug_storage_read_available())?15:ug_storage_data_read(&v,time_us_32());
             if(e) ERROR(e);
             else { gs_out=v; __atomic_fetch_and(&gs_flags,1,__ATOMIC_ACQ_REL); }
             return v;
@@ -157,10 +177,10 @@ void ug_minimal_dispatch(void) {
         } else if(active) { GS_ERROR(5); __atomic_fetch_and(&gs_flags,128,__ATOMIC_ACQ_REL); }
         else { GS_ERROR(1); __atomic_store_n(&gs_flags,0,__ATOMIC_RELEASE); }
     }
-    if(ug_storage_grant()==8 && (gs_status()&128)) {
+    if(!ug_storage_bulk() && ug_storage_grant()==8 && (gs_status()&128)) {
         uint8_t e=ug_storage_data_write(gs_in,now); if(e) ERROR(e);
         __atomic_fetch_and(&gs_flags,1,__ATOMIC_ACQ_REL);
-    } else if(ug_storage_read_available()) {
+    } else if(!ug_storage_bulk() && ug_storage_read_available()) {
         __atomic_fetch_or(&gs_flags,128,__ATOMIC_RELEASE);
     }
     if(reset_gs) return;

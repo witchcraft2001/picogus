@@ -45,6 +45,13 @@ psram_spi_inst_t psram_spi;
 psram_spi_inst_t* async_spi_inst;
 #endif
 #include "isa_io.pio.h"
+#ifdef UG_ISA_POSTED
+#include "ug_posted_iow.pio.h"
+#include "ultrags/ug_posted.h"
+#define iow_program ug_posted_iow_program
+#define iow_program_init ug_posted_iow_program_init
+#endif
+
 
 #ifdef ASYNC_UART
 #include "stdio_async_uart.h"
@@ -217,13 +224,28 @@ const char* firmware_string = PICO_PROGRAM_NAME " v" PICO_PROGRAM_VERSION_STRING
 static uint8_t basePort_low;
 static uint8_t mouseSensitivity_low;
 static uint8_t picogus_dataLatch_low;
+#ifdef UG_ISA_POSTED
+static ug_config_fence posted_config_fence;
+static unsigned posted_config_index;
+static bool posted_config_active;
+static bool posted_config_blocked(void) { return posted_config_active && posted_config_fence.blocked[posted_config_index]; }
+static bool posted_config_idle(bool live) { return posted_config_active?posted_config_fence.idle[posted_config_index]:live; }
+#endif
 
 __force_inline void select_picogus(uint8_t value) {
     // printf("select picogus %x\n", value);
     sel_reg = value;
     ug_config_select(&ug_cfg,value);
     if (ug_config_selector(value)) return;
+#ifdef UG_ISA_POSTED
+    if(posted_config_blocked()) return;
+#endif
     if (ug_config_busy(&ug_cfg)) return;
+#ifdef UG_ISA_POSTED
+    if (!ug_config_posted_selector(value)) {
+        ug_cfg.result=0x14; control_active=false; return;
+    }
+#endif
     switch (sel_reg) {
     case CMD_MAGIC: // Magic string
     case CMD_PROTOCOL: // Protocol version
@@ -316,7 +338,11 @@ __force_inline void select_picogus(uint8_t value) {
     case CMD_HWTYPE: // Hardware version
         break;
     case CMD_FLASH: // Firmware write mode
+#ifdef UG_ISA_POSTED
+        ug_cfg.result=0x14; control_active=false;
+#else
         pico_firmware_start();
+#endif
         break;
     default:
         control_active = false;
@@ -325,6 +351,9 @@ __force_inline void select_picogus(uint8_t value) {
 }
 
 __force_inline void write_picogus_low(uint8_t value) {
+#ifdef UG_ISA_POSTED
+    if(posted_config_blocked()) return;
+#endif
     if (ug_config_busy(&ug_cfg)) return;
     if (ug_config_selector(sel_reg)) { ug_config_write(&ug_cfg,false,value,ug_runtime_idle()); return; }
     switch (sel_reg) {
@@ -345,9 +374,15 @@ __force_inline void write_picogus_low(uint8_t value) {
 }
 
 __force_inline void write_picogus_high(uint8_t value) {
+#ifdef UG_ISA_POSTED
+    if(posted_config_blocked()) return;
+#endif
     if (ug_config_busy(&ug_cfg)) return;
     if (ug_config_selector(sel_reg) || sel_reg==CMD_BOOTMODE || sel_reg==CMD_SAVE) {
         bool idle=sel_reg==CMD_UG_GS_ALIASES?ug_runtime_gs_idle():ug_runtime_idle();
+#ifdef UG_ISA_POSTED
+        idle=posted_config_idle(idle);
+#endif
         ug_config_write(&ug_cfg,true,value,idle); return;
     }
     switch (sel_reg) {
@@ -555,12 +590,20 @@ __force_inline void write_picogus_high(uint8_t value) {
         queueReboot = true;
         break;
     case CMD_DEFAULTS:
+#ifdef UG_ISA_POSTED
+        if (!posted_config_idle(ug_runtime_idle())) { ug_cfg.result=5; break; }
+#else
         if (!ug_runtime_idle()) { ug_cfg.result=5; break; }
+#endif
         getDefaultSettings(&settings);
         processSettings();
         break;
     case CMD_FLASH: // Firmware write
+#ifdef UG_ISA_POSTED
+        ug_cfg.result=0x14; /* Unsupported in the bounded posted front-end. */
+#else
         pico_firmware_write(value);
+#endif
         break;
     }
 }
@@ -720,8 +763,12 @@ __force_inline uint8_t read_picogus_high(void) {
     case CMD_HWTYPE: // Hardware version
         return BOARD_TYPE;
     case CMD_FLASH:
+#ifdef UG_ISA_POSTED
+        return PICO_FIRMWARE_ERROR;
+#else
         // Get status of firmware write
         return pico_firmware_getStatus();
+#endif
     default:
         return 0xff;
     }
@@ -774,14 +821,20 @@ static constexpr uint32_t IO_END = 0x0u;
 // OR with 0x0000ff00 is required to set pindirs in the PIO
 static constexpr uint32_t IOR_SET_VALUE = 0x0000ff00u;
 
-__force_inline void handle_iow(void) {
-    uint32_t iow_read = pio_sm_get(pio0, IOW_PIO_SM); //>> 16;
+static inline void ug_iow_verdict(uint32_t value) {
+#ifndef UG_ISA_POSTED
+    pio_sm_put(pio0,IOW_PIO_SM,value);
+#else
+    (void)value;
+#endif
+}
+static void apply_iow(uint32_t iow_read) {
     // printf("%x", iow_read);
     uint16_t port = (iow_read >> 8) & 0x3FF;
 #ifdef SOUND_ULTRAGS
     if (ug_minimal_port(port)) {
         ug_minimal_write(port,(uint8_t)iow_read,time_us_32());
-        pio_sm_put(pio0,IOW_PIO_SM,IO_END); return;
+        ug_iow_verdict(IO_END); return;
     }
 #endif
     // printf("IOW: %x %x\n", port, iow_read & 0xFF);
@@ -795,7 +848,7 @@ __force_inline void handle_iow(void) {
         case 0x103:
         case 0x104:
             // Fast write, don't set iochrdy by writing 0
-            pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+            ug_iow_verdict(IO_END);
             write_gus(port, iow_read & 0xFF);
             // Fast write - return early as we've already written 0x0u to the PIO
             return;
@@ -803,7 +856,7 @@ __force_inline void handle_iow(void) {
         default:
             // gpio_xor_mask(LED_PIN);
             // Slow write, set iochrdy by writing non-0
-            pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+            ug_iow_verdict(IO_WAIT);
             write_gus(port, iow_read & 0xFF);
             gpio_xor_mask(LED_PIN);
             break;
@@ -815,7 +868,7 @@ __force_inline void handle_iow(void) {
 #ifdef SOUND_SB
 #ifdef SOUND_WSS
     if ((port >> 4) == wss_port_test) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+        ug_iow_verdict(IO_WAIT);
         switch (port & 0xf) {
         // WSS config ports
         case 0 ... 3:
@@ -834,7 +887,7 @@ __force_inline void handle_iow(void) {
         case 0x0:
         case 0x8: // OPL bank 1 address
             // Fast write
-            pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+            ug_iow_verdict(IO_END);
 #if OPL_CMD_BUFFER
             opl_cmd_buffer.cmds[opl_cmd_buffer.head].addr = (uint16_t)(iow_read & 0xFF);
 #else
@@ -845,7 +898,7 @@ __force_inline void handle_iow(void) {
             break;
         case 0x1:
         case 0x9: // OPL bank 1 data
-            pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+            ug_iow_verdict(IO_WAIT);
 #if OPL_CMD_BUFFER
             {
                 uint8_t opl_data = iow_read & 0xFF;
@@ -864,7 +917,7 @@ __force_inline void handle_iow(void) {
             break;
         case 0x2: // OPL3 bank 2 address
             // Fast write
-            pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+            ug_iow_verdict(IO_END);
 #if OPL_CMD_BUFFER
             opl_cmd_buffer.cmds[opl_cmd_buffer.head].addr = (uint16_t)(0x100 | (iow_read & 0xFF));
 #else
@@ -872,7 +925,7 @@ __force_inline void handle_iow(void) {
 #endif
             return;
         case 0x3: // OPL3 bank 2 data
-            pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+            ug_iow_verdict(IO_WAIT);
 #if OPL_CMD_BUFFER
             {
                 uint8_t opl_data = iow_read & 0xFF;
@@ -890,7 +943,7 @@ __force_inline void handle_iow(void) {
             break;
         // DSP ports
         default:
-            pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+            ug_iow_verdict(IO_WAIT);
             sbdsp_write(port & 0xF, iow_read & 0xFF);
             break;
         }
@@ -899,7 +952,7 @@ __force_inline void handle_iow(void) {
 #endif // SOUND_SB
 #ifdef CDROM
     if ((port >> 4) == cdrom_port_test) {      
-        pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+        ug_iow_verdict(IO_WAIT);
         // putchar('w');
         MKE_WRITE(port, iow_read & 0xFF);
     } else // if follows down below
@@ -910,7 +963,7 @@ __force_inline void handle_iow(void) {
         switch (port & 3) {
         case 0: // bank 1 address
             // Fast write
-            pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+            ug_iow_verdict(IO_END);
 #if OPL_CMD_BUFFER
             opl_cmd_buffer.cmds[opl_cmd_buffer.head].addr = (uint16_t)(iow_read & 0xFF);
 #else
@@ -919,7 +972,7 @@ __force_inline void handle_iow(void) {
             return;
         case 2: // bank 2 address (OPL3 only)
             // Fast write — store with 0x100 bank flag so write_address_hi is used
-            pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+            ug_iow_verdict(IO_END);
 #if OPL_CMD_BUFFER
             opl_cmd_buffer.cmds[opl_cmd_buffer.head].addr = (uint16_t)(0x100 | (iow_read & 0xFF));
 #else
@@ -928,7 +981,7 @@ __force_inline void handle_iow(void) {
             return;
         case 1: // bank 1 data
         case 3: // bank 2 data
-            pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+            ug_iow_verdict(IO_WAIT);
             if (settings.SB.oplSpeedSensitive) {
                 busy_wait_us(1); // busy wait for speed sensitive games
             }
@@ -953,14 +1006,14 @@ __force_inline void handle_iow(void) {
 #endif // SOUND_OPL
 #ifdef SOUND_TANDY
     if (port == settings.Tandy.basePort) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+        ug_iow_verdict(IO_END);
         tandy_buffer.cmds[tandy_buffer.head++] = iow_read & 0xFF;
         return;
     } else // if follows down below
 #endif // SOUND_TANDY
 #ifdef USB_JOYSTICK
     if (port == settings.Joy.basePort) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+        ug_iow_verdict(IO_END);
         // Set times in # of cycles (affected by clkdiv) for each PWM slice to count up and wrap back to 0
         // TODO better calibrate this
         // GUS w/ gravis gamestick -
@@ -986,19 +1039,19 @@ __force_inline void handle_iow(void) {
 #endif // USB_JOYSTICK
 #ifdef USB_MOUSE
     if ((port & ~7) == settings.Mouse.basePort) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);      // leave some time for UART logic emualtion
+        ug_iow_verdict(IO_WAIT);      // leave some time for UART logic emualtion
         uartemu_write(port & 7, iow_read & 0xFF);
     } else // if follows down below
 #endif // USB_MOUSE
 #ifdef NE2000
     if((port & ~0x1F) == settings.NE2K.basePort) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+        ug_iow_verdict(IO_WAIT);
         PG_NE2000_Write(port & 0x1f, iow_read & 0xFF);        
     } else // if follows down below
 #endif
 #ifdef SOUND_CMS
     if ((port & 0x3f0) == settings.CMS.basePort) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+        ug_iow_verdict(IO_END);
         switch (port & 0xf) {
         // SAA data/address ports
         case 0x0:
@@ -1023,13 +1076,13 @@ __force_inline void handle_iow(void) {
     if ((port & 0x3fe) == settings.MPU.basePort) {
         switch (port & 0xf) {
         case 0:
-            pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+            ug_iow_verdict(IO_WAIT);
             // printf("MPU IOW: port: %x value: %x\n", port, iow_read & 0xFF);
             MPU401_WriteData(iow_read & 0xFF, true);
             gpio_xor_mask(LED_PIN);
             break;
         case 1:
-            pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+            ug_iow_verdict(IO_WAIT);
             MPU401_WriteCommand(iow_read & 0xFF, true);
             // printf("MPU IOW: port: %x value: %x\n", port, iow_read & 0xFF);
             // __dsb();
@@ -1039,7 +1092,7 @@ __force_inline void handle_iow(void) {
 #endif // SOUND_MPU
     // PicoGUS control
     if (port == CONTROL_PORT) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+        ug_iow_verdict(IO_WAIT);
         // printf("iow control port: %x %d\n", iow_read & 0xff, control_active);
         if ((iow_read & 0xFF) == 0xCC) {
             // printf("activate ");
@@ -1048,7 +1101,7 @@ __force_inline void handle_iow(void) {
             select_picogus(iow_read & 0xFF);
         }
     } else if (port == DATA_PORT_LOW) {
-        pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+        ug_iow_verdict(IO_END);
         if (control_active) {
             write_picogus_low(iow_read & 0xFF);
         }
@@ -1056,19 +1109,49 @@ __force_inline void handle_iow(void) {
         return;
     } else if (port == DATA_PORT_HIGH) {
         // printf("iow data port: %x\n", iow_read & 0xff);
-        pio_sm_put(pio0, IOW_PIO_SM, IO_WAIT);
+        ug_iow_verdict(IO_WAIT);
         if (control_active) {
             write_picogus_high(iow_read & 0xFF);
         }
     }
     // Fallthrough if no match, or for slow write, reset PIO
-    pio_sm_put(pio0, IOW_PIO_SM, IO_END);
+    ug_iow_verdict(IO_END);
 
 }
+
+__force_inline void handle_iow(void) {
+    uint32_t word=pio_sm_get(pio0,IOW_PIO_SM);
+#ifdef UG_ISA_POSTED
+    ug_posted_write(word,apply_iow);
+#else
+    apply_iow(word);
+#endif
+}
+#ifdef UG_ISA_POSTED
+static bool posted_owns(uint16_t port,const uint32_t *words,unsigned n) {
+    Settings defaults; getDefaultSettings(&defaults);
+    posted_config_index=0; posted_config_active=true;
+    return ug_config_preview_fence(&ug_cfg,control_active,ug_minimal_idle(),ug_minimal_gs_idle(),&defaults,port,words,n,&posted_config_fence);
+}
+static void posted_apply(uint32_t word) {
+    apply_iow(word); posted_config_index++;
+}
+static uint8_t posted_read(uint16_t port) {
+    if(port==CONTROL_PORT) return sel_reg;
+    if(port==DATA_PORT_LOW) return read_picogus_low();
+    if(port==DATA_PORT_HIGH) return read_picogus_high();
+    return ug_minimal_read(port);
+}
+#endif
 
 __force_inline void handle_ior(void) {
     uint8_t x;
     uint16_t port = pio_sm_get(pio0, IOR_PIO_SM) & 0x3FF;
+#ifdef UG_ISA_POSTED
+    ug_posted_read(port,posted_owns,posted_apply,posted_read,ug_minimal_transport_fault);
+    posted_config_active=false;
+    return;
+#endif
 #ifdef SOUND_ULTRAGS
     if (ug_minimal_port(port)) {
         pio_sm_put(pio0,IOR_PIO_SM,IO_WAIT);
@@ -1458,7 +1541,7 @@ extern void PIC_DeActivateIRQ(void);
 #endif // USBONLY
 
 #ifdef SOUND_ULTRAGS
-    gpio_init(21); gpio_set_dir(21,GPIO_OUT); gpio_put(21,0);
+    gpio_init(21); gpio_put(21,0); gpio_set_dir(21,GPIO_OUT);
     /* Launch after core0 finishes the PIO program registry below. */
 #endif
 
@@ -1491,6 +1574,9 @@ extern void PIC_DeActivateIRQ(void);
     DBG_PRINTF("ior sm: %u\n", IOR_PIO_SM);
 
     iow_program_init(pio0, IOW_PIO_SM, iow_offset, iow_clkdiv);
+#ifdef UG_ISA_POSTED
+    ug_posted_init(iow_offset);
+#endif
     ior_program_init(pio0, IOR_PIO_SM, ior_offset);
 #ifdef SOUND_ULTRAGS
     ug_hw_note_program(pio0,iow_offset,iow_program.length,"iow");
@@ -1525,18 +1611,25 @@ extern void PIC_DeActivateIRQ(void);
 
     for (;;) {
 #ifndef USE_IRQ
-        if (iow_has_data()) {
-            handle_iow();
-        }
-
-        if (ior_has_data()) {
-            handle_ior();
-        }
+#ifdef UG_ISA_POSTED
+        ug_posted_check(ug_minimal_transport_fault);
+        if(ior_has_data()) handle_ior();
+        else if(iow_has_data()) handle_iow();
+#else
+        if (iow_has_data()) handle_iow();
+        if (ior_has_data()) handle_ior();
+#endif
 #endif
 #ifdef SOUND_ULTRAGS
         ug_minimal_poll(time_us_32());
 #endif
-        if (queueReboot && !ug_config_busy(&ug_cfg) && gpio_get(IOW_PIN) && pio_sm_is_tx_fifo_empty(pio0,IOW_PIO_SM)) {
+        if (queueReboot && !ug_config_busy(&ug_cfg) && gpio_get(IOW_PIN) &&
+#ifdef UG_ISA_POSTED
+            pio_sm_is_rx_fifo_empty(pio0,IOW_PIO_SM)
+#else
+            pio_sm_is_tx_fifo_empty(pio0,IOW_PIO_SM)
+#endif
+        ) {
             queueReboot=false;
             watchdog_hw->scratch[3]=settings.startupMode;
             watchdog_reboot(0,0,0);

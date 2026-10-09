@@ -77,13 +77,13 @@ void ug_stats_clear(void) { for(unsigned i=0;i<16;i++) __atomic_store_n(stats+i,
 /* NONE, PREPARING, ACK_PENDING, GRANTED, CRC_CHECKING, COMMITTING. The release of
  * GRANTED publishes the descriptor and SRAM; END revokes it before SPI. */
 enum { T_NONE,T_PREP,T_ACK,T_GRANT,T_CHECK,T_COMMIT };
-enum { T_CANCEL_REQUESTED=256 };
+enum { T_CANCEL_REQUESTED=256,T_STAGING_FAULT=512 };
 static struct {
     uint8_t buffers[2][1024];
     unsigned phase;
     uint32_t token, next_token, offset, expected_crc, last, cursor, crc;
     uint16_t handle, length, done;
-    uint8_t direction, verified, fault;
+    uint8_t direction, verified, fault, transport;
     bool cancelled_command;
 } transfer;
 static struct { bool active; uint16_t handle; uint32_t cursor,crc,expected,started; bool verify; } sealing;
@@ -95,8 +95,9 @@ uint32_t ug_storage_test_crc_step(uint32_t crc,const uint8_t *p,unsigned n) { re
 static unsigned phase(void) { return __atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE)&255; }
 static void set_phase(unsigned p) {
     unsigned v=__atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE);
-    while(!__atomic_compare_exchange_n(&transfer.phase,&v,(v&T_CANCEL_REQUESTED)|p,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {}
+    while(!__atomic_compare_exchange_n(&transfer.phase,&v,(v&(T_CANCEL_REQUESTED|(p==T_NONE?0:T_STAGING_FAULT)))|p,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {}
 }
+bool ug_storage_bulk(void) { return ug_storage_transfer() && !transfer.transport; }
 bool ug_storage_read_available(void) { return ug_storage_grant()==16 && __atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)<transfer.length; }
 bool ug_storage_transfer(void) { return phase()!=T_NONE; }
 uint8_t ug_storage_grant(void) {
@@ -109,30 +110,40 @@ void ug_storage_grant_ack(uint32_t now) {
 }
 void ug_storage_request_cancel(void) { __atomic_fetch_or(&transfer.phase,T_CANCEL_REQUESTED,__ATOMIC_ACQ_REL); }
 void ug_storage_data_overflow(void) {
-    if(phase()==T_GRANT) __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE);
+    /* Share the point of no return with COMMITTING. A separate fault flag
+     * alone leaves a check-then-CAS race when RXSTALL arrives in core0. */
+    unsigned v=__atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE);
+    while((v&255)!=T_NONE && (v&255)!=T_COMMIT) {
+        if(__atomic_compare_exchange_n(&transfer.phase,&v,v|T_STAGING_FAULT,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
+            __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE); return;
+        }
+    }
 }
 static void release_transfer(void) {
     ug_store_pin(&store,transfer.handle,false);
     set_phase(T_NONE);
 }
-static bool begin_commit(void) {
+static uint8_t begin_commit(void) {
     /* The CAS is the point of no return: cancellation and COMMITTING share
      * one atomic word, so a cancellation arriving during the final CRC slice
      * cannot be lost between checking a flag and publishing COMMITTING. */
     unsigned expected=phase();
-    if(__atomic_compare_exchange_n(&transfer.phase,&expected,T_COMMIT,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) return true;
-    release_transfer(); return false;
+    uint8_t fault=__atomic_load_n(&transfer.fault,__ATOMIC_ACQUIRE);
+    if(fault) { release_transfer(); return fault; }
+    if(__atomic_compare_exchange_n(&transfer.phase,&expected,T_COMMIT,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) return UG_ERR_OK;
+    uint8_t e=(expected&T_STAGING_FAULT)?UG_ERR_OVERFLOW:UG_ERR_CANCELLED;
+    release_transfer(); return e;
 }
 void ug_storage_touch(uint32_t now) {
     if(phase()==T_GRANT && __atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)<transfer.length) __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE);
 }
 uint8_t ug_storage_data_write(uint8_t byte,uint32_t now) {
-    if(phase()!=T_GRANT || transfer.direction) return UG_ERR_STATE;
+    if(ug_storage_grant()!=8 || transfer.direction) return UG_ERR_STATE;
     if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)==transfer.length) { __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE); return UG_ERR_OVERFLOW; }
     transfer.buffers[0][__atomic_fetch_add(&transfer.done,1,__ATOMIC_ACQ_REL)]=byte; __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE); return 0;
 }
 uint8_t ug_storage_data_read(uint8_t *byte,uint32_t now) {
-    if(phase()!=T_GRANT || !transfer.direction) return UG_ERR_STATE;
+    if(ug_storage_grant()!=16 || !transfer.direction) return UG_ERR_STATE;
     if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)==transfer.length) { __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE); return UG_ERR_UNDERFLOW; }
     *byte=transfer.buffers[1][__atomic_fetch_add(&transfer.done,1,__ATOMIC_ACQ_REL)]; __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE); return 0;
 }
@@ -266,6 +277,8 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         transfer.cancelled_command=false; *status=UG_ERR_CANCELLED; return true;
     }
     if(phase()==T_CHECK) {
+        uint8_t fault=__atomic_load_n(&transfer.fault,__ATOMIC_ACQUIRE);
+        if(fault) { release_transfer(); *status=fault; return true; }
         /* Revoke the GS grant before CRC work and retain SRAM until the
          * check completes. Cancellation here still leaves PSRAM untouched. */
         unsigned k=transfer.length-transfer.cursor; if(k>256) k=256;
@@ -278,7 +291,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
             release_transfer(); *status=UG_ERR_CRC; return true;
         }
         transfer.cursor=0;
-        if(!begin_commit()) { *status=UG_ERR_CANCELLED; return true; }
+        if((*status=begin_commit())) return true;
         return false;
     }
     if(phase()==T_PREP) {
@@ -350,7 +363,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
     if(op==UG_OP_CAPS) {
         if(ug_storage_transfer()) { *status=UG_ERR_BUSY; return true; }
         memset(r,0,32); *len=32;
-        ug_put32(r,226u|(ug_config_aliases(&ug_cfg)?512u:0u)); /* GS_DATA, CRC, snapshot, MEM_TEST; no music/BULK */
+        ug_put32(r,230u|(ug_cfg.settings->UltraGS.bulkAlias!=0xffff?8u:0u)|(ug_config_aliases(&ug_cfg)?512u:0u)); /* GS_DATA, CRC, snapshot, MEM_TEST; no music */
         ug_put32(r+8,48000); put16(r+12,1024); put16(r+14,128); put16(r+16,128);
         put16(r+24,ug_cfg.settings->UltraGS.basePort); put16(r+26,ug_cfg.settings->UltraGS.bulkAlias);
         return true;
@@ -368,7 +381,6 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
     if(op==UG_OP_WRITE_BEGIN || op==UG_OP_READ_BEGIN) {
         uint8_t trans=q[8];
         if(trans&126) { *status=UG_ERR_BAD_ARGUMENT; return true; }
-        if(!(trans&1)) { *status=UG_ERR_BAD_OPCODE; return true; }
         if(!ug_minimal_gs_idle()) { *status=UG_ERR_BUSY; return true; }
         ug_object_t *o=ug_store_find(&store,get16(q));
         uint32_t offset=ug_get32(q+2); uint16_t count=get16(q+6);
@@ -384,7 +396,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         if(*status) return true;
         transfer.handle=o->handle; transfer.offset=offset; transfer.length=count;
         __atomic_store_n(&transfer.done,0,__ATOMIC_RELAXED); transfer.cursor=0; __atomic_store_n(&transfer.fault,0,__ATOMIC_RELAXED); transfer.verified=trans>>7;
-        transfer.direction=op==UG_OP_READ_BEGIN; transfer.token=transfer.next_token++;
+        transfer.transport=trans&1; transfer.direction=op==UG_OP_READ_BEGIN; transfer.token=transfer.next_token++;
         if(!transfer.direction) {
             transfer.expected_crc=transfer.verified?ug_get32(q+9):0;
             set_phase(T_ACK); ug_put32(r,transfer.token); *len=4; return true;
@@ -405,7 +417,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         }
         transfer.cursor=0;
         if(transfer.verified) { transfer.crc=UINT32_MAX; set_phase(T_CHECK); }
-        else if(!begin_commit()) { *status=UG_ERR_CANCELLED; return true; }
+        else if((*status=begin_commit())) return true;
         return false;
     }
     if(op==UG_OP_SEAL) {

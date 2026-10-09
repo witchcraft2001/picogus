@@ -1,2 +1,4 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
-	INCLUDE "ugdiag_app.asm"
+    DEFINE APP_BENCH
+    DEFINE UG_BENCH_TIMING
+    INCLUDE "ugmem.asm"

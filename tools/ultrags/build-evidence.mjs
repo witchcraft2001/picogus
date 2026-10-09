@@ -19,7 +19,7 @@ export function buildInputs(root, exeDir) {
     generated: sha256(Buffer.concat(['ug_wire.inc','ug_diag_wire.inc'].map(p=>readFileSync(join(exeDir, '../gen',p))))) };
 }
 export function executionInputs(root) {
-  return Object.fromEntries(['Z80core.js', 'ug-card.js', 'ug-harness.mjs', 'run-ugdiag.mjs', 'diag-card.mjs', 'run-s1.mjs', 'config-card.mjs', 'run-s2.mjs', 'memory-card.mjs', 'run-s3.mjs', 'slow-card.mjs', 'run-s4.mjs']
+  return Object.fromEntries(['Z80core.js', 'ug-card.js', 'ug-harness.mjs', 'run-ugdiag.mjs', 'diag-card.mjs', 'run-s1.mjs', 'config-card.mjs', 'run-s2.mjs', 'memory-card.mjs', 'run-s3.mjs', 'slow-card.mjs', 'run-s4.mjs', 'run-s5.mjs']
     .map(p => [`tests/ultrags/dss/${p}`, sha256(readFileSync(join(root, 'tests/ultrags/dss', p)))]));
 }
 export function verifyBuild(root, exeDir) {
