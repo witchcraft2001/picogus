@@ -60,6 +60,10 @@ UG_ISA_OPEN:
 	ret	nz			; refuse nested open
 	ld	a,b
 	ld	(UGCTX.SLOT),a
+    IFDEF UG_DSS_TIMED
+    xor a
+    ld (UGTM.CHUNK),a
+    ENDIF
 	ld	a,l
 	ld	(UGCTX.BASE),a
 	ld	a,h
@@ -222,6 +226,9 @@ UG_REQ_WRITE:
 .wr:	ld	a,b
 	or	c
 	ret	z
+    IFDEF UG_DSS_TIMED
+    call UG_FRAME_YIELD
+    ENDIF
 	ld	a,(hl)
 	ld	(de),a
 	inc	hl
@@ -240,6 +247,9 @@ UG_RESP_READ:
 .rd:	ld	a,b
 	or	c
 	ret	z
+    IFDEF UG_DSS_TIMED
+    call UG_FRAME_YIELD
+    ENDIF
 	ld	a,(hl)
 	ld	(de),a
 	inc	de
@@ -258,6 +268,9 @@ UG_RESP_SKIP:
 .rd:	ld	a,b
 	or	c
 	ret	z
+    IFDEF UG_DSS_TIMED
+    call UG_FRAME_YIELD
+    ENDIF
 	ld	a,(hl)
 	dec	bc
 	jr	.rd

@@ -331,6 +331,9 @@ UG_RPC:
 	call	UG_BUILD_FRAME		; BC = total frame bytes
 	jp	c,.badframe
 	push	bc			; frame len across the window open
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_START
+    ENDIF
 	; READY is required before the FIRST byte. An old response must not
 	; be mistaken for this call's result or replay a non-idempotent RPC.
 	ld	hl,UG_WAIT_BUDGET
@@ -341,14 +344,34 @@ UG_RPC:
 	jr	c,.ready_winfail
 	bit	0,a
 	jr	nz,.ready
+    IFDEF UG_DSS_TIMED
+    bit 1,a
+    jr nz,.busy_unowned
+    bit 2,a
+    jr nz,.busy_unowned
+    ELSE
 	bit	2,a
 	jr	nz,.stale_reply
+    ENDIF
 	bit	5,a
 	jr	nz,.ready_fault
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_NEXT
+    jr nc,.ready_wait
+    pop bc
+    ld b,1
+    jp UG_SET_ERR
+.busy_unowned:
+    pop bc
+    ld a,UG_ERR_BUSY
+    ld b,2
+    jp UG_SET_ERR
+    ELSE
 	dec	hl
 	ld	a,h
 	or	l
 	jr	nz,.ready_wait
+    ENDIF
 	pop	bc
 	jp	.timeout
 .ready_winfail:
@@ -380,13 +403,31 @@ UG_RPC:
 	bit	2,a			; REPLY first: an error response still
 					; arrives as a consumable REPLY frame
 	jr	nz,.have_reply
-	bit	5,a			; XERR without REPLY = framing fault
+    IFDEF UG_DSS_TIMED
+    ; X_ERROR is sticky across successful RPCs. A prior memory error must
+    ; not cancel a new test while its frame is legitimately in EXEC.
+    bit 1,a
+    jr nz,.executing
+    ENDIF
+	bit	5,a			; XERR in a non-EXEC/no-REPLY state = framing fault
 	jp	nz,.xerr
+.executing:
 	pop	hl
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_NEXT
+    jr nc,.wait
+    push af
+    ld a,UG_XC_TRANSPORT_RESET
+    call UG_XCTRL
+    pop af
+    ld b,1
+    jp UG_SET_ERR
+    ELSE
 	dec	hl
 	ld	a,h
 	or	l
 	jp	z,.timeout
+    ENDIF
 	jr	.wait
 .have_reply:
 	pop	hl
@@ -1372,4 +1413,7 @@ UG_BAD_BEGIN:
 	ld	b,1
 	jp	UG_SET_ERR
 
+    IFDEF UG_DSS_TIMED
+    INCLUDE "ugwait.asm"
+    ENDIF
 	ENDIF ; UGPROTO_INC

@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * This program is free software under GPL version 2 or any later version.
- * S2 transport/INFO only. No storage or musical capability is advertised.
+ * Framed transport and S3 storage. Musical capabilities remain unavailable.
  */
 #include "ug_minimal.h"
 #include "ug_config.h"
+#include "ug_storage.h"
+#include "pico/stdlib.h"
 #include <string.h>
 #ifndef UG_BUILD_ID
 #define UG_BUILD_ID "000000000000000+"
@@ -30,14 +32,14 @@ void ug_minimal_init(void) {
 void ug_minimal_ready(uint8_t s,uint64_t session) {
     session_id=session; __atomic_store_n(&boot_state,s,__ATOMIC_RELEASE);
 }
-bool ug_minimal_gs_idle(void) { return !gs_status(); }
+bool ug_minimal_gs_idle(void) { return !gs_status() && !ug_storage_busy(); }
 bool ug_minimal_idle(void) { return __atomic_load_n(&frame_state,__ATOMIC_ACQUIRE)==IDLE && ug_minimal_gs_idle() && __atomic_load_n(&boot_state,__ATOMIC_ACQUIRE)!=2; }
 static int reg(uint16_t port) {
     uint16_t base=ug_cfg.settings->UltraGS.basePort, alias=ug_cfg.settings->UltraGS.bulkAlias;
     if(port>=base && port-base<32) return port-base;
     if(alias!=0xffff && port>=alias && port-alias<32) return 0;
-    if(ug_cfg.aliases && port==0xb3) return 0x13;
-    if(ug_cfg.aliases && port==0xbb) return 0x1b;
+    if(port==0xb3 && ug_config_aliases(&ug_cfg)) return 0x13;
+    if(port==0xbb && ug_config_aliases(&ug_cfg)) return 0x1b;
     return -1;
 }
 bool ug_minimal_port(uint16_t p) { return reg(p)>=0; }
@@ -103,7 +105,7 @@ void ug_minimal_poll(uint32_t now) {
 }
 void ug_minimal_dispatch(void) {
     unsigned current=__atomic_load_n(&frame_state,__ATOMIC_ACQUIRE);
-    if(current==CANCEL) { __atomic_store_n(&frame_state,IDLE,__ATOMIC_RELEASE); return; }
+    if(current==CANCEL) { ug_storage_cancel(time_us_32()); __atomic_store_n(&frame_state,IDLE,__ATOMIC_RELEASE); return; }
     if(gs_status()&1) {
         (void)gs_command; (void)gs_in;
         GS_ERROR(1);
@@ -113,7 +115,9 @@ void ug_minimal_dispatch(void) {
     uint8_t status=0, length=0;
     bool crc=request[0]&128;
     if(crc && ug_crc32(request,used-4)!=ug_get32(request+used-4)) status=4;
-    else if((request[0]&127)!=0) status=1;
+    else if((request[0]&127)!=0) {
+        if(!ug_storage_command(request[0]&127,request+2,request[1],response+2,&length,&status,time_us_32())) return;
+    }
     else if(request[1]) status=3;
     else {
         length=36; memset(response+2,0,length);

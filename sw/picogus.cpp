@@ -1459,7 +1459,7 @@ extern void PIC_DeActivateIRQ(void);
 
 #ifdef SOUND_ULTRAGS
     gpio_init(21); gpio_set_dir(21,GPIO_OUT); gpio_put(21,0);
-    multicore_launch_core1(&play_ultrags);
+    /* Launch after core0 finishes the PIO program registry below. */
 #endif
 
     for(int i=AD0_PIN; i<(AD0_PIN + 10); ++i) {
@@ -1492,6 +1492,11 @@ extern void PIC_DeActivateIRQ(void);
 
     iow_program_init(pio0, IOW_PIO_SM, iow_offset, iow_clkdiv);
     ior_program_init(pio0, IOR_PIO_SM, ior_offset);
+#ifdef SOUND_ULTRAGS
+    ug_hw_note_program(pio0,iow_offset,iow_program.length,"iow");
+    ug_hw_note_program(pio0,ior_offset,ior_program.length,"ior");
+    multicore_launch_core1(&play_ultrags);
+#endif
 
 #ifdef USE_IRQ
     DBG_PUTS("Enabling IRQ on ISA IOR/IOW events");

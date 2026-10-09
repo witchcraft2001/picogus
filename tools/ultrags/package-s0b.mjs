@@ -22,7 +22,7 @@ import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
 const stage = arg('--stage', 'S0b');
-if (!['S0b','S1','S2'].includes(stage)) throw new Error('unknown package stage');
+if (!['S0b','S1','S2','S3'].includes(stage)) throw new Error('unknown package stage');
 const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -76,7 +76,23 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = stage === 'S2' ? [
+const help = stage === 'S3' ? [
+  'Ultra GS S3 memory stage - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
+  'UGCFG MODE ULTRAGS -> UGMEM INFO -> UGMEM TEST QUICK -> UGMEM TEST FULL',
+  'Expected on APS6404L: physical=pool=8388608; first_bad=0xFFFFFFFF.',
+  'RESET WARM/COLD destroys all objects and changes session; no Flash writes.',
+  'COLD also performs QUICK. TEST requires an empty store.',
+  'UGMEM LIST; FREE handle; /SLOT:0|1 /BASE:hex /QUIET /VERIFY /?',
+  'FULL deadline 120s; ESC cancels between card-side slices. No hidden BUSY reset.',
+  'ROUNDTRIP, upload/SEAL/GS music/playback are not implemented until later stages.',
+  'UGMEM supports both PGMULTI and standalone PGULTRA, protocol4/API1.0.',
+  'PGSLOW is the separate nominal 50MHz SCK profile; PGULTRA uses 100MHz.',
+  'These are calculated profiles; real PSRAM clocks/temperature remain pending.',
+  'PGULTRA/PGSLOW replace multifw. UGCFG MODE needs the PGMULTI bundle.',
+  'UGTEST/UGBENCH target ONLY standalone S1 diagnostic firmware.',
+  'ST-*.EXE are intentionally defective HOST fixtures, never hardware utilities.',
+  'Read S3-README.md, firmware-report.json and flash-map.json beside the firmware.',
+].join('\r\n') : stage === 'S2' ? [
   'Ultra GS S2 configuration stage - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
   'UGCFG.EXE targets PGMULTI.UF2: seven modes, protocol4 and UGCF v1.0.',
   'UGCFG LIST -> MODE ULTRAGS -> VERIFY -> MODE GUS',

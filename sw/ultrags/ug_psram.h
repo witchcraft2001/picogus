@@ -28,6 +28,7 @@ extern "C" {
 
 typedef struct ug_psram_s {
     psram_spi_inst_t spi;
+    uint32_t divider256; /* actual 16.8 divider (truncated by SDK) */
     uint32_t pool_bytes;   /* declared test profile pool, NOT probed capacity */
     PIO pio;
     int sm;
@@ -46,6 +47,9 @@ typedef struct ug_psram_s {
 int ug_psram_init(ug_psram_t *ps, PIO pio, int sm, float clkdiv,
                   uint32_t pool_bytes, bool fudge_first);
 
+extern bool ug_psram_dma_fault;
+int ug_psram_recover(ug_psram_t *ps);
+int ug_psram_read_id(ug_psram_t *ps, uint8_t id[8]);
 void ug_psram_uninit(ug_psram_t *ps);
 
 /* Bounded ops: offset+len must be inside pool_bytes, len <= UG_PSRAM_CHUNK.

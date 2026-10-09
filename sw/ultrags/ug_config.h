@@ -28,6 +28,8 @@ uint8_t ug_config_read(ug_config *c, bool high);
 void ug_config_write(ug_config *c, bool high, uint8_t value, bool idle);
 uint8_t ug_ports_validate(uint16_t base, uint16_t alias);
 bool ug_config_busy(const ug_config *c);
+/* Core0 may toggle aliases while core1 is preparing CAPS. */
+bool ug_config_aliases(const ug_config *c);
 void ug_config_save_done(ug_config *c, bool verified);
 void ug_maintenance_poll(void);
 void ug_runtime_init(Settings *s, uint8_t active);

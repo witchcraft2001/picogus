@@ -498,8 +498,13 @@ try {
   execFileSync(process.execPath, [join(REPO, 'tests/ultrags/dss/run-s2.mjs'), REPO, parentBuild], {stdio:'inherit'});
   const s2 = JSON.parse(readFileSync(join(LOGS, 's2-run.json')));
   for (const e of s2.executed) executed.set(e.name,e);
+  execFileSync(process.execPath, [join(REPO, 'tests/ultrags/dss/run-s3.mjs'), REPO, parentBuild], {stdio:'inherit'});
+  const s3=JSON.parse(readFileSync(join(parentBuild,'ultrags/logs/s3-run.json')));
+  for (const e of s3.executed) executed.set(e.name,e);
+  for (const r of s3.results) r.ok ? ok(`S3 ${r.name}`) : bad(`S3 ${r.name}`,r.errors.join(';'));
+
   for (const r of s2.results) r.ok ? ok(`S2 ${r.name}`) : bad(`S2 ${r.name}`,r.errors.join(';'));
-} catch(e) { bad('S2 actual-EXE suite',e.message); }
+} catch(e) { bad('S2/S3 actual-EXE suite',e.message); }
 done(runs);
 
 function done(runs_) {

@@ -56,7 +56,7 @@ firmware: prepare-tools
 	$(checkenv)
 	@mkdir -p $(BUILD)/multifw-release
 	cmake -S $(SW) -B $(BUILD)/multifw-release $(CMAKE_COMMON) \
-		-DPROJECT_TYPE=MULTIFW -DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+		-DPROJECT_TYPE=MULTIFW -DPICO_BOARD=picogus2 -DPGDEBUG=OFF -DUG_PSRAM_SCK_MHZ=100
 	cmake --build $(BUILD)/multifw-release --parallel
 	@mkdir -p $(BUILD)/ne2k-release
 	cmake -S $(SW) -B $(BUILD)/ne2k-release $(CMAKE_COMMON) \
@@ -109,7 +109,7 @@ dss: $(UGBUILD)/gen/ug_wire.inc
 
 # test-dss executes the EXACT bytes the dss target built (byte-identity
 # chain: packaged EXE == executed EXE is verified by verify-package.mjs)
-test-dss: dss s2-host
+test-dss: dss s2-host s3-host
 	UG_S2_CATALOG="$(abspath $(BUILD))/host/s2-catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-ugdiag.mjs $(ROOT) $(UGBUILD) --exe-dir=$(UGBUILD)/dss
 
 # honest S0b stage package: store-only ZIP + 1.44MiB FAT12 image,
@@ -175,7 +175,7 @@ s2-host:
 
 ultrags: prepare-tools
 	cmake -S $(SW) -B $(BUILD)/ultrags-release $(CMAKE_COMMON) \
-		-DPROJECT_TYPE=ULTRAGS -DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+		-DPROJECT_TYPE=ULTRAGS -DPICO_BOARD=picogus2 -DPGDEBUG=OFF -DUG_PSRAM_SCK_MHZ=100
 	cmake --build $(BUILD)/ultrags-release --parallel
 
 s2-check: s1-check ultrags s2-entrypoint
@@ -189,5 +189,28 @@ s2-package: s2-check
 .PHONY: s2-entrypoint
 s2-entrypoint: prepare-tools
 	cmake -S $(SW)/multifw -B $(BUILD)/s2-entrypoint $(CMAKE_COMMON) \
-		-DPICO_BOARD=picogus2 -DPGDEBUG=OFF
+		-DPICO_BOARD=picogus2 -DPGDEBUG=OFF -DUG_PSRAM_SCK_MHZ=100
 	cmake --build $(BUILD)/s2-entrypoint --parallel
+
+# S3: real storage C, UGMEM actual-EXE, all earlier gates and both clocks.
+.PHONY: s3-host s3-check s3-package ultrags-slow ultrags-debug
+s3-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s3-host.py --build $(BUILD)/host --cc "$(CC)"
+
+ultrags-slow: prepare-tools
+	cmake -S $(SW) -B $(BUILD)/ultrags-slow $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=ULTRAGS -DPICO_BOARD=picogus2 -DPGDEBUG=OFF -DUG_PSRAM_SCK_MHZ=50
+	cmake --build $(BUILD)/ultrags-slow --parallel
+
+ultrags-debug: prepare-tools
+	cmake -S $(SW) -B $(BUILD)/ultrags-debug $(CMAKE_COMMON) \
+		-DPROJECT_TYPE=ULTRAGS -DPICO_BOARD=picogus2 -DPGDEBUG=ON -DUG_PSRAM_SCK_MHZ=100
+	cmake --build $(BUILD)/ultrags-debug --parallel
+
+s3-check: s2-check s3-host ultrags-slow ultrags-debug
+	$(NODE) $(ROOT)/tools/ultrags/stage-excerpt.mjs --stage S3 --output $(UGBUILD)/excerpts/ultrags-S3.md
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s3-report.py --build $(BUILD)
+	@echo "S3 HOST_PASS / DSS-EXE_PASS / REAL_PENDING"
+
+s3-package: s3-check
+	$(NODE) $(ROOT)/tools/ultrags/package-s3.mjs --build $(BUILD)

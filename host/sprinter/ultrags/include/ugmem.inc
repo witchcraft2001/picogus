@@ -75,6 +75,11 @@ UGTM.HI		EQU UGMEM_BASE+72	; u16
 UG_ALIASCFG	EQU UGMEM_BASE+74	; u16, bulk alias base read at UG_OPEN
 UGREQ.GPRE	EQU UGMEM_BASE+76	; u8, GS descriptor has_pre stash
 UGREQ.STACKMETHOD EQU UGMEM_BASE+77 ; u8, caller method across STACK RPCs
+UGTM.LIMIT EQU UGMEM_BASE+78
+UGTM.SEC EQU UGMEM_BASE+79
+UGTM.ELAPSED EQU UGMEM_BASE+80
+UGTM.STAGNANT EQU UGMEM_BASE+81 ; u24
+UGTM.CHUNK EQU UGMEM_BASE+84
 UG_ARGBUF	EQU UGMEM_BASE+96	; DSS command-line copy area (<=160B)
 
 ; scratch buffers used by UG_RPC internals (write-before-read; never in

@@ -600,13 +600,29 @@ if(UG_DIRTY)
     string(SUBSTRING "${UG_REV}" 0 15 UG_REV)
     string(APPEND UG_REV "+")
 endif()
+set(UG_PSRAM_SCK_MHZ 100 CACHE STRING "Ultra GS PSRAM profile: 100 or 50 MHz nominal SCK")
+if(NOT UG_PSRAM_SCK_MHZ MATCHES "^(50|100)$")
+    message(FATAL_ERROR "UG_PSRAM_SCK_MHZ must be 50 or 100")
+endif()
 function(build_ultrags TARGET_NAME MULTIFW)
+    find_program(UG_NODE node REQUIRED)
+    set(UG_WIRE_DIR ${CMAKE_CURRENT_BINARY_DIR}/ug-wire)
+    add_custom_command(OUTPUT ${UG_WIRE_DIR}/ug_wire.h
+        COMMAND ${UG_NODE} ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/gen-wire.mjs
+            ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/wire-schema.json ${UG_WIRE_DIR}
+        DEPENDS ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/gen-wire.mjs
+            ${CMAKE_CURRENT_LIST_DIR}/../tools/ultrags/wire-schema.json)
+
     config_target(${TARGET_NAME} ${MULTIFW})
     pico_set_program_name(${TARGET_NAME} "pg-ultrags")
     target_compile_definitions(${TARGET_NAME} PRIVATE SOUND_ULTRAGS=1 UG_BUILD_ID="${UG_REV}" PSRAM_ASYNC=1
         PSRAM_PIN_CS=1 PSRAM_PIN_SCK=2 PSRAM_PIN_MOSI=3 PSRAM_PIN_MISO=0)
-    target_sources(${TARGET_NAME} PRIVATE ultrags/ug_minimal.c ultrags/ug_play.cpp
-        ultrags/ug_hwmap.c ultrags/ug_audio.c ultrags/ug_psram.c)
+    target_include_directories(${TARGET_NAME} PRIVATE ${UG_WIRE_DIR} ${CMAKE_CURRENT_LIST_DIR}/../common)
+    target_sources(${TARGET_NAME} PRIVATE ${UG_WIRE_DIR}/ug_wire.h ultrags/ug_minimal.c ultrags/ug_play.cpp
+        ultrags/ug_hwmap.c ultrags/ug_audio.c ultrags/ug_psram.c
+        ultrags/ug_store.c ultrags/ug_memory.c ultrags/ug_storage.c)
+    target_compile_definitions(${TARGET_NAME} PRIVATE UG_PSRAM_SCK_MHZ=${UG_PSRAM_SCK_MHZ})
+    target_compile_options(${TARGET_NAME} PRIVATE -include ${CMAKE_CURRENT_LIST_DIR}/ultrags/ug_psram_wait.h)
     target_link_libraries(${TARGET_NAME} rp2040-psram hardware_dma pico_rand)
     pico_generate_pio_header(${TARGET_NAME} ${PICO_EXTRAS_PATH}/src/rp2_common/pico_audio_i2s/audio_i2s.pio)
 endfunction()
@@ -800,6 +816,7 @@ if(PROJECT_TYPE STREQUAL "ULTRAGS_DIAG")
         ultrags/ug_spike.c
         M62429/M62429.cpp
     )
+    target_compile_options(${FW_TARGET} PRIVATE -include ${CMAKE_CURRENT_LIST_DIR}/ultrags/ug_psram_wait.h)
     option(UG_DIAG_NO_DACK "Standalone diagnostic without DACK gate" OFF)
     set(UG_DIAG_GEN ${CMAKE_CURRENT_BINARY_DIR}/diag-gen)
     add_custom_command(OUTPUT ${UG_DIAG_GEN}/ug_diag_wire.h

@@ -8,3 +8,5 @@ void psram_spi_uninit(psram_spi_inst_t s, bool fudge);
 void psram_read(psram_spi_inst_t *s, uint32_t off, uint8_t *dst, uint32_t n);
 void psram_write(psram_spi_inst_t *s, uint32_t off, const uint8_t *src, uint32_t n);
 void psram_write_async_fast(psram_spi_inst_t *s, uint32_t off, uint8_t *src, uint32_t n);
+
+void pio_spi_write_read_dma_blocking(psram_spi_inst_t *,const uint8_t *,size_t,uint8_t *,size_t);

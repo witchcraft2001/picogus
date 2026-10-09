@@ -50,3 +50,5 @@ static inline void gpio_set_function(unsigned a,unsigned b){(void)a;(void)b;}
 #ifdef __cplusplus
 }
 #endif
+
+static inline uint32_t time_us_32(void) { return 0; }

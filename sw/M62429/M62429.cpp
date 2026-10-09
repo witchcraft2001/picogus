@@ -11,6 +11,9 @@
 // Adapted by Ian Scott for Raspberry Pi Pico SDK
 
 #include "M62429.h"
+#if defined(SOUND_ULTRAGS) || defined(ULTRAGS_DIAG)
+#include "ultrags/ug_hwmap.h"
+#endif
 
 #include "hardware/gpio.h"
 #include "hardware/timer.h"
@@ -37,7 +40,13 @@ void M62429::begin(uint8_t dataPin, uint8_t clockPin
 {
 #ifdef M62429_PIO
   _pio = pio;
+  #if defined(SOUND_ULTRAGS) || defined(ULTRAGS_DIAG)
+  hard_assert(pio_can_add_program(_pio, &m62429_program));
+  #endif
   uint sm_offset = pio_add_program(_pio, &m62429_program);
+  #if defined(SOUND_ULTRAGS) || defined(ULTRAGS_DIAG)
+  ug_hw_note_program(_pio,sm_offset,m62429_program.length,"m62429");
+  #endif
   if (sm == -1) {
     _sm = pio_claim_unused_sm(_pio, true);
   } else {
