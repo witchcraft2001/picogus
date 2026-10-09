@@ -15,10 +15,25 @@ UG_WAIT_START:
     cp UG_OP_MEM_TEST
     jr z,.long
     cp UG_OP_RESET_STORE
-    jr nz,.clock
+    jr nz,.s4
     ld a,(UGREQ.FRAME+6) ; RESET_STORE level: warm is an ordinary 1s RPC
     or a
     jr z,.clock
+    jr .long
+.s4:
+    cp UG_OP_SEAL
+    jr nz,.block
+    ld a,30
+    ld (UGTM.LIMIT),a
+    jr .clock
+.block:
+    cp UG_OP_WRITE_BEGIN
+    jr c,.clock
+    cp UG_OP_TRANSFER_CANCEL+1
+    jr nc,.clock
+    ld a,2
+    ld (UGTM.LIMIT),a
+    jr .clock
 .long:
     ld a,120
     ld (UGTM.LIMIT),a
@@ -45,10 +60,14 @@ UG_WAIT_NEXT:
     push hl
     push ix
     push iy
+    ld a,(UGTM.NOESC)
+    or a
+    jr nz,.clock
     ld c,0x31
     rst 0x10
     cp 27
     jr z,.cancel
+.clock:
     ld c,0x21
     rst 0x10
     ld a,(UGTM.SEC)

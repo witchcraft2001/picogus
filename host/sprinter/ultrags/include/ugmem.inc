@@ -80,6 +80,8 @@ UGTM.SEC EQU UGMEM_BASE+79
 UGTM.ELAPSED EQU UGMEM_BASE+80
 UGTM.STAGNANT EQU UGMEM_BASE+81 ; u24
 UGTM.CHUNK EQU UGMEM_BASE+84
+UGXFER.SLOWCOUNT EQU UGMEM_BASE+85 ; u16, finite non-DSS latch wait
+UGTM.NOESC EQU UGMEM_BASE+87 ; cleanup/recovery ignore a held ESC; deadlines remain
 UG_ARGBUF	EQU UGMEM_BASE+96	; DSS command-line copy area (<=160B)
 
 ; scratch buffers used by UG_RPC internals (write-before-read; never in
@@ -102,6 +104,8 @@ UGMEM_END	EQU UGMEM_BASE+400	; reserved workspace end (< 0xC000)
 	ASSERT UG_ALIASCFG + 2 <= UGREQ.GPRE	; alias cfg precedes gpre
 	ASSERT UG_ARGBUF + 160 <= UGREQ.FRAME	; arg area precedes frame
 	ASSERT UGREQ.FRAME + 140 <= UGMEM_END	; frame fits the region
+	ASSERT UGXFER.SLOWCOUNT + 2 <= UGTM.NOESC
+	ASSERT UGTM.NOESC + 1 <= UG_ARGBUF
 	ASSERT UGMEM_END <= 0xC000		; workspace below ISA window
 
 	ENDIF ; UGMEM_INC

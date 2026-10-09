@@ -6,8 +6,13 @@ HEADER:
 	DB "EXE",1
 	DW 128,0,0,0,0,0,ENTRY,ENTRY,0xBFFE
 	DS 128-($-HEADER),0
+    IFDEF UGTEST_S4
+TX EQU 0x5000
+RX EQU 0x5400
+    ELSE
 TX EQU 0xB000
 RX EQU 0xB400
+    ENDIF
 SNAP EQU 0xB800
 CLI EQU 0xB850
 V EQU 0xB900
@@ -70,6 +75,29 @@ RETRIES EQU V+139
 PHASECOUNT EQU V+140
 	INCLUDE "ugmem.inc"
 ENTRY:
+    IFDEF UGTEST_S4
+    ld a,(ix+1)
+    and 0xDF
+    cp 'P'
+    jr nz,.diag
+    ld a,(ix+2)
+    and 0xDF
+    cp 'R'
+    jr nz,.diag
+    ld a,(ix+3)
+    and 0xDF
+    cp 'O'
+    jr nz,.diag
+    ld a,(ix+4)
+    and 0xDF
+    cp 'T'
+    jr nz,.diag
+    ld a,(ix+5)
+    and 0xDF
+    cp 'O'
+    jp z,S4TEST.ENTRY
+.diag:
+    ENDIF
 	; Copy CLI before any DSS call may clobber IX.
 	ld b,(ix+0)
 	ld hl,CLI
@@ -2037,7 +2065,15 @@ help_text: DB "UGTEST BUS /REAL [/MIRROR] | UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..
 	INCLUDE "ug_diag_wire.inc"
 	INCLUDE "isa.asm"
 	INCLUDE "ugcrc.asm"
+    IFDEF UGTEST_S4
+    MODULE S4TEST
+    DEFINE APP_PROTO
+    INCLUDE "ugmem.asm"
+    ENDMODULE
+    ASSERT $ < 0xB800
+    ELSE
 	ASSERT $ < TX
+    ENDIF
 	ASSERT TX+1024 <= RX
 	ASSERT RX+1024 <= SNAP
 	ASSERT CLI+160 <= V

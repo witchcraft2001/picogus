@@ -109,7 +109,7 @@ dss: $(UGBUILD)/gen/ug_wire.inc
 
 # test-dss executes the EXACT bytes the dss target built (byte-identity
 # chain: packaged EXE == executed EXE is verified by verify-package.mjs)
-test-dss: dss s2-host s3-host
+test-dss: dss s2-host s3-host s4-host
 	UG_S2_CATALOG="$(abspath $(BUILD))/host/s2-catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-ugdiag.mjs $(ROOT) $(UGBUILD) --exe-dir=$(UGBUILD)/dss
 
 # honest S0b stage package: store-only ZIP + 1.44MiB FAT12 image,
@@ -214,3 +214,17 @@ s3-check: s2-check s3-host ultrags-slow ultrags-debug
 
 s3-package: s3-check
 	$(NODE) $(ROOT)/tools/ultrags/package-s3.mjs --build $(BUILD)
+
+# S4: real C storage/transfer/SEAL and actual assembled BLOB applications.
+.PHONY: s4-host s4-check s4-package s4-full
+s4-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s4-host.py --build $(BUILD)/host --cc "$(CC)"
+s4-full: dss s4-host
+	UG_S4_FULL=1 $(NODE) $(ROOT)/tests/ultrags/dss/run-s4.mjs $(ROOT) $(BUILD)
+s4-check: export UG_S4_GATE=1
+s4-check: s3-check s4-host s4-full
+	$(NODE) $(ROOT)/tools/ultrags/stage-excerpt.mjs --stage S4 --output $(UGBUILD)/excerpts/ultrags-S4.md
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s4-report.py --build $(BUILD)
+	@echo "S4 HOST_PASS / DSS-EXE_PASS / REAL_PENDING; C00 remains mandatory"
+s4-package: s4-check
+	$(NODE) $(ROOT)/tools/ultrags/package-s4.mjs --build $(BUILD)

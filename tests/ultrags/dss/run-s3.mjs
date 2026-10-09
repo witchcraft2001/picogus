@@ -65,7 +65,7 @@ for(const [name,cli,code,o] of [
  ['full-timeout','TEST FULL',8,{noReplyOp:5,cpuHz:3500000,budget:120000000,check:c=>c.resets===1&&c.now>=119000000&&c.now<121000000}],
  ['esc','TEST FULL',10,{delayUs:90000000,escAfter:2,check:c=>c.resets===1}],
  ['stopped','TEST FULL',8,{delayUs:90000000,stopped:true,budget:200000000,check:c=>c.resets===1}],
- ['help','/?',0,{}],['roundtrip','ROUNDTRIP 16',3,{}],['roundtrip-pool','ROUNDTRIP 8388608',3,{check:(c,m)=>m.text.includes('ROUNDTRIP_UNAVAILABLE_UNTIL_S4')}],
+ ['help','/?',0,{}],
 ])test(name,cli,code,o);
 for(const cli of ['', 'TEST','TEST X','RESET HOT','FREE 65536','FREE 0x10000','FREE -1','FREE 999999999999','INFO X','INFO /SLOT:2','INFO /BASE:02A1','INFO /BASE:0400','INFO /SAVE','BOGUS'])test('syntax '+cli,cli,1,{});
 mkdirSync(join(build,'ultrags/logs'),{recursive:true});writeFileSync(join(build,'ultrags/logs/s3-run.json'),JSON.stringify({results,executed:[{name:'UGMEM.EXE',size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')}]},null,2));

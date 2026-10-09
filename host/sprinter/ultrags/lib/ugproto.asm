@@ -82,6 +82,7 @@ UG_LIB_INIT:
 	ld	(UGCTX.ISOPEN),a
 	ld	(UGCTX.SESS),a
 	ld	(UGXFER.DIR),a
+	ld	(UGTM.NOESC),a
 	ld	(UG_NMI_PROFILE),a	; UNKNOWN: STACK writes are refused
 	ld	(UG_METHOD),a		; 0 = FIXED
 	ld	(UG_ALIASCFG),a
@@ -403,12 +404,10 @@ UG_RPC:
 	bit	2,a			; REPLY first: an error response still
 					; arrives as a consumable REPLY frame
 	jr	nz,.have_reply
-    IFDEF UG_DSS_TIMED
-    ; X_ERROR is sticky across successful RPCs. A prior memory error must
-    ; not cancel a new test while its frame is legitimately in EXEC.
+    ; X_ERROR is sticky in every profile. BUSY denotes a legitimate EXEC,
+    ; so a prior error cannot cancel a new RPC before its reply is ready.
     bit 1,a
     jr nz,.executing
-    ENDIF
 	bit	5,a			; XERR in a non-EXEC/no-REPLY state = framing fault
 	jp	nz,.xerr
 .executing:
@@ -616,6 +615,10 @@ UG_RPC:
 ; clobbers AF,BC,DE,HL; preserves IX
 UG_XFER_CANCEL:
 	push	ix
+	ld	a,(UGTM.NOESC)
+	push	af
+	ld	a,1
+	ld	(UGTM.NOESC),a
 	ld	a,(UG_LAST_ERROR)
 	push	af
 	ld	a,(UG_LAST_SOURCE)
@@ -648,6 +651,8 @@ UG_XFER_CANCEL:
 	ld	(UG_LAST_SOURCE),a
 	pop	af
 	ld	(UG_LAST_ERROR),a
+	pop	af
+	ld	(UGTM.NOESC),a
 	pop	ix
 	ret
 
@@ -676,6 +681,9 @@ UG_XFER_SAVE:
 ;      Only BULK transports implemented here: 00h FAST / 80h VERIFIED.
 ; out: CF=0 ok; CF=1 A=err
 UG_XFER_VALIDATE:
+    and 0x7E
+    jr nz,.badarg
+    xor a
 	or	a			; BULK_FAST
 	jr	z,.t_ok
 	cp	UG_TRANSPORT_BULK_VERIFIED
@@ -841,6 +849,12 @@ UG_WRITE:
 	call	UG_ISA_CLOSE
 	pop	af
 	jp	z,.w_nogrant
+    ld a,(UGXFER.TRANS)
+    bit 0,a
+    jr z,.w_loop
+    call UG_SLOW_DATA
+    jp c,.w_fail
+    jp .w_data_done
 	; ---- data: N bytes as <=UG_CHUNK bounded windows ----
 .w_loop:
 	ld	hl,(UGXFER.N)
@@ -966,6 +980,20 @@ UG_XFER_END:
 	ld	bc,(UGXFER.N)
 	call	UG_CRC32
 	pop	bc
+    push bc
+    push de
+    ld hl,UGCRC.OUT
+    ld de,UGXFER.CRC
+    ld b,4
+.checkcrc:
+    ld a,(de)
+    cp (hl)
+    jr nz,.readcrc_bad
+    inc hl
+    inc de
+    djnz .checkcrc
+    pop de
+    pop bc
 	ld	hl,(UGCRC.OUT)
 	call	PUT_LE16
 	ld	hl,(UGCRC.OUT+2)
@@ -986,6 +1014,13 @@ UG_XFER_END:
 .done:
 	pop	ix
 	ret
+.readcrc_bad:
+    pop de
+    pop bc
+    ld a,UG_ERR_CRC
+    ld b,1
+    call UG_SET_ERR
+    jr .done
 
 ; ------------------------------------------------------------ UG_READ
 ; Same signature as UG_WRITE.  READ_BEGIN -> chunks -> READ_END.
@@ -1058,6 +1093,12 @@ UG_READ:
 	call	UG_ISA_CLOSE
 	pop	af
 	jp	z,.r_nogrant
+    ld a,(UGXFER.TRANS)
+    bit 0,a
+    jr z,.r_loop
+    call UG_SLOW_DATA
+    jp c,.r_fail
+    jp .r_data_done
 	; chunks
 .r_loop:
 	ld	hl,(UGXFER.N)
@@ -1131,6 +1172,86 @@ UG_READ:
 	pop	hl
 	pop	ix
 	ret
+
+ ; GS_DATA uses one-byte windows and closed-window latch waits.
+UG_SLOW_DATA:
+    ld hl,0xFFFF
+    ld (UGXFER.SLOWCOUNT),hl
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_START
+    ld a,5
+    ld (UGTM.LIMIT),a
+    ENDIF
+.loop:
+    ld hl,(UGXFER.SENT)
+    ld de,(UGXFER.N)
+    or a
+    sbc hl,de
+    ret z
+    ld hl,(UGXFER.BUF)
+    ld de,(UGXFER.SENT)
+    add hl,de
+    push hl
+    ld a,(UGXFER.DIR)
+    cp 2
+    jr z,.read
+    ld a,(hl)
+    call UG_GS_SD
+    jr c,.fail
+.waitwrite:
+    call UG_GS_POLL_CB
+    jr c,.fail
+    bit 7,a
+    jr z,.advance
+    call UG_SLOW_WAIT
+    jr nc,.waitwrite
+    jr .fail
+.read:
+    call UG_GS_POLL_CB
+    jr c,.fail
+    bit 7,a
+    jr nz,.readbyte
+    call UG_SLOW_WAIT
+    jr nc,.read
+    jr .fail
+.readbyte:
+    call UG_GS_GD
+    jr c,.fail
+    pop hl
+    ld (hl),a
+    push hl
+.advance:
+    pop hl
+    ld hl,(UGXFER.SENT)
+    inc hl
+    ld (UGXFER.SENT),hl
+    ld a,l
+    and 7
+    jr nz,.loop
+    call UG_SLOW_WAIT
+    ret c
+    jr .loop
+.fail:
+    pop hl
+    ret
+UG_SLOW_WAIT:
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_NEXT
+    ret nc
+    ld b,1
+    jp UG_SET_ERR
+    ELSE
+    ; Non-DSS library users still have a finite latch wait.
+    ld hl,(UGXFER.SLOWCOUNT)
+    dec hl
+    ld (UGXFER.SLOWCOUNT),hl
+    ld a,h
+    or l
+    ret nz
+    ld a,UG_ERR_TIMEOUT
+    ld b,1
+    jp UG_SET_ERR
+    ENDIF
 
 ; -------------------------------------------------------- UG_WRITE_STACK
 ; Explicit METHOD:STACK entry (spec 11.4).  When the NMI profile is not
@@ -1273,6 +1394,23 @@ UG_GS_WN:
 	ret
 .wnf:	pop	hl
 	ret
+;
+UG_GS_WD:
+    ld hl,UG_GS_BUDGET
+.loop:
+    push hl
+    call UG_GS_POLL_CB
+    pop hl
+    ret c
+    bit 7,a
+    ret z
+    dec hl
+    ld a,h
+    or l
+    jr nz,.loop
+    ld a,UG_ERR_TIMEOUT
+    ld b,3
+    jp UG_SET_ERR
 ;
 ; UG_GS_SD: in A=byte -> GS_DATA write (bounded window)
 UG_GS_SD:

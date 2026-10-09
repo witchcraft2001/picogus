@@ -1,8 +1,8 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ;
 ; st-transport.asm - NEGATIVE: public UG_WRITE/UG_READ accept ONLY the
-; implemented BULK transports (00h FAST, 80h VERIFIED).  GS transports
-; 01h/81h (and any other value) must fail BAD_ARGUMENT WITHOUT touching
+; implemented BULK transports (00h FAST, 80h VERIFIED).  Reserved transports
+; 02h/82h (and any other value) must fail BAD_ARGUMENT WITHOUT touching
 ; the bus - the runner counts the ISA events after ALLOC's reply and
 ; requires zero.
 ; Expected: exit 0, err=0, no bus traffic from the rejected calls.
@@ -35,29 +35,29 @@
 	ld	(UG_OFFSET+1),a
 	ld	(UG_OFFSET+2),a
 	ld	(UG_OFFSET+3),a
-	; UG_WRITE transport=01h (GS_FAST) -> BAD_ARGUMENT, no bus access
+	; UG_WRITE transport=02h (reserved) -> BAD_ARGUMENT, no bus access
 	ld	hl,(ST_RESULT+4)
 	ld	de,ST_TX
 	ld	bc,64
-	ld	a,1
+	ld	a,2
 	call	UG_WRITE
 	jp	nc,st_fail
 	cp	UG_ERR_BAD_ARGUMENT
 	jp	nz,st_failA
-	; UG_WRITE transport=81h (GS_VERIFIED) -> BAD_ARGUMENT
+	; UG_WRITE transport=82h (reserved) -> BAD_ARGUMENT
 	ld	hl,(ST_RESULT+4)
 	ld	de,ST_TX
 	ld	bc,64
-	ld	a,0x81
+	ld	a,0x82
 	call	UG_WRITE
 	jp	nc,st_fail
 	cp	UG_ERR_BAD_ARGUMENT
 	jp	nz,st_failA
-	; UG_READ transport=01h -> BAD_ARGUMENT
+	; UG_READ transport=02h -> BAD_ARGUMENT
 	ld	hl,(ST_RESULT+4)
 	ld	de,ST_TX
 	ld	bc,64
-	ld	a,1
+	ld	a,2
 	call	UG_READ
 	jp	nc,st_fail
 	cp	UG_ERR_BAD_ARGUMENT

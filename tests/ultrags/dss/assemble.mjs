@@ -40,7 +40,7 @@ for (const src of sources) {
   const lst = join(OUT, `${name}.lst`);
   try {
     execFileSync(SJASM, [
-      `--inc=${INCDIR}`, `--inc=${LIBDIR}`, `--inc=${STDIR}`, `--inc=${GENDIR}`,
+      `--inc=${join(REPO, "host/sprinter/ultrags/apps")}`, `--inc=${INCDIR}`, `--inc=${LIBDIR}`, `--inc=${STDIR}`, `--inc=${GENDIR}`,
       `--raw=${exe}`, `--lst=${lst}`, src,
     ], { stdio: 'pipe' });
     const b = readFileSync(exe);

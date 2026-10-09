@@ -501,6 +501,12 @@ try {
   execFileSync(process.execPath, [join(REPO, 'tests/ultrags/dss/run-s3.mjs'), REPO, parentBuild], {stdio:'inherit'});
   const s3=JSON.parse(readFileSync(join(parentBuild,'ultrags/logs/s3-run.json')));
   for (const e of s3.executed) executed.set(e.name,e);
+  if(assemblyEvidence.files.some(e=>e.name==='UGLOAD.EXE')) {
+    execFileSync(process.execPath,[join(REPO,'tests/ultrags/dss/run-s4.mjs'),REPO,parentBuild],{stdio:'inherit'});
+    const s4=JSON.parse(readFileSync(join(LOGS,'s4-run.json')));
+    for(const e of s4.executed)executed.set(e.name,e);
+    for(const r of s4.results)r.ok?ok(`S4 ${r.name}`):bad(`S4 ${r.name}`,r.errors.join(';'));
+  }
   for (const r of s3.results) r.ok ? ok(`S3 ${r.name}`) : bad(`S3 ${r.name}`,r.errors.join(';'));
 
   for (const r of s2.results) r.ok ? ok(`S2 ${r.name}`) : bad(`S2 ${r.name}`,r.errors.join(';'));

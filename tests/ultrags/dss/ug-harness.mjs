@@ -89,8 +89,10 @@ export function parseExe(file) {
 
 // ------------------------------ machine --------------------------------
 export class SprinterMachine {
-  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x21, page3Init = 0x03, cpuHz = CPU_HZ, commandLine = null, movingClock = false, clockStart = 86390, escAfter = Infinity, logLimit = Infinity }) {
+  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x21, page3Init = 0x03, cpuHz = CPU_HZ, commandLine = null, movingClock = false, clockStart = 86390, escAfter = Infinity, logLimit = Infinity, files = {}, disk = {} }) {
     if (![3_500_000, 21_000_000].includes(cpuHz)) throw new Error('unsupported CPU frequency');
+    this.files=new Map(Object.entries(files).map(([p,b])=>[p.toUpperCase(),Buffer.from(b)]));
+    this.disk=disk; this.fileHandles=new Map(); this.nextFileHandle=1; this.fileCalls=0;
     this.cpuHz = cpuHz;
     this.commandLine = commandLine;
     this.movingClock = movingClock;
@@ -124,6 +126,7 @@ export class SprinterMachine {
     this.nmiArmed = false;     // runner marks 0066h a legal handler
     this.nmiArmIsa = null;     // ISA address that arms the deferred NMI
     this.trace = [];
+    this.crcEntries=new Set(); this.crcCalls=0;
     this.windows = [];
     this.windowStart = null;
     this.maxWindowUs = 0;
@@ -218,12 +221,44 @@ export class SprinterMachine {
     // card transfer grant is open (spec 12.1 serialization)
     if (this.isaOpen)
       this.violations.push(`DSS call C=${st.c.toString(16)} while ISA window open`);
-    if (this.grantActive())
+    if (this.grantActive() && ![0x21,0x31].includes(st.c))
       this.violations.push(`DSS call C=${st.c.toString(16)} while transfer grant active`);
     // DSS may spend up to 48 bytes below SP; flag only when that range
     // physically overlaps the library workspace [UGMEM_BASE,UGMEM_END)
     if (sp >= UGMEM_BASE && sp - DSS_STACK_COST < UGMEM_END)
       this.violations.push(`DSS stack budget underflow: SP=${sp.toString(16)}`);
+    if([0x0a,0x0e,0x11,0x12,0x13,0x14,0x15].includes(st.c)) {
+      this.fileCalls++;
+      const flags=st.flags??{};
+      const fail=(e=6)=>{st.a=e;st.flags={...flags,C:1};};
+      const success=()=>{st.flags={...flags,C:0};};
+      const path=()=>{let a=(st.h<<8)|st.l,s='';while(this.mem[a])s+=String.fromCharCode(this.mem[a++]);return s.toUpperCase();};
+      const file=this.fileHandles.get(st.a),key=path();
+      if(this.disk.failAt===this.fileCalls || this.disk.failFn===st.c)fail();
+      else if(st.c===0x11) {
+        if(!this.files.has(key))fail(3);
+        else {st.a=this.nextFileHandle++;this.fileHandles.set(st.a,{path:key,pos:0});success();}
+      } else if(st.c===0x0a) {
+        this.files.set(key,Buffer.alloc(0));st.a=this.nextFileHandle++;
+        this.fileHandles.set(st.a,{path:key,pos:0});success();
+      } else if(st.c===0x0e) {this.files.delete(key);success();}
+      else if(!file)fail(7);
+      else if(st.c===0x12) {this.fileHandles.delete(st.a);success();}
+      else if(st.c===0x15) {
+        const offset=((st.h<<8)|st.l)*65536+st.ix;
+        const pos=(st.b===2?this.files.get(file.path).length:st.b===1?file.pos:0)+offset;
+        if(pos>0xffffffff)fail();else {file.pos=pos;st.ix=pos&65535;st.h=(pos>>>24)&255;st.l=(pos>>>16)&255;success();}
+      } else {
+        const ptr=(st.h<<8)|st.l,wanted=(st.d<<8)|st.e;
+        let n=Math.min(wanted,st.c===0x13?(this.disk.shortRead??wanted):(this.disk.shortWrite??wanted));
+        let bytes=this.files.get(file.path);
+        if(st.c===0x13){n=Math.min(n,Math.max(0,bytes.length-file.pos));this.mem.set(bytes.subarray(file.pos,file.pos+n),ptr);}
+        else {if(file.pos+n>bytes.length){const grow=Buffer.alloc(file.pos+n);bytes.copy(grow);bytes=grow;this.files.set(file.path,bytes);}bytes.set(this.mem.subarray(ptr,ptr+n),file.pos);}
+        file.pos+=n;st.d=n>>8;st.e=n&255;success();
+      }
+      if(this.disk.delayUs)this.tick(this.disk.delayUs*this.cpuHz/1e6);
+      st.pc=ret;st.sp=sp+2;return null;
+    }
     switch (st.c) {
       case 0x41:                                       // EXIT, B=code
         this.exitCode = st.b;
@@ -306,6 +341,7 @@ export function runImage(Z80, mach, { entry, stack, iff = 1, budget = 4_000_000 
       mach.violations.push(`stack inside library workspace: SP=${st.sp.toString(16)}`);
     if (st.sp < mach.minSpSeen) mach.minSpSeen = st.sp;
     if (st.sp > mach.maxSpSeen) mach.maxSpSeen = st.sp;
+    if(mach.crcEntries.has(st.pc))mach.crcCalls++;
     mach.trace.push({ pc: st.pc, sp: st.sp, iff1: st.iff1 });
     if (mach.trace.length > 16) mach.trace.shift();
     mach.tick(z.run_instruction());

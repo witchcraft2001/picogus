@@ -22,7 +22,7 @@ import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
 const stage = arg('--stage', 'S0b');
-if (!['S0b','S1','S2','S3'].includes(stage)) throw new Error('unknown package stage');
+if (!['S0b','S1','S2','S3','S4'].includes(stage)) throw new Error('unknown package stage');
 const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -76,7 +76,23 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = stage === 'S3' ? [
+const help = stage === 'S4' ? [
+ 'Ultra GS S4 - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
+ 'UGCFG MODE ULTRAGS',
+ 'UGMEM ROUNDTRIP 65536 /SLOW',
+ 'UGMEM ROUNDTRIP 8388608 /SLOW',
+ 'UGLOAD TEST.BIN /TYPE:BLOB /SLOW /VERIFY',
+ 'UGDUMP <handle> BACK.BIN /SLOW /VERIFY',
+ 'UGMEM FREE <handle>',
+ 'UGTEST PROTO',
+ 'FAST default has no host CRC; /VERIFY enables frame/data/file CRC and readback.',
+ '/CRC:hhhhhhhh checks only the known object CRC at SEAL without host CRC.',
+ '/SLOT:0|1 /BASE:hex /QUIET /?; default slot0, no automatic MODE/reset.',
+ 'GS_DATA only; BULK, music and legacy LOAD are not advertised.',
+ 'PGMULTI is a complete bundle; PGULTRA/PGSLOW/PGDEBUG replace all flash.',
+ 'Standalone diagnostics also replace all flash. Restore PGMULTI afterwards.',
+ 'C00 and physical PSRAM/ISA/electrical/frequency/temperature/SEAL timing remain pending.',
+].join('\r\n') : stage === 'S3' ? [
   'Ultra GS S3 memory stage - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
   'UGCFG MODE ULTRAGS -> UGMEM INFO -> UGMEM TEST QUICK -> UGMEM TEST FULL',
   'Expected on APS6404L: physical=pool=8388608; first_bad=0xFFFFFFFF.',
@@ -144,7 +160,7 @@ const help = stage === 'S3' ? [
 add('HELP.TXT', Buffer.from(help, 'ascii'), 'generated');
 if (stage==='S1') add('README.MD', readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/S1-README.md')), 'host/sprinter/ultrags/docs/S1-README.md');
 const license = [
-  'Ultra GS S0b package',
+  `Ultra GS ${stage} package`,
   '',
   'Firmware-side and host-side sources carry SPDX-License-Identifier:',
   'GPL-2.0-or-later per file headers, following upstream picogus.',
@@ -249,7 +265,7 @@ const imgBuf = makeImg(imgSorted);
 writeFileSync(join(outDir, `ug-${slug}.zip`), zipBuf);
 writeFileSync(join(outDir, `ug-${slug}.img`), imgBuf);
 const pman = {
-  stage: 'S0b', schema: 2, deterministic: true,
+  stage, schema: 2, deterministic: true,
   provenance: { ...provenance, fixtures: sha256(fixtureManifestBytes),
     packer: sha256(readFileSync(fileURLToPath(import.meta.url))) },
   scope: 'stage artifact; production 13.2 bundle NOT included (later stages)',

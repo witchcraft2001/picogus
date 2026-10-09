@@ -14,11 +14,25 @@ uint32_t mock_capacity=8u<<20, mock_alias_mask=0xffffffff, mock_now;
 int mock_stuck_bit=-1;
 bool mock_dma_stuck, mock_cs_stuck;
 uint8_t mock_id[8]={0x0d,0x5d,0x40};
-uint32_t time_us_32(void) { return mock_now++; }
+void (*mock_psram_hook)(void);
+static void psram_hook(void) {
+    void (*hook)(void)=mock_psram_hook;
+    mock_psram_hook=NULL;
+    if(hook) hook();
+}
+void (*mock_time_hook)(void);
+uint32_t time_us_32(void) {
+    void (*hook)(void)=mock_time_hook;
+    mock_time_hook=NULL;
+    if(hook) hook();
+    return mock_now++;
+}
 static bool dma_claims[12];
 static void (*irq_handler)(void);
 static uint spi_offset;
 void mock_reset(void) {
+    mock_psram_hook=NULL;
+    mock_time_hook=NULL;
     memset(mock_pios,0,sizeof(mock_pios)); memset(dma_claims,0,sizeof(dma_claims));
     memset(mock_starts,0,sizeof(mock_starts)); memset(mock_counts,0,sizeof(mock_counts));
     mock_tail_steps=mock_waits=0;
@@ -65,8 +79,8 @@ psram_spi_inst_t psram_spi_init_clkdiv(PIO p,int sm,float div,bool fudge) {
     spi_offset=s.offset; dma_channel_claim(2);dma_channel_claim(3);dma_channel_claim(4);p->enabled[sm]=true;return s;
 }
 void psram_spi_uninit(psram_spi_inst_t s,bool fudge) { assert(!s.pio->enabled[s.sm] && !mock_tail_steps); s.pio->used-=fudge?10:9; s.pio->claimed[s.sm]=false;dma_claims[2]=dma_claims[3]=dma_claims[4]=false; }
-void psram_read(psram_spi_inst_t *s,uint32_t off,uint8_t *dst,uint32_t n) { (void)s;assert(!mock_tail_steps && n<=31 && off+n<=sizeof(mock_memory));for(unsigned i=0;i<n;i++) dst[i]=mock_memory[((off+i)%mock_capacity)&mock_alias_mask];mock_tail_steps=3;mock_read_calls++;if(n>mock_max_read)mock_max_read=n; }
-void psram_write(psram_spi_inst_t *s,uint32_t off,const uint8_t *src,uint32_t n) { (void)s;assert(!mock_tail_steps && n<=27 && off+n<=sizeof(mock_memory));for(unsigned i=0;i<n;i++) mock_memory[((off+i)%mock_capacity)&mock_alias_mask]=src[i] & (mock_stuck_bit<0?255:~(1u<<mock_stuck_bit));mock_tail_steps=3;mock_write_calls++;if(n>mock_max_write)mock_max_write=n; }
+void psram_read(psram_spi_inst_t *s,uint32_t off,uint8_t *dst,uint32_t n) { (void)s;psram_hook();assert(!mock_tail_steps && n<=31 && off+n<=sizeof(mock_memory));for(unsigned i=0;i<n;i++) dst[i]=mock_memory[((off+i)%mock_capacity)&mock_alias_mask];mock_tail_steps=3;mock_read_calls++;if(n>mock_max_read)mock_max_read=n; }
+void psram_write(psram_spi_inst_t *s,uint32_t off,const uint8_t *src,uint32_t n) { (void)s;psram_hook();assert(!mock_tail_steps && n<=27 && off+n<=sizeof(mock_memory));for(unsigned i=0;i<n;i++) mock_memory[((off+i)%mock_capacity)&mock_alias_mask]=src[i] & (mock_stuck_bit<0?255:~(1u<<mock_stuck_bit));mock_tail_steps=3;mock_write_calls++;if(n>mock_max_write)mock_max_write=n; }
 void psram_write_async_fast(psram_spi_inst_t *s,uint32_t off,uint8_t *src,uint32_t n) { psram_write(s,off,src,n);mock_async_calls++; }
 void mutex_init(mutex_t *m) { assert(pthread_mutex_init(&m->mutex,NULL)==0);mock_last_mutex=&m->mutex; }
 bool mutex_try_enter(mutex_t *m,uint32_t *owner) { (void)owner;return pthread_mutex_trylock(&m->mutex)==0; }

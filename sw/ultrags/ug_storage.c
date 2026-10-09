@@ -7,31 +7,247 @@
 #include "ug_memory.h"
 #include "ug_minimal.h"
 #include "ug_config.h"
+#include "ug_s4.h"
+#include "pico/stdlib.h"
 #include <string.h>
 #include "ultrags_protocol.h"
 static ug_store_t store;
 static ug_memory_job_t job;
 static ug_psram_t *ps;
 static uint8_t memory_error, audio_error;
-static bool running, full_after_probe;
+static bool running, full_after_probe, gs_job;
 static uint32_t probe_tested, job_started;
 static unsigned busy;
+static void boot(void);
 static uint16_t get16(const uint8_t *p) { return p[0]|((uint16_t)p[1]<<8); }
 static void put16(uint8_t *p,uint16_t v) { p[0]=v; p[1]=v>>8; }
+/* CRC continuation uses the unfinalized ISO-HDLC accumulator. */
+static const uint32_t crc_table[256]={
+0x00000000u,0x77073096u,0xee0e612cu,0x990951bau,0x076dc419u,0x706af48fu,0xe963a535u,0x9e6495a3u,
+0x0edb8832u,0x79dcb8a4u,0xe0d5e91eu,0x97d2d988u,0x09b64c2bu,0x7eb17cbdu,0xe7b82d07u,0x90bf1d91u,
+0x1db71064u,0x6ab020f2u,0xf3b97148u,0x84be41deu,0x1adad47du,0x6ddde4ebu,0xf4d4b551u,0x83d385c7u,
+0x136c9856u,0x646ba8c0u,0xfd62f97au,0x8a65c9ecu,0x14015c4fu,0x63066cd9u,0xfa0f3d63u,0x8d080df5u,
+0x3b6e20c8u,0x4c69105eu,0xd56041e4u,0xa2677172u,0x3c03e4d1u,0x4b04d447u,0xd20d85fdu,0xa50ab56bu,
+0x35b5a8fau,0x42b2986cu,0xdbbbc9d6u,0xacbcf940u,0x32d86ce3u,0x45df5c75u,0xdcd60dcfu,0xabd13d59u,
+0x26d930acu,0x51de003au,0xc8d75180u,0xbfd06116u,0x21b4f4b5u,0x56b3c423u,0xcfba9599u,0xb8bda50fu,
+0x2802b89eu,0x5f058808u,0xc60cd9b2u,0xb10be924u,0x2f6f7c87u,0x58684c11u,0xc1611dabu,0xb6662d3du,
+0x76dc4190u,0x01db7106u,0x98d220bcu,0xefd5102au,0x71b18589u,0x06b6b51fu,0x9fbfe4a5u,0xe8b8d433u,
+0x7807c9a2u,0x0f00f934u,0x9609a88eu,0xe10e9818u,0x7f6a0dbbu,0x086d3d2du,0x91646c97u,0xe6635c01u,
+0x6b6b51f4u,0x1c6c6162u,0x856530d8u,0xf262004eu,0x6c0695edu,0x1b01a57bu,0x8208f4c1u,0xf50fc457u,
+0x65b0d9c6u,0x12b7e950u,0x8bbeb8eau,0xfcb9887cu,0x62dd1ddfu,0x15da2d49u,0x8cd37cf3u,0xfbd44c65u,
+0x4db26158u,0x3ab551ceu,0xa3bc0074u,0xd4bb30e2u,0x4adfa541u,0x3dd895d7u,0xa4d1c46du,0xd3d6f4fbu,
+0x4369e96au,0x346ed9fcu,0xad678846u,0xda60b8d0u,0x44042d73u,0x33031de5u,0xaa0a4c5fu,0xdd0d7cc9u,
+0x5005713cu,0x270241aau,0xbe0b1010u,0xc90c2086u,0x5768b525u,0x206f85b3u,0xb966d409u,0xce61e49fu,
+0x5edef90eu,0x29d9c998u,0xb0d09822u,0xc7d7a8b4u,0x59b33d17u,0x2eb40d81u,0xb7bd5c3bu,0xc0ba6cadu,
+0xedb88320u,0x9abfb3b6u,0x03b6e20cu,0x74b1d29au,0xead54739u,0x9dd277afu,0x04db2615u,0x73dc1683u,
+0xe3630b12u,0x94643b84u,0x0d6d6a3eu,0x7a6a5aa8u,0xe40ecf0bu,0x9309ff9du,0x0a00ae27u,0x7d079eb1u,
+0xf00f9344u,0x8708a3d2u,0x1e01f268u,0x6906c2feu,0xf762575du,0x806567cbu,0x196c3671u,0x6e6b06e7u,
+0xfed41b76u,0x89d32be0u,0x10da7a5au,0x67dd4accu,0xf9b9df6fu,0x8ebeeff9u,0x17b7be43u,0x60b08ed5u,
+0xd6d6a3e8u,0xa1d1937eu,0x38d8c2c4u,0x4fdff252u,0xd1bb67f1u,0xa6bc5767u,0x3fb506ddu,0x48b2364bu,
+0xd80d2bdau,0xaf0a1b4cu,0x36034af6u,0x41047a60u,0xdf60efc3u,0xa867df55u,0x316e8eefu,0x4669be79u,
+0xcb61b38cu,0xbc66831au,0x256fd2a0u,0x5268e236u,0xcc0c7795u,0xbb0b4703u,0x220216b9u,0x5505262fu,
+0xc5ba3bbeu,0xb2bd0b28u,0x2bb45a92u,0x5cb36a04u,0xc2d7ffa7u,0xb5d0cf31u,0x2cd99e8bu,0x5bdeae1du,
+0x9b64c2b0u,0xec63f226u,0x756aa39cu,0x026d930au,0x9c0906a9u,0xeb0e363fu,0x72076785u,0x05005713u,
+0x95bf4a82u,0xe2b87a14u,0x7bb12baeu,0x0cb61b38u,0x92d28e9bu,0xe5d5be0du,0x7cdcefb7u,0x0bdbdf21u,
+0x86d3d2d4u,0xf1d4e242u,0x68ddb3f8u,0x1fda836eu,0x81be16cdu,0xf6b9265bu,0x6fb077e1u,0x18b74777u,
+0x88085ae6u,0xff0f6a70u,0x66063bcau,0x11010b5cu,0x8f659effu,0xf862ae69u,0x616bffd3u,0x166ccf45u,
+0xa00ae278u,0xd70dd2eeu,0x4e048354u,0x3903b3c2u,0xa7672661u,0xd06016f7u,0x4969474du,0x3e6e77dbu,
+0xaed16a4au,0xd9d65adcu,0x40df0b66u,0x37d83bf0u,0xa9bcae53u,0xdebb9ec5u,0x47b2cf7fu,0x30b5ffe9u,
+0xbdbdf21cu,0xcabac28au,0x53b39330u,0x24b4a3a6u,0xbad03605u,0xcdd70693u,0x54de5729u,0x23d967bfu,
+0xb3667a2eu,0xc4614ab8u,0x5d681b02u,0x2a6f2b94u,0xb40bbe37u,0xc30c8ea1u,0x5a05df1bu,0x2d02ef8du
+};
+static uint32_t crc_step(uint32_t crc,const uint8_t *p,unsigned n) {
+    while(n--) crc=crc_table[(crc^*p++)&255]^(crc>>8);
+    return crc;
+}
+static uint32_t stats[16];
+void ug_stat_add(unsigned i,uint32_t n) {
+    uint32_t v=__atomic_load_n(stats+i,__ATOMIC_RELAXED), next;
+    do { next=n>UINT32_MAX-v?UINT32_MAX:v+n; }
+    while(!__atomic_compare_exchange_n(stats+i,&v,next,false,__ATOMIC_RELAXED,__ATOMIC_RELAXED));
+}
+void ug_stat_max(unsigned i,uint32_t n) {
+    uint32_t v=__atomic_load_n(stats+i,__ATOMIC_RELAXED);
+    while(v<n && !__atomic_compare_exchange_n(stats+i,&v,n,false,__ATOMIC_RELAXED,__ATOMIC_RELAXED)) {}
+}
+void ug_stats_copy(uint8_t out[64]) {
+    for(unsigned i=0;i<16;i++) ug_put32(out+4*i,__atomic_load_n(stats+i,__ATOMIC_RELAXED));
+}
+void ug_stats_clear(void) { for(unsigned i=0;i<16;i++) __atomic_store_n(stats+i,0,__ATOMIC_RELAXED); }
+/* NONE, PREPARING, ACK_PENDING, GRANTED, CRC_CHECKING, COMMITTING. The release of
+ * GRANTED publishes the descriptor and SRAM; END revokes it before SPI. */
+enum { T_NONE,T_PREP,T_ACK,T_GRANT,T_CHECK,T_COMMIT };
+enum { T_CANCEL_REQUESTED=256 };
+static struct {
+    uint8_t buffers[2][1024];
+    unsigned phase;
+    uint32_t token, next_token, offset, expected_crc, last, cursor, crc;
+    uint16_t handle, length, done;
+    uint8_t direction, verified, fault;
+    bool cancelled_command;
+} transfer;
+static struct { bool active; uint16_t handle; uint32_t cursor,crc,expected,started; bool verify; } sealing;
+volatile uint32_t ug_seal_elapsed_us,ug_service_max_us,ug_spi_slice_max_us;
+#ifdef UG_S4_TEST
+void ug_storage_test_tokens(uint32_t next) { transfer.next_token=next; }
+uint32_t ug_storage_test_crc_step(uint32_t crc,const uint8_t *p,unsigned n) { return crc_step(crc,p,n); }
+#endif
+static unsigned phase(void) { return __atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE)&255; }
+static void set_phase(unsigned p) {
+    unsigned v=__atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE);
+    while(!__atomic_compare_exchange_n(&transfer.phase,&v,(v&T_CANCEL_REQUESTED)|p,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {}
+}
+bool ug_storage_read_available(void) { return ug_storage_grant()==16 && __atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)<transfer.length; }
+bool ug_storage_transfer(void) { return phase()!=T_NONE; }
+uint8_t ug_storage_grant(void) {
+    /* A0/A1 revoke permission in core0 immediately, while core1 releases the
+     * pin cooperatively. Cleanup can leave the data phase after cancellation. */
+    return __atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE)==T_GRANT?(transfer.direction?16:8):0;
+}
+void ug_storage_grant_ack(uint32_t now) {
+    if(phase()==T_ACK) { __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE); set_phase(T_GRANT); }
+}
+void ug_storage_request_cancel(void) { __atomic_fetch_or(&transfer.phase,T_CANCEL_REQUESTED,__ATOMIC_ACQ_REL); }
+void ug_storage_data_overflow(void) {
+    if(phase()==T_GRANT) __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE);
+}
+static void release_transfer(void) {
+    ug_store_pin(&store,transfer.handle,false);
+    set_phase(T_NONE);
+}
+static bool begin_commit(void) {
+    /* The CAS is the point of no return: cancellation and COMMITTING share
+     * one atomic word, so a cancellation arriving during the final CRC slice
+     * cannot be lost between checking a flag and publishing COMMITTING. */
+    unsigned expected=phase();
+    if(__atomic_compare_exchange_n(&transfer.phase,&expected,T_COMMIT,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) return true;
+    release_transfer(); return false;
+}
+void ug_storage_touch(uint32_t now) {
+    if(phase()==T_GRANT && __atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)<transfer.length) __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE);
+}
+uint8_t ug_storage_data_write(uint8_t byte,uint32_t now) {
+    if(phase()!=T_GRANT || transfer.direction) return UG_ERR_STATE;
+    if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)==transfer.length) { __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE); return UG_ERR_OVERFLOW; }
+    transfer.buffers[0][__atomic_fetch_add(&transfer.done,1,__ATOMIC_ACQ_REL)]=byte; __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE); return 0;
+}
+uint8_t ug_storage_data_read(uint8_t *byte,uint32_t now) {
+    if(phase()!=T_GRANT || !transfer.direction) return UG_ERR_STATE;
+    if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)==transfer.length) { __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE); return UG_ERR_UNDERFLOW; }
+    *byte=transfer.buffers[1][__atomic_fetch_add(&transfer.done,1,__ATOMIC_ACQ_REL)]; __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE); return 0;
+}
+/* Three SRAM snapshots: published, held by core0, and writer's spare.
+ * Ownership is exchanged in one atomic word. No PSRAM or wait for core1
+ * is possible in the ISA latch/read paths. */
+static uint8_t snapshots[3][128];
+static unsigned snap_owners; /* bits0..1=published, bits2..3=held */
+static uint32_t snap_seq;
+static void make_snapshot(uint8_t *r);
+static uint64_t output_frames;
+static uint32_t last_frames, last_underruns;
+void ug_storage_audio(uint32_t frames,uint32_t underruns) {
+    output_frames+=(uint32_t)(frames-last_frames); last_frames=frames;
+    ug_stat_add(9,(uint32_t)(underruns-last_underruns)); last_underruns=underruns;
+}
+void ug_storage_snap_init(void) {
+    snap_seq=0; snap_owners=4;
+    for(unsigned i=0;i<3;i++) make_snapshot(snapshots[i]);
+}
+void ug_storage_latch(void) {
+    unsigned v=__atomic_load_n(&snap_owners,__ATOMIC_ACQUIRE), n;
+    do { n=(v&3)|((v&3)<<2); }
+    while(!__atomic_compare_exchange_n(&snap_owners,&v,n,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE));
+}
+uint8_t ug_storage_snap_byte(unsigned i) {
+    return snapshots[(__atomic_load_n(&snap_owners,__ATOMIC_ACQUIRE)>>2)&3][i];
+}
+static void make_snapshot(uint8_t *r) {
+    memset(r,0,128); ug_put32(r,++snap_seq); memcpy(r+4,&store.session,8);
+    memcpy(r+12,&output_frames,8); ug_put32(r+46,__atomic_load_n(stats+9,__ATOMIC_RELAXED));
+    r[27]=255; r[50]=audio_error;
+    for(unsigned i=0;i<8;i++) r[56+8*i]=127;
+    if(phase()!=T_NONE) { ug_put32(r+120,transfer.token); put16(r+124,__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)); put16(r+126,transfer.length); }
+}
+void ug_storage_snapshot(uint8_t out[128]) { make_snapshot(out); }
+static void publish_snapshot(void) {
+    unsigned v=__atomic_load_n(&snap_owners,__ATOMIC_ACQUIRE);
+    unsigned pub=v&3, held=(v>>2)&3;
+    unsigned spare=pub==held?(pub+1)%3:3-pub-held;
+    make_snapshot(snapshots[spare]);
+    /* If core0 latches during generation it only retains the published
+     * ownership, so spare remains ours. Retry only the pointer publication. */
+    while(!__atomic_compare_exchange_n(&snap_owners,&v,(v&12)|spare,false,__ATOMIC_RELEASE,__ATOMIC_ACQUIRE)) {}
+}
+static uint8_t commit_step(void) {
+    ug_object_t *o=ug_store_find(&store,transfer.handle);
+    uint32_t start=time_us_32();
+    unsigned n=transfer.length-transfer.cursor; if(n>256) n=256;
+    if(!o || ug_psram_write(ps,o->offset+transfer.offset+transfer.cursor,transfer.buffers[0]+transfer.cursor,n)) {
+        if(o) o->state=2; ug_stat_add(10,1); release_transfer(); return UG_ERR_PSRAM;
+    }
+    uint32_t elapsed=time_us_32()-start; if(elapsed>ug_spi_slice_max_us) ug_spi_slice_max_us=elapsed;
+    transfer.cursor+=n;
+    if(transfer.cursor==transfer.length) {
+        uint32_t end=transfer.offset+transfer.length;
+        if(end>o->uploaded) o->uploaded=end;
+        ug_stat_add(2,transfer.length); ug_stat_add(4,1); release_transfer();
+    }
+    return 0;
+}
+bool ug_storage_abort(uint32_t now) {
+    transfer.cancelled_command=false;
+    if(phase()==T_COMMIT) { uint8_t e=commit_step(); if(e) ug_minimal_error(e); if(phase()==T_COMMIT) return false; }
+    else if(phase()!=T_NONE) release_transfer();
+    if(sealing.active) { ug_store_pin(&store,sealing.handle,false); __atomic_store_n(&sealing.active,false,__ATOMIC_RELEASE); }
+    ug_storage_cancel(now); return true;
+}
+void ug_storage_gs_reset(bool cold,uint32_t now) {
+    /* A reset during COMMITTING is deferred by the frame cancellation
+     * path. Cold reset owns the explicit destructive store operation. */
+    if(!ug_storage_abort(now)) return;
+    ug_store_reset(&store); transfer.next_token=1; boot();
+    if(cold && ps && ps->up) {
+        ug_memory_start(&job,ps,false,0,now); running=gs_job=true;
+        __atomic_store_n(&busy,1,__ATOMIC_RELEASE);
+        ug_minimal_ready(2,store.session);
+    }
+}
+void ug_storage_tick(uint32_t now) {
+    if(__atomic_fetch_and(&transfer.phase,~T_CANCEL_REQUESTED,__ATOMIC_ACQ_REL)&T_CANCEL_REQUESTED) {
+        /* A1 cancels only transfer staging. SEAL and MEM_TEST belong to the
+         * frame and are aborted only by the cooperative transport-reset path.
+         * A cancelled pending READ_BEGIN must return CANCELLED, not restart. */
+        unsigned p=phase();
+        if(p!=T_NONE && p!=T_COMMIT) {
+            transfer.cancelled_command=p==T_PREP || p==T_CHECK;
+            release_transfer();
+        }
+    }
+    if(phase()==T_GRANT && (uint32_t)(now-__atomic_load_n(&transfer.last,__ATOMIC_ACQUIRE))>=5000000) {
+        release_transfer(); ug_stat_add(8,1); ug_minimal_error(UG_ERR_TIMEOUT);
+    }
+    if(gs_job) {
+        ug_memory_step(&job,now);
+        if(!job.active) { running=gs_job=false; memory_error=job.status; __atomic_store_n(&busy,0,__ATOMIC_RELEASE); boot(); }
+    }
+    publish_snapshot();
+}
 static void boot(void) { ug_minimal_ready(audio_error?3:memory_error?1:0,store.session); }
 void ug_storage_bind(ug_psram_t *p,uint64_t session) {
     ps=p; ug_store_init(&store,0,session); memset(&job,0,sizeof(job));
-    running=false; memory_error=0; audio_error=0;
+    running=false; gs_job=false; memory_error=0; audio_error=0;
+    memset(&transfer,0,sizeof(transfer)); transfer.next_token=1; memset(&sealing,0,sizeof(sealing));
+    ug_stats_clear();
     __atomic_store_n(&busy,1,__ATOMIC_RELEASE); ug_minimal_ready(2,session);
 }
 void ug_storage_publish(uint32_t physical,uint8_t error,uint8_t ae) {
     store.pool=physical; memory_error=error; audio_error=ae;
     __atomic_store_n(&busy,0,__ATOMIC_RELEASE); boot();
 }
-bool ug_storage_busy(void) { return __atomic_load_n(&busy,__ATOMIC_ACQUIRE)!=0; }
+bool ug_storage_busy(void) { return __atomic_load_n(&busy,__ATOMIC_ACQUIRE)!=0 || ug_storage_transfer() || __atomic_load_n(&sealing.active,__ATOMIC_ACQUIRE); }
 void ug_storage_cancel(uint32_t now) {
     if(running) {
-        ug_memory_cancel(&job,now); running=false;
+        ug_memory_cancel(&job,now); running=gs_job=false;
         __atomic_store_n(&busy,0,__ATOMIC_RELEASE); boot();
     }
 }
@@ -46,7 +262,60 @@ static void unavailable_test(uint8_t *r,uint8_t *len) {
 bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
                         uint8_t *len,uint8_t *status,uint32_t now) {
     *len=*status=UG_ERR_OK;
-    if(running) {
+    if(transfer.cancelled_command) {
+        transfer.cancelled_command=false; *status=UG_ERR_CANCELLED; return true;
+    }
+    if(phase()==T_CHECK) {
+        /* Revoke the GS grant before CRC work and retain SRAM until the
+         * check completes. Cancellation here still leaves PSRAM untouched. */
+        unsigned k=transfer.length-transfer.cursor; if(k>256) k=256;
+        uint32_t start=time_us_32();
+        transfer.crc=crc_step(transfer.crc,transfer.buffers[0]+transfer.cursor,k);
+        uint32_t elapsed=time_us_32()-start; if(elapsed>ug_spi_slice_max_us) ug_spi_slice_max_us=elapsed;
+        transfer.cursor+=k;
+        if(transfer.cursor<transfer.length) return false;
+        if((transfer.crc^UINT32_MAX)!=transfer.expected_crc) {
+            release_transfer(); *status=UG_ERR_CRC; return true;
+        }
+        transfer.cursor=0;
+        if(!begin_commit()) { *status=UG_ERR_CANCELLED; return true; }
+        return false;
+    }
+    if(phase()==T_PREP) {
+        ug_object_t *o=ug_store_find(&store,transfer.handle);
+        uint32_t start=time_us_32();
+        unsigned k=transfer.length-transfer.cursor; if(k>256) k=256;
+        if(!o || ug_psram_read(ps,o->offset+transfer.offset+transfer.cursor,transfer.buffers[1]+transfer.cursor,k)) {
+            release_transfer(); ug_stat_add(10,1); *status=UG_ERR_PSRAM; return true;
+        }
+        if(transfer.verified)
+            transfer.expected_crc=crc_step(transfer.expected_crc,transfer.buffers[1]+transfer.cursor,k);
+        uint32_t elapsed=time_us_32()-start; if(elapsed>ug_spi_slice_max_us) ug_spi_slice_max_us=elapsed;
+        transfer.cursor+=k; if(transfer.cursor<transfer.length) return false;
+        ug_put32(r,transfer.token); *len=4;
+        if(transfer.verified) { transfer.expected_crc^=UINT32_MAX; ug_put32(r+4,transfer.expected_crc); *len=8; }
+        set_phase(T_ACK); return true;
+    }
+    if(phase()==T_COMMIT) { *status=commit_step(); return phase()!=T_COMMIT; }
+    if(sealing.active) {
+        ug_object_t *o=ug_store_find(&store,sealing.handle);
+        unsigned k=o->size-sealing.cursor; if(k>256) k=256;
+        uint32_t start=time_us_32();
+        if(ug_psram_read(ps,o->offset+sealing.cursor,transfer.buffers[1],k)) {
+            o->state=2; *status=UG_ERR_PSRAM; ug_stat_add(10,1);
+        } else {
+            sealing.crc=crc_step(sealing.crc,transfer.buffers[1],k); sealing.cursor+=k;
+        }
+        uint32_t elapsed=time_us_32()-start;
+        if(elapsed>ug_spi_slice_max_us) ug_spi_slice_max_us=elapsed;
+        if(!*status && sealing.cursor<o->size) return false;
+        ug_seal_elapsed_us=time_us_32()-sealing.started;
+        uint32_t actual=sealing.crc^UINT32_MAX;
+        if(!*status && sealing.verify && actual!=sealing.expected) { o->state=2; *status=UG_ERR_CRC; }
+        if(!*status) { o->crc=actual; o->state=1; ug_put32(r,actual); *len=4; }
+        ug_store_pin(&store,o->handle,false); __atomic_store_n(&sealing.active,false,__ATOMIC_RELEASE); return true;
+    }
+    if(running && !gs_job) {
         ug_memory_step(&job,now); if(job.active) return false;
         if(!job.status && job.probe) {
             store.pool=job.physical;
@@ -64,7 +333,14 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
     }
     unsigned expected;
     switch(op) {
-    case UG_OP_CAPS: case UG_OP_MEM_INFO: expected=0; break;
+    case UG_OP_CAPS: case UG_OP_MEM_INFO: case UG_OP_STATS: case UG_OP_CLEAR_STATS: case UG_OP_SNAPSHOT: expected=0; break;
+    case UG_OP_WRITE_BEGIN:
+        if(n<9) { *status=UG_ERR_LENGTH; return true; }
+        expected=(q[8]&128)?13:9; break;
+    case UG_OP_READ_BEGIN: expected=9; break;
+    case UG_OP_WRITE_END: case UG_OP_TRANSFER_CANCEL: expected=4; break;
+    case UG_OP_READ_END: expected=(phase()!=T_NONE && transfer.verified)?8:4; break;
+    case UG_OP_SEAL: expected=7; break;
     case UG_OP_MEM_TEST: expected=1; break;
     case UG_OP_RESET_STORE: case UG_OP_ALLOC: expected=5; break;
     case UG_OP_FREE: case UG_OP_OBJECT_INFO: case UG_OP_OBJECT_ENUM: expected=2; break;
@@ -72,13 +348,78 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
     }
     if(n!=expected) { *status=UG_ERR_LENGTH; return true; }
     if(op==UG_OP_CAPS) {
+        if(ug_storage_transfer()) { *status=UG_ERR_BUSY; return true; }
         memset(r,0,32); *len=32;
-        ug_put32(r,128u|(ug_config_aliases(&ug_cfg)?512u:0u)); /* only MEM_TEST (+ live GS alias setting) */
+        ug_put32(r,226u|(ug_config_aliases(&ug_cfg)?512u:0u)); /* GS_DATA, CRC, snapshot, MEM_TEST; no music/BULK */
         ug_put32(r+8,48000); put16(r+12,1024); put16(r+14,128); put16(r+16,128);
         put16(r+24,ug_cfg.settings->UltraGS.basePort); put16(r+26,ug_cfg.settings->UltraGS.bulkAlias);
         return true;
     }
-    if(ug_storage_busy()) { *status=UG_ERR_BUSY; return true; }
+    if(__atomic_load_n(&busy,__ATOMIC_ACQUIRE)) { *status=UG_ERR_BUSY; return true; }
+    if(ug_storage_transfer() && op!=UG_OP_MEM_INFO && op!=UG_OP_OBJECT_INFO &&
+       op!=UG_OP_WRITE_END && op!=UG_OP_READ_END && op!=UG_OP_TRANSFER_CANCEL &&
+       op!=UG_OP_STATS && op!=UG_OP_SNAPSHOT) { *status=UG_ERR_BUSY; return true; }
+    if(ug_storage_transfer() && op==UG_OP_OBJECT_INFO && get16(q)!=transfer.handle) {
+        *status=UG_ERR_BUSY; return true;
+    }
+    if(op==UG_OP_STATS) { ug_stats_copy(r); *len=64; return true; }
+    if(op==UG_OP_CLEAR_STATS) { ug_stats_clear(); return true; }
+    if(op==UG_OP_SNAPSHOT) { ug_storage_snapshot(r); *len=128; return true; }
+    if(op==UG_OP_WRITE_BEGIN || op==UG_OP_READ_BEGIN) {
+        uint8_t trans=q[8];
+        if(trans&126) { *status=UG_ERR_BAD_ARGUMENT; return true; }
+        if(!(trans&1)) { *status=UG_ERR_BAD_OPCODE; return true; }
+        if(!ug_minimal_gs_idle()) { *status=UG_ERR_BUSY; return true; }
+        ug_object_t *o=ug_store_find(&store,get16(q));
+        uint32_t offset=ug_get32(q+2); uint16_t count=get16(q+6);
+        if(!o) *status=UG_ERR_HANDLE;
+        else if(!count || count>1024) *status=UG_ERR_LENGTH;
+        else if(o->state==2 || (op==UG_OP_WRITE_BEGIN && o->state!=0)) *status=UG_ERR_STATE;
+        else if(op==UG_OP_WRITE_BEGIN && o->pins) *status=UG_ERR_PINNED;
+        else if(offset>o->size || count>o->size-offset) *status=UG_ERR_RANGE;
+        else if(op==UG_OP_READ_BEGIN && (offset>o->uploaded || count>o->uploaded-offset)) *status=UG_ERR_RANGE;
+        else if(op==UG_OP_WRITE_BEGIN && offset!=o->uploaded && !(o->kind==0 && offset<=o->uploaded && count<=o->uploaded-offset)) *status=UG_ERR_RANGE;
+        else if(!transfer.next_token) *status=UG_ERR_OVERFLOW;
+        else *status=ug_store_pin(&store,o->handle,true);
+        if(*status) return true;
+        transfer.handle=o->handle; transfer.offset=offset; transfer.length=count;
+        __atomic_store_n(&transfer.done,0,__ATOMIC_RELAXED); transfer.cursor=0; __atomic_store_n(&transfer.fault,0,__ATOMIC_RELAXED); transfer.verified=trans>>7;
+        transfer.direction=op==UG_OP_READ_BEGIN; transfer.token=transfer.next_token++;
+        if(!transfer.direction) {
+            transfer.expected_crc=transfer.verified?ug_get32(q+9):0;
+            set_phase(T_ACK); ug_put32(r,transfer.token); *len=4; return true;
+        }
+        transfer.expected_crc=UINT32_MAX; set_phase(T_PREP); return false;
+    }
+    if(op==UG_OP_WRITE_END || op==UG_OP_READ_END || op==UG_OP_TRANSFER_CANCEL) {
+        if(phase()==T_NONE || ug_get32(q)!=transfer.token) { *status=UG_ERR_HANDLE; return true; }
+        if(op==UG_OP_TRANSFER_CANCEL) { release_transfer(); return true; }
+        if(phase()!=T_GRANT || transfer.direction!=(op==UG_OP_READ_END)) { *status=UG_ERR_STATE; return true; }
+        uint8_t fault=__atomic_load_n(&transfer.fault,__ATOMIC_ACQUIRE);
+        if(fault) *status=fault;
+        else if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)!=transfer.length) *status=UG_ERR_SHORT_TRANSFER;
+        else if(transfer.verified && transfer.direction && ug_get32(q+4)!=transfer.expected_crc) *status=UG_ERR_CRC;
+        if(*status || transfer.direction) {
+            if(!*status) { ug_stat_add(3,transfer.length); ug_stat_add(5,1); }
+            release_transfer(); return true;
+        }
+        transfer.cursor=0;
+        if(transfer.verified) { transfer.crc=UINT32_MAX; set_phase(T_CHECK); }
+        else if(!begin_commit()) { *status=UG_ERR_CANCELLED; return true; }
+        return false;
+    }
+    if(op==UG_OP_SEAL) {
+        ug_object_t *o=ug_store_find(&store,get16(q));
+        if(q[2]>1 || (!q[2] && ug_get32(q+3))) *status=UG_ERR_BAD_ARGUMENT;
+        else if(!o) *status=UG_ERR_HANDLE;
+        else if(o->kind) *status=UG_ERR_BAD_OPCODE;
+        else if(o->state || o->uploaded!=o->size) *status=UG_ERR_STATE;
+        else if(o->pins) *status=UG_ERR_PINNED;
+        else *status=ug_store_pin(&store,o->handle,true);
+        if(*status) return true;
+        __atomic_store_n(&sealing.active,true,__ATOMIC_RELEASE); sealing.handle=o->handle; sealing.cursor=0; sealing.crc=UINT32_MAX;
+        sealing.verify=q[2]; sealing.expected=ug_get32(q+3); sealing.started=now; return false;
+    }
     if(op==UG_OP_MEM_INFO) {
         uint32_t free_bytes,largest; ug_store_space(&store,&free_bytes,&largest);
         ug_put32(r,store.pool); ug_put32(r+4,store.pool); ug_put32(r+8,free_bytes);
@@ -87,7 +428,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         uint8_t mode=op==UG_OP_MEM_TEST?q[0]:q[4];
         if(mode>1 || (op==UG_OP_RESET_STORE && ug_get32(q)!=UG_RESET_STORE_KEY)) { *status=UG_ERR_BAD_ARGUMENT; return true; }
         if(op==UG_OP_MEM_TEST && store.count) { *status=UG_ERR_BUSY; return true; }
-        if(op==UG_OP_RESET_STORE) { ug_store_reset(&store); boot(); }
+        if(op==UG_OP_RESET_STORE) { ug_store_reset(&store); transfer.next_token=1; boot(); }
         if(op==UG_OP_RESET_STORE && !mode) { memcpy(r,&store.session,8); *len=8; return true; }
         if(!ps || (!ps->up && !ps->divider256)) {
             if(!memory_error) { memory_error=UG_ERR_PSRAM; boot(); }

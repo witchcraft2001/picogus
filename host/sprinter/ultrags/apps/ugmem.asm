@@ -1,11 +1,13 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; S3 memory tools. Real DSS/Z80, conservative eight-byte frame windows.
     DEFINE UG_DSS_TIMED
+    IFNDEF APP_PROTO
     ORG 0x8000
 HEADER:
     DB "EXE",1
     DW 128,0,0,0,0,0,ENTRY,ENTRY,0xBFFE
     DS 128-($-HEADER),0
+    ENDIF
     INCLUDE "ugmem.inc"
 RESP EQU 0xB900
 CLI EQU 0xBA00
@@ -105,6 +107,13 @@ ENTRY:
     ld a,(RESP)
     and 128
     jp z,PROTOCOL
+    IFDEF APP_LOAD
+    jp LOAD_FILE
+    ELSE
+    IFDEF APP_DUMP
+    jp DUMP_FILE
+    ENDIF
+    ENDIF
     ld a,(CMD)
     cp 1
     jp z,INFO
@@ -116,16 +125,26 @@ ENTRY:
     jp z,RESET
     cp 5
     jp z,FREE
-    ld hl,unavailable_text
-    ld (REASON),hl
-    jp PROTOCOL
+    IFDEF APP_LOAD
+    jp LOAD_FILE
+    ELSE
+    IFDEF APP_DUMP
+    jp DUMP_FILE
+    ELSE
+    IFDEF APP_PROTO
+    jp PROTO_SUITE
+    ELSE
+    jp ROUNDTRIP
+    ENDIF
+    ENDIF
+    ENDIF
 INIT_BAD:
     call INIT
     jp SYNTAX
 INIT:
     ld hl,V
     ld de,V+1
-    ld bc,63
+    ld bc,191
     ld (hl),0
     ldir
     call UG_LIB_INIT
@@ -133,6 +152,11 @@ INIT:
     ld (BASE),hl
     ld hl,generic_reason
     ld (REASON),hl
+    ld hl,0
+    add hl,sp
+    inc hl
+    inc hl
+    ld (V+128),hl
     ret
 ; Tokenize whitespace; options may appear anywhere. Three positional words max.
 PARSE:
@@ -196,12 +220,34 @@ PARSE:
     ld a,(ARGC)
     or a
     jp z,.bad
+    IFDEF APP_LOAD
+    cp 1
+    jp nz,.bad
+    ld a,(BLOBTYPE)
+    or a
+    jp z,.bad
+    xor a
+    ret
+    ELSE
+    IFDEF APP_DUMP
+    cp 2
+    jp nz,.bad
+    ld hl,(ARGS)
+    call NUMBER
+    ret c
+    ld (HANDLE),de
+    xor a
+    ret
+    ENDIF
+    ENDIF
     ld hl,(ARGS)
     ld de,commands
     call LOOKUP
     jp c,.bad
     ld (CMD),a
     ld b,1
+    cp 7
+    jr z,.count
     cp 3
     jr c,.count
     inc b
@@ -216,6 +262,8 @@ PARSE:
     jr z,.reset
     cp 5
     jr z,.handle
+    cp 6
+    jr z,.size
     or a
     ret
 .test:
@@ -229,6 +277,16 @@ PARSE:
     ret c
     dec a
     ld (MODE),a
+    ret
+.size:
+    ld hl,(ARGS+2)
+    call NUMBER32
+    ret c
+    ld hl,NUM32
+    ld de,SIZE32
+    ld bc,4
+    ldir
+    xor a
     ret
 .handle:
     ld hl,(ARGS+2)
@@ -258,13 +316,41 @@ OPTION:
     ret
 .verify:
     cp 3
-    scf
-    ret nz
+    jr nz,.slow
     ld a,1
     ld (VERIFY),a
     or a
     ret
+.slow:
+    cp 4
+    jr nz,.overwrite
+    or a
+    ret
+.overwrite:
+    cp 5
+    jr nz,.blob
+    IFDEF APP_DUMP
+    ld (OVERWRITE),a
+    or a
+    ret
+    ELSE
+    scf
+    ret
+    ENDIF
+.blob:
+    cp 6
+    scf
+    ret nz
+    IFDEF APP_LOAD
+    ld (BLOBTYPE),a
+    or a
+    ENDIF
+    ret
 .prefix:
+    push hl
+    call BLOB_OPTION
+    pop hl
+    ret nc
     push hl
     ld de,slot_prefix
     call PREFIX
@@ -699,6 +785,11 @@ RPC_ERROR:
     cp 1
     jr z,.host
     ld a,b
+    cp 4
+    jr nz,.busy
+    ld a,9
+    jp EXIT
+.busy:
     cp 5
     jr nz,.memory
     ld hl,busy_text
@@ -749,6 +840,7 @@ PASS:
     xor a
 EXIT:
     ld (ERR),a
+    call BLOB_CLEANUP
     call UG_CLOSE
     ld a,(ERR)
     or a
@@ -775,6 +867,7 @@ EXIT:
     ld hl,newline
     call PRINT
 .exit:
+    ld sp,(V+128)
     ld a,(ERR)
     ld b,a
     ld c,0x41
@@ -920,15 +1013,16 @@ DECIMAL:
     jr .next
 powers:
     DD 1000000000,100000000,10000000,1000000,100000,10000,1000,100,10,1,0
-commands: DB "INFO",0,1,"LIST",0,2,"TEST",0,3,"RESET",0,4,"FREE",0,5,"ROUNDTRIP",0,6,0
-options: DB "/QUIET",0,1,"/?",0,2,"/VERIFY",0,3,0
+commands: DB "INFO",0,1,"LIST",0,2,"TEST",0,3,"RESET",0,4,"FREE",0,5,"ROUNDTRIP",0,6,"PROTO",0,7,0
+options: DB "/QUIET",0,1,"/?",0,2,"/VERIFY",0,3,"/SLOW",0,4,"/OVERWRITE",0,5,"/TYPE:BLOB",0,6,0
 test_modes: DB "QUICK",0,1,"FULL",0,2,0
 reset_modes: DB "WARM",0,1,"COLD",0,2,0
 slot_prefix: DB "/SLOT:",0
 base_prefix: DB "/BASE:",0
 info_magic: DB "UGS1",1,0,8
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
-    DB "/SLOT:0|1 /BASE:hex /QUIET /VERIFY /?; ROUNDTRIP unavailable until S4",13,10,0
+    DB "ROUNDTRIP bytes /SLOW /VERIFY /SLOT:0|1 /BASE:hex /QUIET /?",13,10
+    DB "UGLOAD file /TYPE:BLOB [/CRC:hhhhhhhh] | UGDUMP handle file [/OFFSET:N /LENGTH:N /OVERWRITE]",13,10,0
 warning_text: DB "WARNING RESET destroys all loaded objects",13,10,0
 unavailable_text: DB "ROUNDTRIP_UNAVAILABLE_UNTIL_S4",0
 generic_reason: DB "MEMORY_OR_PROTOCOL",0
@@ -953,5 +1047,9 @@ pass_text: DB "RESULT PASS code=0",13,10,0
 fail_text: DB "RESULT FAIL code=",0
 reason_text: DB " reason=",0
 newline: DB 13,10,0
+    INCLUDE "ugblob.asm"
+    IFDEF APP_PROTO
+    INCLUDE "ugtestproto.asm"
+    ENDIF
     INCLUDE "ugproto.asm"
     ASSERT $ < 0xB800

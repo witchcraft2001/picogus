@@ -6,6 +6,7 @@
 #include "ug_audio.h"
 #include "ug_psram.h"
 #include "ug_storage.h"
+#include "ug_s4.h"
 #include "ug_memory.h"
 #include "../common/picogus.h"
 #include "include/pg_debug.h"
@@ -51,7 +52,14 @@ void play_ultrags(void) {
     ug_memory_job_t startup={};
     bool fudge=BOARD_TYPE!=PICOGUS_2, initialized=false, published=false;
     unsigned attempt=0;
+    uint32_t serviced_at=time_us_32();
     for(;;) {
+        /* Time between successive maintenance/dispatcher opportunities,
+         * including CRC, framing, snapshots, PSRAM and IRQ preemption. */
+        uint32_t now=time_us_32(), gap=now-serviced_at;
+        if(gap>ug_service_max_us) ug_service_max_us=gap;
+        serviced_at=now;
+        if(audio_up) { ug_audio_stats audio; ug_audio_stats_copy(&audio); ug_storage_audio(audio.frames_out,audio.underruns); }
         ug_maintenance_poll(); ug_board_maintenance(); ug_minimal_dispatch();
         if(!published) {
             if(!initialized) {

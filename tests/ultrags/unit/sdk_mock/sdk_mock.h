@@ -43,6 +43,9 @@ extern uint32_t mock_capacity, mock_alias_mask, mock_now;
 extern int mock_stuck_bit;
 extern bool mock_dma_stuck, mock_cs_stuck;
 extern uint8_t mock_id[8];
+/* One-shot core0 interleaving during a core1 PSRAM operation. */
+extern void (*mock_psram_hook)(void);
+extern void (*mock_time_hook)(void);
 uint32_t time_us_32(void);
 void mock_reset(void);
 void mock_complete(unsigned channel);
