@@ -53,7 +53,7 @@ void ug_minimal_ready(uint8_t s,uint64_t session) {
     session_id=session; __atomic_store_n(&boot_state,s,__ATOMIC_RELEASE);
 }
 bool ug_minimal_gs_idle(void) { return !gs_status() && !ug_storage_busy(); }
-bool ug_minimal_idle(void) { return __atomic_load_n(&frame_state,__ATOMIC_ACQUIRE)==IDLE && ug_minimal_gs_idle() && __atomic_load_n(&boot_state,__ATOMIC_ACQUIRE)!=2; }
+bool ug_minimal_idle(void) { return __atomic_load_n(&frame_state,__ATOMIC_ACQUIRE)==IDLE && ug_minimal_gs_idle() && !ug_storage_playback_busy() && __atomic_load_n(&boot_state,__ATOMIC_ACQUIRE)!=2; }
 static int reg(uint16_t port) {
     uint16_t base=ug_cfg.settings->UltraGS.basePort, alias=ug_cfg.settings->UltraGS.bulkAlias;
     if(port>=base && port-base<32) return port-base;

@@ -36,6 +36,9 @@
 #include "hardware/structs/watchdog.h"
 
 #include "../common/picogus.h"
+#ifdef SOUND_ULTRAGS
+#include "ultrags/ug_storage.h"
+#endif
 
 board_type_t BOARD_TYPE;
 
@@ -550,6 +553,9 @@ __force_inline void write_picogus_high(uint8_t value) {
 
     case CMD_MAINVOL: // Set the volume for CD Audio
         settings.Volume.mainVol = value;
+#ifdef SOUND_ULTRAGS
+        ug_storage_main_volume(value);
+#endif
 #if SOUND_GUS || SOUND_SB || SOUND_OPL || CDROM || SOUND_TANDY || SOUND_CMS
         set_volume(CMD_MAINVOL);
 #endif
@@ -810,6 +816,9 @@ void processSettings(void) {
     cdman_set_autoadvance(settings.CD.autoAdvance);
 #endif
     wtvol_from_mixer(settings.Global.waveTableVolume);
+#ifdef SOUND_ULTRAGS
+    ug_storage_main_volume(settings.Volume.mainVol);
+#endif
 #ifdef SOUND_SB
     sbdsp_set_wtvol_passthrough(&settings.Global.waveTableVolume, wtvol_from_mixer);
 #endif
@@ -1364,6 +1373,7 @@ int main()
     loadSettings(&settings, true /* migrate */);
     ug_runtime_init(&settings, ACTIVE_MODE);
 #ifdef SOUND_ULTRAGS
+    ug_storage_main_volume(settings.Volume.mainVol);
     ug_minimal_init();
 #endif
     hw_clear_bits(&xip_ctrl_hw->ctrl, XIP_CTRL_EN_BITS);

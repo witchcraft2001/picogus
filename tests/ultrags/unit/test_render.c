@@ -105,8 +105,11 @@ static void ref_render_stereo(ref_lane *lanes, int nlanes, uint8_t *mode,
         int32_t L = 0, R = 0;
         for (int i = 0; i < nlanes; i++) {
             int32_t s = ref_tick(&lanes[i]);
-            if (mode[i] == UG_LANE_LEFT) L += s;
-            else if (mode[i] == UG_LANE_RIGHT) R += s;
+            if (mode[i] == UG_LANE_LEFT) {
+                L += lanes[i].pan<=128?s:ref_rdiv((int64_t)s*(255-lanes[i].pan),127);
+            } else if (mode[i] == UG_LANE_RIGHT) {
+                R += lanes[i].pan>=128?s:ref_rdiv((int64_t)s*lanes[i].pan,128);
+            }
             else {
                 L += ref_rdiv((int64_t)s * (255 - lanes[i].pan), 255);
                 R += ref_rdiv((int64_t)s * lanes[i].pan, 255);
@@ -366,8 +369,8 @@ static void t_rounding_stereo_overflow(void) {
         mem[2*i] = (uint8_t)stereo[i]; mem[2*i+1] = (uint16_t)stereo[i] >> 8;
     }
     ug_mixer_init(&m, mock_if());
-    CHECK(ug_lane_set(&m,0,0,3,0,3,1ull<<32,64,0,UG_FMT_S16LE,UG_LANE_LEFT,0,0)==0,"left");
-    CHECK(ug_lane_set(&m,1,0,3,0,3,1ull<<32,64,0,UG_FMT_S16LE,UG_LANE_RIGHT,0,1)==0,"right");
+    CHECK(ug_lane_set(&m,0,0,3,0,3,1ull<<32,64,128,UG_FMT_S16LE,UG_LANE_LEFT,0,0)==0,"left");
+    CHECK(ug_lane_set(&m,1,0,3,0,3,1ull<<32,64,128,UG_FMT_S16LE,UG_LANE_RIGHT,0,1)==0,"right");
     ug_mixer_render(&m, kbuf, 4);
     CHECK(!memcmp(kbuf, stereo, sizeof(stereo)) && kbuf[6]==0 && kbuf[7]==0,
           "interleaved stereo stride and exact EOF");
@@ -379,6 +382,17 @@ static void t_rounding_stereo_overflow(void) {
                      UG_FMT_S8,UG_LANE_MONO,0,0)==0,"last byte valid");
     ug_mixer_render(&m,kbuf,2);
     CHECK(kbuf[1]==-256 && kbuf[3]==0 && mem_oob==0,"pool tail and silence after EOF");
+}
+
+static void t_u8_centering(void) {
+    ug_mixer m;
+    ug_mixer_init(&m,mock_if());
+    mem[0]=0; mem[1]=128; mem[2]=255;
+    CHECK(ug_lane_set(&m,0,0,3,0,3,1ull<<32,64,0,
+                      UG_FMT_U8,UG_LANE_MONO,0,0)==0,"u8 lane");
+    ug_mixer_render(&m,kbuf,4);
+    CHECK(kbuf[0]==-32768 && kbuf[2]==0 && kbuf[4]==32512 &&
+          kbuf[6]==0,"unsigned 8-bit midpoint and polarity");
 }
 
 static void t_actual_profiles(void) {
@@ -429,6 +443,7 @@ int main(void) {
     t_silence();
     t_determinism();
     t_rounding_stereo_overflow();
+    t_u8_centering();
     t_actual_profiles();
     if (fails == 0) {
         printf("ALL TESTS PASSED\n");

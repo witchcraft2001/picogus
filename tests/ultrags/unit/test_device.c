@@ -17,25 +17,27 @@ static void test_audio(void) {
     ug_hw_claim_audio();
     assert(ug_audio_init(pio1, 3, 0, 1, 16, 17, 48000) == 0);
     int ids[3];
+    uint32_t *ptrs[3];
     for (unsigned i = 0; i < 3; i++) {
         ids[i] = ug_audio_buf_get();
         assert(ids[i] >= 0);
-        ug_audio_buf_ptr(ids[i])[0] = 0x12340000u + i;
+        ptrs[i]=ug_audio_buf_ptr(ids[i]); ptrs[i][0] = 0x12340000u + i;
         ug_audio_buf_push(ids[i]);
+        assert(ug_audio_buf_ptr(ids[i])==NULL);
     }
     assert(ug_audio_buf_get() == -1);
     ug_audio_start();
     assert(pio1->enabled[3] && mock_starts[0] == 1);
-    assert(mock_dma_src[0] == ug_audio_buf_ptr(ids[0]));
+    assert(mock_dma_src[0] == ptrs[0]);
     ug_audio_start();
     assert(mock_starts[0] == 1);
     mock_complete(0);
-    assert(mock_dma_src[0] == ug_audio_buf_ptr(ids[1]));
+    assert(mock_dma_src[0] == ptrs[1]);
     assert(ug_audio_buf_get() == ids[0]);
     assert(ug_audio_buf_get() == -1); /* get reserves immediately. */
     ug_audio_buf_push(ids[0]);
     mock_complete(1);
-    assert(mock_dma_src[1] == ug_audio_buf_ptr(ids[2]));
+    assert(mock_dma_src[1] == ptrs[2]);
     ug_audio_set_active(false);
     assert(ug_audio_bufs_pending() == 2); /* Retain DMA-owned buffers on STOP. */
     mock_complete(0); mock_complete(1);
@@ -46,9 +48,31 @@ static void test_audio(void) {
     ug_audio_finish(); mock_complete(1);
     assert(ug_audio_get_stats()->underruns == 1); /* Expected EOF silence. */
     assert(ug_audio_pack_frame(-1234, 5678) == 0xfb2e162eu);
+    dma_channel_abort(0); dma_channel_abort(1);
     ug_audio_resume_idle();
     assert(mock_starts[0]==2 && mock_counts[0]==UG_AUDIO_FRAMES && mock_counts[1]==UG_AUDIO_FRAMES);
     for(unsigned i=0;i<UG_AUDIO_FRAMES;i++) assert(!mock_dma_src[0][i] && !mock_dma_src[1][i]);
+    for(unsigned i=0;i<3;i++) { ids[i]=ug_audio_buf_get(); assert(ids[i]>=0); ug_audio_buf_push(ids[i]); }
+    ug_audio_start(); mock_complete(0);
+    /* Maintenance aborts even an idle data buffer; resume must release it. */
+    dma_channel_abort(0); dma_channel_abort(1); ug_audio_resume_idle();
+    assert(ug_audio_bufs_pending()==0);
+    uint32_t completed=ug_audio_get_stats()->frames_out;
+    unsigned starts=mock_starts[0];
+    mock_complete_mask(3);
+    assert(ug_audio_get_stats()->frames_out==completed+2*UG_AUDIO_FRAMES);
+    assert(mock_starts[0]==starts+1 && dma_channel_is_busy(0));
+    assert(!dma_hw->ints0); /* Both completion flags acknowledged. */
+    ug_audio_set_active(true);
+    mock_complete(0); /* Starvation uses zero, then a new buffer recovers. */
+    int recovered=ug_audio_buf_get(); assert(recovered>=0);
+    uint32_t *recovered_ptr=ug_audio_buf_ptr(recovered);
+    recovered_ptr[0]=0x76543210; ug_audio_buf_push(recovered);
+    mock_complete(1);
+    assert(mock_dma_src[1]==recovered_ptr && recovered_ptr[0]==0x76543210);
+    ug_audio_finish(); mock_complete(0); mock_complete(1);
+    for(unsigned i=0;i<3;i++) assert(ug_audio_buf_get()>=0);
+    assert(ug_audio_buf_get()==-1);
     assert(!mock_irq_disabled);
     puts("audio: full queue, ownership, continuous SM, STOP/EOF, LR packing PASS");
 }

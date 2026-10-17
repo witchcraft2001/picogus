@@ -57,7 +57,7 @@ static inline uint32_t ug_audio_pack_frame(int16_t left, int16_t right) {
 int ug_audio_buf_get(void);
 /* Publish a filled buffer (index from ug_audio_buf_get). */
 void ug_audio_buf_push(int idx);
-/* Direct write of `frames` samples into buffer idx. */
+/* Writable pointer only while idx is FILLING. READY/DMA ownership is immutable. */
 uint32_t *ug_audio_buf_ptr(int idx);
 
 const ug_audio_stats *ug_audio_get_stats(void);
@@ -71,7 +71,7 @@ uint32_t ug_audio_lrclk_hz(void);     /* derived sample rate */
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* S2 explicit idle maintenance: rearm zero DMA after clock/Flash operation. */
+/* Idle maintenance only: channels must be aborted before returning ownership. */
 void ug_audio_resume_idle(void);
 #ifdef __cplusplus
 }

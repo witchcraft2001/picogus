@@ -53,18 +53,21 @@ uint pio_sm_get_pc(PIO p,uint sm) { (void)p;(void)sm;return spi_offset+(mock_tai
 uint pio_get_dreq(PIO p,uint sm,bool tx) { (void)p;(void)tx;return sm; }
 void dma_channel_claim(uint ch) { assert(ch<12 && !dma_claims[ch]); dma_claims[ch]=true; }
 bool dma_channel_is_claimed(uint ch) { return dma_claims[ch]; }
-bool dma_channel_is_busy(uint ch) { (void)ch;return mock_dma_stuck; }
-void dma_channel_abort(uint ch) { (void)ch; mock_tail_steps=0; }
+static bool audio_dma_busy[2];
+static unsigned dma_chain[12];
+bool dma_channel_is_busy(uint ch) { return ch<2?audio_dma_busy[ch]:mock_dma_stuck; }
+void dma_channel_abort(uint ch) { if(ch<2) audio_dma_busy[ch]=false; mock_tail_steps=0; }
+void dma_channel_acknowledge_irq0(uint ch) { mock_dma.ints0&=~(1u<<ch); }
 dma_channel_config dma_channel_get_default_config(uint ch) { dma_channel_config c={ch};return c; }
 void channel_config_set_dreq(dma_channel_config *c,uint d) { (void)c;(void)d; }
 void channel_config_set_transfer_data_size(dma_channel_config *c,uint s) { (void)c;assert(s==32); }
 void channel_config_set_read_increment(dma_channel_config *c,bool b) { (void)c;assert(b); }
 void channel_config_set_write_increment(dma_channel_config *c,bool b) { (void)c;assert(!b); }
 void channel_config_set_chain_to(dma_channel_config *c,uint ch) { c->chain=ch; }
-void dma_channel_configure(uint ch,dma_channel_config *c,uint32_t *dst,const uint32_t *src,uint n,bool start) { (void)c;(void)dst;assert(!start);mock_dma_src[ch]=src;mock_counts[ch]=n; }
+void dma_channel_configure(uint ch,dma_channel_config *c,uint32_t *dst,const uint32_t *src,uint n,bool start) { (void)dst;assert(!start);mock_dma_src[ch]=src;mock_counts[ch]=n;dma_chain[ch]=c->chain; if(ch<2) audio_dma_busy[ch]=false; }
 void dma_channel_set_read_addr(uint ch,const void *src,bool start) { assert(!start);mock_dma_src[ch]=src; }
 void dma_channel_set_trans_count(uint ch,uint n,bool start) { assert(!start);mock_counts[ch]=n; }
-void dma_channel_start(uint ch) { mock_starts[ch]++; }
+void dma_channel_start(uint ch) { mock_starts[ch]++; if(ch<2) audio_dma_busy[ch]=true; }
 void dma_irqn_set_channel_enabled(uint irq,uint ch,bool en) { assert(irq==0 && ch<2 && en); }
 void irq_set_exclusive_handler(uint irq,void (*f)(void)) { assert(irq==0);irq_handler=f; }
 void irq_set_priority(uint irq,uint p) { assert(irq==0 && p==0x40); }
@@ -73,7 +76,17 @@ void gpio_set_function(uint pin,uint fn) { (void)pin;(void)fn; }
 bool gpio_get(uint pin) { (void)pin;return mock_tail_steps==0; }
 uint32_t clock_get_hz(uint clk) { (void)clk;return 370000000; }
 void audio_i2s_program_init(PIO p,uint sm,uint off,uint data,uint clock) { (void)off;(void)data;(void)clock;p->enabled[sm]=false; }
-void mock_complete(unsigned ch) { assert(mock_irq_enabled && !mock_irq_disabled);mock_dma.ints0=1u<<ch;irq_handler(); }
+void mock_complete(unsigned ch) {
+    assert(mock_irq_enabled && !mock_irq_disabled);
+    audio_dma_busy[ch]=false; mock_counts[ch]=0;
+    unsigned peer=dma_chain[ch]; if(peer<2 && peer!=ch && mock_counts[peer]) audio_dma_busy[peer]=true;
+    mock_dma.ints0|=1u<<ch; irq_handler();
+}
+void mock_complete_mask(unsigned mask) {
+    assert(mock_irq_enabled && !mock_irq_disabled);
+    for(unsigned ch=0;ch<2;ch++) if(mask&(1u<<ch)) { audio_dma_busy[ch]=false; mock_counts[ch]=0; }
+    mock_dma.ints0|=mask; irq_handler();
+}
 psram_spi_inst_t psram_spi_init_clkdiv(PIO p,int sm,float div,bool fudge) {
     (void)div; psram_spi_inst_t s={p,sm,pio_add_program(p,fudge?&spi_psram_fudge_program:&spi_psram_program),2,3,4};
     spi_offset=s.offset; dma_channel_claim(2);dma_channel_claim(3);dma_channel_claim(4);p->enabled[sm]=true;return s;

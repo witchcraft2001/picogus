@@ -4,11 +4,14 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "ug_pcm.h"
 #define UG_OBJECT_LIMIT 128u
 typedef struct {
     uint32_t offset, reserved, size, uploaded, crc;
     uint16_t handle, pins;
     uint8_t kind, state;
+    uint8_t pcm_valid;
+    ug_pcm_info pcm;
 } ug_object_t;
 typedef struct {
     ug_object_t objects[UG_OBJECT_LIMIT];

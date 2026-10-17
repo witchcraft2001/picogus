@@ -6,6 +6,7 @@
 #include "ug_audio.h"
 #include "ug_psram.h"
 #include "ug_storage.h"
+#include "ug_render.h"
 #include "ug_s4.h"
 #include "ug_memory.h"
 #include "../common/picogus.h"
@@ -60,6 +61,18 @@ void play_ultrags(void) {
         if(gap>ug_service_max_us) ug_service_max_us=gap;
         serviced_at=now;
         if(audio_up) { ug_audio_stats audio; ug_audio_stats_copy(&audio); ug_storage_audio(audio.frames_out,audio.underruns); }
+        /* Refill audio before any cooperative storage/CRC/parser slice. */
+        if(audio_up) {
+            int idx=ug_audio_buf_get();
+            if(idx>=0) {
+                int16_t samples[UG_AUDIO_FRAMES*2];
+                bool playing=ug_storage_render(samples,UG_AUDIO_FRAMES);
+                uint32_t *dst=ug_audio_buf_ptr(idx);
+                for(unsigned i=0;i<UG_AUDIO_FRAMES;i++) dst[i]=ug_audio_pack_frame(samples[2*i],samples[2*i+1]);
+                ug_audio_buf_push(idx);
+                if(playing) ug_audio_set_active(true); else ug_audio_finish();
+            }
+        }
         ug_maintenance_poll(); ug_board_maintenance(); ug_minimal_dispatch();
         if(!published) {
             if(!initialized) {

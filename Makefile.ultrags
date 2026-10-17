@@ -230,7 +230,7 @@ s4-package: s4-check
 	$(NODE) $(ROOT)/tools/ultrags/package-s4.mjs --build $(BUILD)
 
 # S5: BULK/aliases, bounded posted front-end and real BLOB benchmark.
-.PHONY: s5-host s5-pio s5-posted s5-full s5-variants s5-check s5-package
+.PHONY: s5-host s5-pio s5-posted s5-full s5-variants s5-check s5-package s6-host s6-check s6-package
 s5-host:
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/s5-host.py --build $(BUILD)/host --cc "$(CC)"
 s5-posted: prepare-tools
@@ -257,3 +257,18 @@ s5-check: s4-check s5-host s5-pio s5-full s5-variants
 	@echo "S5 HOST_PASS / DSS-EXE_PASS / REAL_PENDING; HANDSHAKE release default"
 s5-package: s5-check
 	$(NODE) $(ROOT)/tools/ultrags/package-s5.mjs --build $(BUILD)
+
+# S6 PCM/WAV core: independent host parser/storage/render checks plus the
+# existing S0a-S5 regression and release firmware builds. DSS/REAL acceptance
+# remains explicit in the generated report until those gates exist.
+s6-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s6-host.py --build $(BUILD)/host/s6 --cc "$(CC)"
+
+s6-check: s5-check s6-host ultrags fixtures
+	$(NODE) $(ROOT)/tools/ultrags/stage-excerpt.mjs --stage S6 --output $(UGBUILD)/excerpts/ultrags-S6.md
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s6-report.py --build $(BUILD)
+	@echo "S6 HOST_PARTIAL / DSS-EXE_PENDING / REAL_PENDING; implemented firmware subset checked"
+
+s6-package: s6-check
+	$(NODE) $(ROOT)/tools/ultrags/package-s6.mjs --build $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_s6_package.py --build $(BUILD)

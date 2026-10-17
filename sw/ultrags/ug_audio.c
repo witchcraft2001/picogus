@@ -29,6 +29,7 @@ static volatile uint8_t filling_mask;
 static volatile int8_t chan_buf[2] = {-1, -1};
 static volatile bool active;
 static bool started;
+static unsigned next_completion;
 
 static PIO a_pio;
 static uint a_sm, a_ch0, a_ch1;
@@ -42,13 +43,16 @@ static void __isr __time_critical_func(ug_audio_isr)(void) {
      * chain-triggered its peer; refill the completed channel so it is
      * armed when the peer chains back to it */
     const uint32_t pending = dma_hw->ints0;
-    for (unsigned i = 0; i < 2; i++) {
+    unsigned first=next_completion;
+    for (unsigned k = 0; k < 2; k++) {
+        unsigned i=(first+k)&1u;
         uint ch = ch_of(i);
         if (!(pending & (1u << ch))) continue;
-        dma_hw->ints0 = 1u << ch;
+        dma_channel_acknowledge_irq0(ch);
+        next_completion=i^1u;
         if (chan_buf[i] >= 0) {
             free_mask |= 1u << (uint8_t)chan_buf[i];
-            stats.played++;
+            if(stats.played!=UINT32_MAX) stats.played++;
             chan_buf[i] = -1;
         }
         stats.frames_out += UG_AUDIO_FRAMES;
@@ -59,13 +63,19 @@ static void __isr __time_critical_func(ug_audio_isr)(void) {
             src = buf[idx];
             chan_buf[i] = (int8_t)idx;
         } else if (active) {
-            stats.underruns++;
+            if(stats.underruns!=UINT32_MAX) stats.underruns++;
         }
         dma_channel_set_read_addr(ch, src, false);
         dma_channel_set_trans_count(ch, UG_AUDIO_FRAMES, false);
         stats.cur_chan = (uint8_t)ch;
     }
     __dmb();
+    /* A delayed IRQ can arrive after both chained channels completed. Their
+     * counts were zero when the peer tried to chain back. Rearm above, then
+     * explicitly restart the stopped chain; never touch a running channel. */
+    uint32_t mask=(1u<<a_ch0)|(1u<<a_ch1);
+    if(started && !dma_channel_is_busy(a_ch0) && !dma_channel_is_busy(a_ch1) &&
+       !(dma_hw->ints0&mask)) dma_channel_start(ch_of(next_completion));
 }
 
 int ug_audio_init(PIO pio, uint sm, uint dma0, uint dma1,
@@ -75,6 +85,7 @@ int ug_audio_init(PIO pio, uint sm, uint dma0, uint dma1,
     free_mask = (1u << UG_AUDIO_BUFS) - 1u;
     chan_buf[0] = chan_buf[1] = -1;
     active = started = false;
+    next_completion=0;
     memset(&stats, 0, sizeof(stats));
     a_pio = pio; a_sm = sm; a_ch0 = dma0; a_ch1 = dma1;
     uint gpio_func = (pio == pio1) ? GPIO_FUNC_PIO1 : GPIO_FUNC_PIO0;
@@ -196,7 +207,7 @@ unsigned ug_audio_bufs_pending(void) {
 }
 
 uint32_t *ug_audio_buf_ptr(int idx) {
-    return (idx >= 0 && idx < (int)UG_AUDIO_BUFS) ? buf[idx] : NULL;
+    return (idx >= 0 && idx < (int)UG_AUDIO_BUFS && (filling_mask&(1u<<idx))) ? buf[idx] : NULL;
 }
 
 const ug_audio_stats *ug_audio_get_stats(void) { return &stats; }
@@ -208,10 +219,18 @@ uint32_t ug_audio_lrclk_hz(void) {
 }
 
 void ug_audio_resume_idle(void) {
+    /* Both channels were aborted by maintenance. No completion IRQ will
+     * release their old buffers: return all ownership before rearming zero. */
+    uint32_t irq_state=save_and_disable_interrupts();
+    q_head=q_tail=filling_mask=0;
+    free_mask=(1u<<UG_AUDIO_BUFS)-1;
+    chan_buf[0]=chan_buf[1]=-1; active=false;
+    next_completion=0;
     for(unsigned i=0;i<2;++i) {
         uint ch=ch_of(i);
         dma_channel_set_read_addr(ch,zero_frame,false);
         dma_channel_set_trans_count(ch,UG_AUDIO_FRAMES,false);
     }
     dma_channel_start(a_ch0);
+    restore_interrupts(irq_state);
 }

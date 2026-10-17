@@ -5,11 +5,10 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  Ultra GS S0a synthetic render kernel.
+ *  Ultra GS PCM renderer, also used by the S0a diagnostic profiles.
  *  Host-compatible (no Pico SDK deps): PSRAM access goes through ug_mem_if
  *  callbacks so the same code runs in firmware and in unit tests.
- *  NOT the final Ultra GS mixer -- a synthetic spike for resource/timing
- *  measurements per ultra-gs.md stage S0a.
+ *  MOD/tick scheduling is outside this PCM kernel.
  */
 #ifndef UG_RENDER_H
 #define UG_RENDER_H
@@ -37,7 +36,8 @@ typedef struct {
 
 typedef enum {
     UG_FMT_S8 = 0,    /* 1 byte/sample, signed */
-    UG_FMT_S16LE = 1  /* 2 bytes/sample, signed little-endian */
+    UG_FMT_S16LE = 1, /* 2 bytes/sample, signed little-endian */
+    UG_FMT_U8 = 2     /* 1 byte/sample, unsigned PCM centered at 128 */
 } ug_fmt;
 
 typedef enum {
@@ -53,13 +53,17 @@ typedef struct {
     uint32_t loop_end;      /* sample index, exclusive; ==len means tail */
     uint64_t phase;         /* Q32.32 sample position */
     uint64_t step;          /* Q32.32 phase increment per output frame */
+    uint32_t step_remainder, step_denominator, step_residue;
+    uint16_t repeats;       /* remaining complete passes; 0=infinite */
     uint8_t  gain;          /* 0..64 channel gain */
+    uint8_t  class_gain, class_master;
     uint8_t  pan;           /* 0 left .. 255 right (mono lanes) */
     uint8_t  fmt;           /* ug_fmt */
     uint8_t  mode;          /* ug_lane_mode */
     uint8_t  looped;        /* 1 = loop between loop_start..loop_end */
     uint8_t  active;
     uint8_t  ended;         /* non-looped lane reached EOF */
+    uint8_t  failed;        /* backend failure: silence until next PLAY */
     uint8_t  ch_off;        /* interleaved stereo channel (0=L,1=R); mono=0 */
     uint8_t  cache_victim;    /* next line to evict (0/1 round robin) */
     uint32_t cache_tag[UG_CACHE_LINES]; /* byte window base, tag INVALID = empty */
@@ -81,6 +85,8 @@ typedef struct {
     ug_lane lanes[UG_LANES];
     int32_t vol_q15;         /* mainVol scale, 32768 == unity */
     ug_stats stats;
+    uint16_t peak_frames, peak_current[2], peaks[2];
+    uint16_t lane_peak_current[UG_LANES], lane_peaks[UG_LANES];
     int      last_error;     /* sticky backend error code */
 } ug_mixer;
 
@@ -96,6 +102,9 @@ int ug_lane_set(ug_mixer *m, unsigned lane, uint32_t src_offset,
                 uint32_t len_samples, uint32_t loop_start, uint32_t loop_end,
                 uint64_t step_q32, uint8_t gain, uint8_t pan,
                 uint8_t fmt, uint8_t mode, uint8_t looped, uint8_t ch_off);
+/* PCM phase advances by rate/output_rate exactly, retaining division residue. */
+void ug_lane_pcm_rate(ug_lane *lane, uint32_t rate, uint32_t output_rate,
+                      uint16_t repeats);
 
 /* Render `frames` stereo frames into out[2*frames] (L,R interleaved S16).
  * Returns 0; per-lane errors are counted in stats and contribute silence. */

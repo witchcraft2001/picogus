@@ -28,6 +28,7 @@ def main():
     run([os.sys.executable, root / "tools/ultrags/gen-diag.py", root / "tools/ultrags/diag-schema.json", gen])
     programs = {
         "render": [tests / "test_render.c", sw / "ug_render.c", sw / "ug_profile.c"],
+        "s6-pcm": [tests / "test_s6_pcm.c", sw / "ug_pcm.c"],
         "device": [tests / "test_device.c", tests / "sdk_mock/sdk_mock.c",
                    sw / "ug_audio.c", sw / "ug_psram.c", sw / "ug_hwmap.c", sw / "ug_diag_link.c"],
     }
