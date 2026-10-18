@@ -10,7 +10,7 @@ typedef struct {
     uint32_t offset, reserved, size, uploaded, crc;
     uint16_t handle, pins;
     uint8_t kind, state;
-    uint8_t pcm_valid;
+    uint8_t pcm_valid, mod_valid;
     ug_pcm_info pcm;
 } ug_object_t;
 typedef struct {

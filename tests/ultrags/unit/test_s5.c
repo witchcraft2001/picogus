@@ -318,7 +318,7 @@ int main(int argc,char **argv) {
     transport=0;
     ug_storage_gs_reset(false,time_us_32());
     settings.UltraGS.bulkAlias=0x280;
-    rpc(1,0,0,32);CHECK(ug_get32(r)==1518 && ug_get32(r+4)==7 && r[21]==4);
+    rpc(1,0,0,32);CHECK(ug_get32(r)==1518 && ug_get32(r+4)==15 && r[21]==4);
     const unsigned sizes[]={1,2,31,32,33,255,256,257,1023,1024};
     for(unsigned capacity=1u<<20;capacity<=8u<<20;capacity*=2) {
         ug_storage_publish(capacity,0,0);

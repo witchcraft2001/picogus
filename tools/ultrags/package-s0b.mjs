@@ -22,7 +22,7 @@ import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
 const stage = arg('--stage', 'S0b');
-if (!['S0b','S1','S2','S3','S4','S5','S6','ISA'].includes(stage)) throw new Error('unknown package stage');
+if (!['S0b','S1','S2','S3','S4','S5','S6','S7','ISA'].includes(stage)) throw new Error('unknown package stage');
 const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -37,25 +37,15 @@ const DOS_TIME = 0, DOS_DATE = 0x0021; // 1980-01-01 00:00:00 - fixed for determ
 
 // ---- payload assembly ----------------------------------------------------
 const payload = new Map(); // canonical name -> {buf, src, imgName}
-// DOS 8.3 compliance: names longer than 8.3 get a deterministic ~N alias;
-// the canonical<->imgName mapping is recorded in MANIFEST.TXT/manifest.json
+// Both containers use the same explicit DSS 8.3 names. Never invent aliases:
+// extracting a ZIP on DSS must give the same names as mounting the IMG.
 const imgNames = new Set();
-let aliasSeq = 0;
-function imgNameFor(name) {
-  const [b, e = ''] = name.split('.');
-  const ok83 = b.length <= 8 && e.length <= 3 && /^[A-Z0-9_-]+$/.test(b) && /^[A-Z0-9_-]*$/.test(e);
-  if (ok83 && !imgNames.has(name)) return name;
-  for (;;) {
-    const s = String(aliasSeq++);
-    const cand = `${b.slice(0, 7 - s.length)}~${s}${e ? '.' + e.slice(0,3) : ''}`; // base <= 8 chars
-    if (!imgNames.has(cand)) return cand;
-  }
-}
 function add(name, buf, src) {
-  if (payload.has(name)) throw new Error(`duplicate payload name ${name}`);
-  const img = imgNameFor(name);
-  imgNames.add(img);
-  payload.set(name, { buf: Buffer.from(buf), src, imgName: img });
+  if (!/^[A-Z0-9_-]{1,8}(\.[A-Z0-9_-]{1,3})?$/.test(name))
+    throw new Error(`DSS payload name is not 8.3: ${name}`);
+  if (payload.has(name) || imgNames.has(name)) throw new Error(`duplicate payload name ${name}`);
+  imgNames.add(name);
+  payload.set(name, { buf: Buffer.from(buf), src, imgName: name });
 }
 const exes = assembly.files.map(e => e.name).sort();
 if (!exes.length) throw new Error(`no EXEs in ${exeDir} (run 'make -f Makefile.ultrags dss' first)`);
@@ -76,7 +66,21 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = stage === 'S6' ? [
+const help = stage === 'S7' ? [
+ 'Ultra GS S7 native review subset; S7 IN_PROGRESS / GS PENDING / REAL_PENDING.',
+ 'This is not the complete S7 gate or a GS 1.05 compatible release.',
+ 'Firmware is built separately: multifw-release/picogus.uf2 (whole bundle).',
+ 'Copy a known 31-instrument M.K./M!K! module to DSS as FOUR.MOD.',
+ 'UGLOAD FOUR.MOD /TYPE:MOD /VERIFY -> retain printed object handle.',
+ 'UGPLAY HANDLE <handle> /LOOP; UGMON /COUNT:10 /HZ:5',
+ 'UGPLAY PAUSE; UGPLAY RESUME; UGPLAY STOP',
+ 'UGPLAY HANDLE <handle> /LOOP /REPLACE; UGPLAY STOP; UGMEM FREE <handle>',
+ 'READY bytes survive STOP/EOF/ESC. FX RAW/WAV use independent lanes8..11.',
+ 'UGPLAY /GS, legacy playback and UGTEST GS/MOD4 are not implemented.',
+ 'Normative effect/audio conformance and real hardware acceptance remain open.',
+ 'README.MD and REVIEW.MD describe implemented fixes and outstanding work.',
+ 'Use MANIFEST.TXT for synthetic fixture names. ST-*.EXE are HOST tests only.',
+].join('\r\n') : stage === 'S6' ? [
  'Ultra GS S6 - HOST_PASS / DSS-EXE_PASS / REAL_PENDING; S6 IN_PROGRESS.',
  'UGLOAD file.RAW /TYPE:RAW /RATE:11025 /BITS:8 /CH:1 /FMT:U8 /VERIFY',
  'UGLOAD file.WAV /TYPE:WAV /VERIFY -> retain printed object handle.',
@@ -223,6 +227,11 @@ if (stage==='ISA') {
     add(name,readFileSync(join(repoRoot,src)),src);
 }
 if (stage==='S1') add('README.MD', readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/S1-README.md')), 'host/sprinter/ultrags/docs/S1-README.md');
+if (stage==='S7') {
+  add('README.MD',readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/S7-README.md')),'host/sprinter/ultrags/docs/S7-README.md');
+  add('REVIEW.MD',readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/S7-REVIEW.md')),'host/sprinter/ultrags/docs/S7-REVIEW.md');
+}
+
 const license = [
   `Ultra GS ${stage} package`,
   '',
@@ -341,5 +350,5 @@ const pman = {
 };
 writeFileSync(join(outDir, 'package-manifest.json'), JSON.stringify(pman, null, 2) + '\n');
 console.log(`package: ${sorted.length} entries -> ${outDir}`);
-console.log(`  ug-s0b.zip ${zipBuf.length}B sha256 ${sha256(zipBuf)}`);
-console.log(`  ug-s0b.img ${imgBuf.length}B sha256 ${sha256(imgBuf)}`);
+console.log(`  ug-${slug}.zip ${zipBuf.length}B sha256 ${sha256(zipBuf)}`);
+console.log(`  ug-${slug}.img ${imgBuf.length}B sha256 ${sha256(imgBuf)}`);

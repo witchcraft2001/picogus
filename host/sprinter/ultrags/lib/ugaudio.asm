@@ -152,14 +152,18 @@ AUDIO_OPTION:
     jp z,.store
     ld hl,AGAIN
     cp 3
-    jp nz,.pan
+    jp z,.gain
+    ld hl,APAN
+    cp 4
+    scf
+    ret nz
+    jp .store
+.gain:
     ld a,e
     cp 65
     ccf
     ret c
     jp .store
-.pan:
-    ld hl,APAN
 .store:
     ld (hl),e
     xor a
@@ -317,6 +321,16 @@ AUDIO_PARSE:
     call PCM_VALIDATE
     ret c
 .play_options:
+    ld a,(PCM_KIND)
+    cp 3
+    jr nz,.pcm_options
+    ld a,(AFX)
+    or a
+    jp nz,.bad
+    ld a,(AOPTS)
+    or a
+    jp nz,.bad
+.pcm_options:
     ld a,(AFX)
     or a
     jp nz,.fxopts
@@ -406,6 +420,8 @@ AUDIO_RUN:
     cp 1
     jp nz,PCM_FORMAT_ERROR
     ld a,(RESP+2)
+    cp 3
+    jr z,.mod_caps
     dec a
     cp 2
     jp nc,PCM_FORMAT_ERROR
@@ -424,6 +440,23 @@ AUDIO_RUN:
     jp z,AUDIO_UNSUPPORTED
     ld a,(RESP+34)
     ld (ACHANNELS),a
+    jr .caps_done
+.mod_caps:
+    ld a,(AFX)
+    or a
+    jp nz,AUDIO_UNSUPPORTED
+    ld a,(AOPTS)
+    or a
+    jp nz,AUDIO_UNSUPPORTED
+    ld a,(RESP+37)
+    cp 4
+    jp nz,PCM_FORMAT_ERROR
+    ld a,(ACAPS+4)
+    and 8
+    jp z,AUDIO_UNSUPPORTED
+    ld a,4
+    ld (ACHANNELS),a
+.caps_done:
     ld a,(AFX)
     or a
     jp z,.ready
@@ -473,6 +506,12 @@ AUDIO_RUN:
 .old_saved:
     ld hl,(HANDLE)
     ld (REQ),hl
+    ; AUDIO_REPLACE_CHECK and FX_STATUS use RESP, so the object-info kind
+    ; is no longer live here. Preserve the validated MOD sentinel in the
+    ; normalized channel count instead.
+    ld a,(ACHANNELS)
+    cp 4
+    jr z,.play_mod
     ld a,(AFX)
     or a
     jp nz,.fx
@@ -514,6 +553,16 @@ AUDIO_RUN:
     ld a,54
     ld bc,8
     ld e,4
+    call RPC
+    jr .ack
+.play_mod:
+    ld a,(AFLAGS)
+    and 2
+    rrca
+    ld (REQ+2),a
+    ld a,49
+    ld bc,3
+    ld e,2
     call RPC
 .ack:
     jp c,AUDIO_PLAY_ERROR
@@ -1257,7 +1306,7 @@ AUDIO_ERROR:
     jp EXIT
     IFDEF APP_PLAY
 audio_commands: DB "HANDLE",0,1,"STOP",0,2,"PAUSE",0,3,"RESUME",0,4,"FX",0,5,"FXHANDLE",0,6,"FXSTOP",0,7,"FXPAUSE",0,8,"FXRESUME",0,9,0
-audio_extensions: DB "RAW",0,1,"WAV",0,2,0
+audio_extensions: DB "RAW",0,1,"WAV",0,2,"MOD",0,3,0
 audio_options: DB "/WAIT",0,1,"/LOOP",0,2,"/REPLACE",0,4,"/STEAL",0,8,0
 audio_prefixes: DB "/VOICE:",0,"/PRIORITY:",0,"/GAIN:",0,"/PAN:",0
 all_word: DB "ALL",0

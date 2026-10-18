@@ -52,6 +52,8 @@ function readZip(buf) {
     const csz = buf.readUInt32LE(p + 20), usz = buf.readUInt32LE(p + 24);
     const nl = buf.readUInt16LE(p + 28), el = buf.readUInt16LE(p + 30), cl = buf.readUInt16LE(p + 32);
     const name = buf.slice(p + 46, p + 46 + nl).toString('ascii');
+    if (!/^[A-Z0-9_-]{1,8}(\.[A-Z0-9_-]{1,3})?$/.test(name))
+      throw new Error(`ZIP: invalid DSS 8.3 filename ${name}`);
     const lho = buf.readUInt32LE(p + 42);
     if (method !== 0) throw new Error(`ZIP: ${name} compressed (method ${method}); store-only expected`);
     if (csz !== usz) throw new Error(`ZIP: ${name} size mismatch`);
@@ -98,7 +100,7 @@ function readFat12(img) {
     const name = img.subarray(de,de+8).toString('ascii').trimEnd();
     const ext = img.subarray(de+8,de+11).toString('ascii').trimEnd();
     const fn = ext ? `${name}.${ext}` : name;
-    if (!/^[A-Z0-9_~!@#$%^&()-]{1,8}(\.[A-Z0-9_]{1,3})?$/.test(fn) || out.has(fn))
+    if (!/^[A-Z0-9_-]{1,8}(\.[A-Z0-9_-]{1,3})?$/.test(fn) || out.has(fn))
       throw new Error(`IMG: invalid/duplicate filename ${fn}`);
     const size = img.readUInt32LE(de+28), need = Math.ceil(size/bps);
     let c = img.readUInt16LE(de+26);
@@ -187,10 +189,13 @@ const img = readFat12(imgBuf);
 console.log(`  zip members: ${zip.size}, img files: ${img.size}`);
 ok(zip.size === pman.payload.length, `zip member count == manifest (${zip.size}/${pman.payload.length})`);
 ok(img.size === pman.payload.length, `img file count == manifest (${img.size}/${pman.payload.length})`);
+ok(JSON.stringify([...zip.keys()].sort()) === JSON.stringify([...img.keys()].sort()),
+   'ZIP and IMG have identical DSS 8.3 names');
 
 let exeChecked = 0, fxChecked = 0;
 for (const e of pman.payload) {
-  const imgName = e.imgName ?? e.name; // 8.3 alias recorded by the packer
+  const imgName = e.imgName ?? e.name;
+  ok(imgName === e.name, `${e.name} has no alternate IMG alias`);
   const z = zip.get(e.name), m = img.get(imgName);
   ok(!!z, `zip has ${e.name}`);
   ok(!!m, `img has ${imgName} (${e.name})`);
@@ -217,6 +222,15 @@ if (stage === 'ISA') {
     const bytes=readFileSync(join(root,src));
     ok(zip.get(name)?.equals(bytes) && img.get(name)?.equals(bytes), 'ISA current source '+name);
   }
+}
+
+if (stage === 'S7') {
+  for(const [name,src] of [['README.MD','host/sprinter/ultrags/docs/S7-README.md'],
+    ['REVIEW.MD','host/sprinter/ultrags/docs/S7-REVIEW.md']]) {
+    const bytes=readFileSync(join(root,src));
+    ok(zip.get(name)?.equals(bytes)&&img.get(name)?.equals(bytes),'S7 current review document '+name);
+  }
+  ok(zip.get('HELP.TXT')?.includes(Buffer.from('S7 IN_PROGRESS / GS PENDING / REAL_PENDING.')),'S7 partial scope is explicit');
 }
 
 // MANIFEST.TXT inside the containers is consistent

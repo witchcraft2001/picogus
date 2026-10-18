@@ -51,13 +51,15 @@ static uint16_t alloc_obj(uint8_t kind,uint32_t size) {
     return get16(response);
 }
 static void write_obj(uint16_t h,const uint8_t *data,uint16_t n) {
-    uint8_t a[9]={0},len; put16(a,h); ug_put32(a+2,0); put16(a+6,n); a[8]=1;
-    assert(call(UG_OP_WRITE_BEGIN,a,9,&len)==0 && len==4);
-    uint32_t token=ug_get32(response); ug_storage_grant_ack(time_us_32());
-    if(vectors) { fputs("{\"data\":\"",vectors);hex(vectors,data,n);fputs("\"}\n",vectors); }
-    for(unsigned i=0;i<n;i++) { assert(ug_storage_data_write(data[i],time_us_32())==0);if(i%32==31) audio_slice(); }
-    uint8_t e[4]; ug_put32(e,token);
-    assert(call(UG_OP_WRITE_END,e,4,&len)==0 && len==0);
+    for(unsigned offset=0;offset<n;) {
+        uint16_t count=(uint16_t)(n-offset>1024?1024:n-offset);
+        uint8_t a[9]={0},len;put16(a,h);ug_put32(a+2,offset);put16(a+6,count);a[8]=1;
+        assert(call(UG_OP_WRITE_BEGIN,a,9,&len)==0&&len==4);
+        uint32_t token=ug_get32(response);ug_storage_grant_ack(time_us_32());
+        if(vectors){fputs("{\"data\":\"",vectors);hex(vectors,data+offset,count);fputs("\"}\n",vectors);}
+        for(unsigned i=0;i<count;i++){assert(ug_storage_data_write(data[offset+i],time_us_32())==0);if(i%32==31)audio_slice();}
+        uint8_t e[4];ug_put32(e,token);assert(call(UG_OP_WRITE_END,e,4,&len)==0&&len==0);offset+=count;
+    }
 }
 static void seal_obj(uint16_t h) {
     uint8_t a[7]={0},len; put16(a,h);
@@ -73,9 +75,21 @@ static uint16_t raw_asset(void) {
     for(unsigned i=0;i<sizeof(raw);i++) raw[i]=(uint8_t)(192+(i%32));
     return pcm_asset(raw,sizeof(raw),48000,1,8,0,0,0);
 }
+static uint16_t mod_asset(void) {
+    enum { MOD_SIZE=1084+1024+128 }; uint8_t data[MOD_SIZE]={0};
+    data[950]=1;data[951]=0;memcpy(data+1080,"M.K.",4);
+    data[42]=0;data[43]=64;data[45]=64;data[48]=0;data[49]=64;
+    data[1084]=1;data[1085]=0xac;data[1086]=0x10; /* sample 1, period 428 */
+    data[1087]=0;for(unsigned i=1084+1024;i<MOD_SIZE;i++)data[i]=(uint8_t)((i&127)*2-128);
+    uint16_t h=alloc_obj(3,MOD_SIZE);write_obj(h,data,MOD_SIZE);seal_obj(h);return h;
+}
 static uint16_t play_pcm(uint16_t handle,uint16_t repeats,uint8_t gain,uint8_t pan) {
     uint8_t q[6],len;put16(q,handle);put16(q+2,repeats);q[4]=gain;q[5]=pan;
     assert(call(UG_OP_PLAY_PCM,q,6,&len)==0 && len==2);return get16(response);
+}
+static uint16_t play_mod(uint16_t handle,uint8_t flags) {
+    uint8_t q[3],len;put16(q,handle);q[2]=flags;
+    assert(call(UG_OP_PLAY_MOD,q,3,&len)==0&&len==2);return get16(response);
 }
 static void control(uint8_t op,uint16_t id,uint8_t action) {
     uint8_t q[3],len;put16(q,id);q[2]=action;assert(call(op,q,3,&len)==0);
@@ -139,9 +153,21 @@ int main(void) {
     settings.Volume.mainVol=100; settings.UltraGS.basePort=0x2a0;settings.UltraGS.bulkAlias=0xffff;
     ug_config_init(&ug_cfg,&settings,8,NULL,0,0,0); ug_minimal_init();
     ug_storage_bind(&ps,17);int16_t pre[4]={123,456,789,12};assert(!ug_storage_render(pre,2));for(unsigned j=0;j<4;j++) assert(!pre[j]);ug_storage_publish(8u<<20,0,0);
-    uint8_t info[1]={0},len; assert(call(UG_OP_CAPS,info,0,&len)==0 && response[21]==4 && ug_get32(response+4)==7);
+    uint8_t info[1]={0},len; assert(call(UG_OP_CAPS,info,0,&len)==0 && response[21]==4 && ug_get32(response+4)==15);
+    assert(!(ug_get32(response)&1u)); /* Native MOD4 does not claim the GS 1.05 profile. */
 
     const char *vp=getenv("UG_S6_VECTORS");if(vp) shared_vectors(vp);
+    uint16_t mh=mod_asset(),mid=play_mod(mh,1);assert(pins(mh)==1);
+    int16_t mout[256];for(unsigned i=0;i<16;i++)assert(ug_storage_render(mout,128));
+    bool nonzero=false;for(unsigned i=0;i<256;i++)nonzero|=mout[i]!=0;assert(nonzero);
+    snapshot();assert(response[25]==2&&get16(response+20)==mid&&response[40]==6&&response[41]==125);
+    uint8_t ctlmod[3],qseek[5]={0};put16(ctlmod,mid);ctlmod[2]=1;assert(!call(UG_OP_CONTROL,ctlmod,3,&len));
+    uint8_t before[128];assert(!call(UG_OP_SNAPSHOT,NULL,0,&len));memcpy(before,response,128);
+    for(unsigned i=0;i<8;i++)ug_storage_render(mout,128);
+    assert(!call(UG_OP_SNAPSHOT,NULL,0,&len));assert(!memcmp(before+36,response+36,6));
+    ctlmod[2]=2;assert(!call(UG_OP_CONTROL,ctlmod,3,&len));put16(qseek,mid);put16(qseek+2,0);qseek[4]=0;
+    assert(!call(UG_OP_SEEK_MOD,qseek,5,&len));ug_storage_render(mout,128);
+    ctlmod[2]=0;assert(!call(UG_OP_CONTROL,ctlmod,3,&len));ug_storage_render(mout,128);assert(pins(mh)==0);
     uint16_t h=raw_asset(); uint8_t p[6]={0};put16(p,h);put16(p+2,1);p[4]=64;p[5]=128;
     assert(call(UG_OP_PLAY_PCM,p,6,&len)==0 && len==2);uint16_t play=get16(response);
     int16_t out[256]; assert(ug_storage_render(out,128)); assert(out[0]!=0 && out[1]!=0);
@@ -267,7 +293,7 @@ int main(void) {
     assert(!call(UG_OP_CAPS,NULL,0,&len) && ug_get32(response+4)==0 && response[21]==0);
     ug_storage_bind(&ps,19);ug_storage_publish(0,UG_ERR_PSRAM,0);
     uint8_t quick=0;assert(!call(UG_OP_MEM_TEST,&quick,1,&len));
-    assert(!call(UG_OP_CAPS,NULL,0,&len) && ug_get32(response+4)==7 && response[21]==4);
+    assert(!call(UG_OP_CAPS,NULL,0,&len) && ug_get32(response+4)==15 && response[21]==4);
     puts("S6 storage/playback: RAW config, WAV SEAL/read metadata, PCM controls/repeats/mix/queue, stereo/paused FX, ID wrap, reset/fault/pins PASS");
     return 0;
 }

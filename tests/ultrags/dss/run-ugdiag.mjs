@@ -28,7 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { verifyBuild, executionInputs } from '../../../tools/ultrags/build-evidence.mjs';
+import { verifyBuild, executionInputs, dssExeName } from '../../../tools/ultrags/build-evidence.mjs';
 import {
   loadZ80, parseExe, SprinterMachine, runImage, WIN3_BASE,
   PORT_PAGE3, PORT_SYSTEM, PORT_ISA,
@@ -462,7 +462,7 @@ for (const page3Init of [0x03,0xE9,0xFE]) {
 }
 
 for (const [file, cardOpts, , expect] of SELFTESTS) {
-  const exePath = join(OUTDIR, `${file.toUpperCase()}.EXE`);
+  const exePath = join(OUTDIR, dssExeName(file));
   let bytes;
   try {
     bytes = loadExecuted(exePath);
@@ -535,7 +535,7 @@ try {
     for(const e of s4.executed)executed.set(e.name,e);
     for(const r of s4.results)r.ok?ok(`S4 ${r.name}`):bad(`S4 ${r.name}`,r.errors.join(';'));
   }
-  if(assemblyEvidence.files.some(e=>e.name==='ST-S1-BENCH.EXE')) {
+  if(assemblyEvidence.files.some(e=>e.name===dssExeName('ST-S1-BENCH'))) {
     execFileSync(process.execPath,[join(REPO,'tests/ultrags/dss/run-s5.mjs'),REPO,parentBuild],{stdio:'inherit'});
     const s5=JSON.parse(readFileSync(join(LOGS,'s5-run.json')));
     for(const e of s5.executed)executed.set(e.name,e);

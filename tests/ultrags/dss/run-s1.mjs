@@ -3,14 +3,14 @@ import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {loadZ80,parseExe,SprinterMachine,runImage} from './ug-harness.mjs';
-import {verifyBuild} from '../../../tools/ultrags/build-evidence.mjs';
+import {verifyBuild,dssExeName} from '../../../tools/ultrags/build-evidence.mjs';
 import {DiagCard} from './diag-card.mjs';
 const root=resolve(process.argv[2]||'.'), build=resolve(process.argv[3]||'build/ultrags');
 verifyBuild(root,join(build,'dss'));
 const Z80=loadZ80(root), results=[], executed=[];
-for(const name of ['UGTEST','ST-S1-BENCH','ST-S1-DROP','ST-S1-DUP','ST-S1-COUNTER','ST-S1-OVERBLOCK','ST-S1-DSSWIN','ST-S1-CLEANUP','ST-S1-FUSE']) {const bytes=readFileSync(join(build,'dss',name+'.EXE'));executed.push({name:name+'.EXE',size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});}
+for(const source of ['UGTEST','ST-S1-BENCH','ST-S1-DROP','ST-S1-DUP','ST-S1-COUNTER','ST-S1-OVERBLOCK','ST-S1-DSSWIN','ST-S1-CLEANUP','ST-S1-FUSE']) {const name=dssExeName(source),bytes=readFileSync(join(build,'dss',name));executed.push({name,size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});}
 function test(name,exe,cli,expected=0,opts={}) {
-  const bytes=readFileSync(join(build,'dss',exe+'.EXE')), h=parseExe(bytes);
+  const bytes=readFileSync(join(build,'dss',dssExeName(exe))), h=parseExe(bytes);
   const card=opts.absent?null:new DiagCard(opts.card);
   const m=new SprinterMachine({card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,turboHardware:opts.cpuHz!==3500000,commandLine:cli,movingClock:!opts.stopped,clockStart:opts.clockStart??86390,escAfter:opts.escAfter??Infinity,logLimit:1000});
   m.mem.set(bytes,h.loadAddr);

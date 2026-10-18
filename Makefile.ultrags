@@ -273,6 +273,32 @@ s6-package: s6-check
 	$(NODE) $(ROOT)/tools/ultrags/package-s6.mjs --build $(BUILD)
 	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_s6_package.py --build $(BUILD)
 
+.PHONY: s7-host s7-stack s7-native-check s7-native-package s7-check
+s7-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s7-host.py --build $(BUILD)/host/s7 --cc "$(CC)"
+
+s7-stack: ultrags
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s7-stack.py --build $(BUILD)
+
+s7-native-check: dss s2-host s6-host s7-host
+	UG_S2_CATALOG="$(abspath $(BUILD))/host/s2-catalog.bin" \
+		$(NODE) $(ROOT)/tests/ultrags/dss/run-s7.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tools/ultrags/s7-report.mjs --build $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_s7_evidence.py --build $(BUILD)
+	@echo "S7 IN_PROGRESS: native regression subset passed; GS/full effect audio/REAL gates remain open"
+
+s7-native-package: test-dss s7-native-check fixtures s7-stack firmware
+	$(NODE) $(ROOT)/tools/ultrags/package-s0b.mjs --stage S7 --exe-dir $(UGBUILD)/dss \
+		--fixtures $(UGBUILD)/fixtures --out $(UGBUILD)/s7-native-package
+	$(NODE) $(ROOT)/tools/ultrags/verify-package.mjs --stage S7 --package $(UGBUILD)/s7-native-package \
+		--exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures
+	$(NODE) $(ROOT)/tools/ultrags/test-package.mjs --stage S7 --package $(UGBUILD)/s7-native-package \
+		--exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures
+
+# A successful subset must not masquerade as the complete S7 acceptance gate.
+s7-check: s6-check s7-native-check s7-stack
+	@echo "S7 INCOMPLETE: GS 1.05 dispatcher/streams/FX, UGPLAY /GS, UGTEST GS/MOD4 and full conformance are pending"; exit 2
+
 # DSS ISA clock correction only; firmware acceptance remains separate.
 .PHONY: isa-dss-check
 isa-dss-check: test-dss fixtures

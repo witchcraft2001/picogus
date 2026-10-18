@@ -8,7 +8,7 @@ import { join, resolve, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readZip, readFat12 } from './verify-package.mjs';
-import { sha256, verifyBuild, repoRoot, executionInputs } from './build-evidence.mjs';
+import { sha256, verifyBuild, repoRoot, executionInputs, dssExeName } from './build-evidence.mjs';
 const arg=(flag,d)=> { const i=process.argv.indexOf(flag); return i>=0?process.argv[i+1]:d; };
 const stage=arg('--stage','S0b'),slug=stage.toLowerCase();
 const pkg=resolve(arg('--package','build/ultrags/package'));
@@ -21,6 +21,7 @@ const copyRoot=join(tmp,'source'), copyExe=join(tmp,'ultrags/dss'), copyPkg=join
 const build=verifyBuild(repoRoot,exe);
 for (const p of new Set([...Object.keys(build.inputs.sources),...Object.keys(executionInputs(repoRoot)),
   'tools/ultrags/gen-fixtures.mjs','tools/ultrags/package-s0b.mjs',
+  ...(stage==='S7'?['host/sprinter/ultrags/docs/S7-README.md','host/sprinter/ultrags/docs/S7-REVIEW.md']:[]),
   ...(stage==='ISA'?['tests/ultrags/reference/sprinter-isa-sources.json']:[])])) {
   mkdirSync(dirname(join(copyRoot,p)),{recursive:true}); cpSync(join(repoRoot,p),join(copyRoot,p));
 }
@@ -75,6 +76,27 @@ assert.throws(()=>readFat12(cycle),/FAT chain/); passed('cyclic/truncated FAT ch
 const zip=readFileSync(join(pkg,`ug-${slug}.zip`));
 const badZip=Buffer.from(zip); badZip[14]^=1;
 assert.throws(()=>readZip(badZip),/local\/central mismatch/); passed('ZIP local and central headers must agree');
+const zipFiles=readZip(zip),imgFiles=readFat12(img);
+assert.deepEqual([...zipFiles.keys()].sort(),[...imgFiles.keys()].sort());
+for (const name of zipFiles.keys()) assert.match(name,/^[A-Z0-9_-]{1,8}(\.[A-Z0-9_-]{1,3})?$/);
+for (const e of build.files) assert.equal(e.name,dssExeName(e.src.split('/').at(-1)));
+assert.equal(new Set(build.files.map(e=>e.name)).size,build.files.length);
+assert.equal(dssExeName('st-s1-overblock.asm'),'ST-1OBLK.EXE');
+assert.equal(dssExeName('ugplay.asm'),'UGPLAY.EXE');
+assert.throws(()=>dssExeName('new-long-tool.asm'),/explicit 8.3 name/);
+passed('all built EXEs and ZIP/IMG members use identical unique DSS 8.3 names');
+const longZip=Buffer.from(zip);
+const eocd=longZip.length-22,central=longZip.readUInt32LE(eocd+16);
+const local=longZip.readUInt32LE(central+42),nameLength=longZip.readUInt16LE(central+28);
+// Removing the dot creates a >8-character basename without changing offsets.
+const dot=longZip.subarray(central+46,central+46+nameLength).indexOf(46);
+assert.ok(dot>=0 && nameLength>8);
+longZip[central+46+dot]=88;longZip[local+30+dot]=88;
+assert.throws(()=>readZip(longZip),/invalid DSS 8.3 filename/);
+passed('ZIP rejects long names even when local and central names agree');
+const badName=Buffer.from(img);badName[19*512]=47;
+assert.throws(()=>readFat12(badName),/invalid\/duplicate filename/);
+passed('IMG rejects filenames outside the DSS character set');
 const repeat=join(tmp,'repeat');
 const rerun=run(packer,['--stage',stage,'--exe-dir',exe,'--fixtures',fixtures,'--out',repeat]);
 assert.equal(rerun.status,0,rerun.text);

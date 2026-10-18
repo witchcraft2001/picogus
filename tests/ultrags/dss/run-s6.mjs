@@ -41,6 +41,7 @@ test('UGTEST rejects memory verb before hardware','UGTEST','FREE 1',1);
 test('UGTEST PCM help','UGTEST','PCM /?');
 const raw=Buffer.alloc(257,192),opts='/RATE:11025 /BITS:8 /CH:1 /FMT:U8';
 function wav(n=48000,ch=1,bits=8,rate=48000) {const b=Buffer.alloc(44+n+(n&1));b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(ch,22);b.writeUInt32LE(rate,24);b.writeUInt32LE(rate*ch*bits/8,28);b.writeUInt16LE(ch*bits/8,32);b.writeUInt16LE(bits,34);b.write('data',36);b.writeUInt32LE(n,40);b.fill(192,44);return b;}
+function mod4(){const b=Buffer.alloc(1084+1024);b.write('M.K.',1080);b[950]=1;return b;}
 function asset(c,ch=1,size=48000){const [e,r]=c.command(16,Buffer.from([1,size&255,(size>>>8)&255,(size>>>16)&255,0]));if(e)throw Error('asset');const h=r.readUInt16LE(),o=c.objects.get(h);o.data.fill(192);o.uploaded=size;c.command(20,Buffer.concat([r.subarray(0,2),rawDescriptor(size,48000,ch)]));c.command(19,Buffer.concat([r.subarray(0,2),Buffer.alloc(5)]));return h;}
 for(const app of ['UGLOAD','UGPLAY','UGMON'])test(app+' help',app,'/?');
 let {card}=test('RAW verify','UGLOAD',`T.RAW /TYPE:RAW ${opts} /VERIFY`,0,{files:{'T.RAW':raw},check:c=>c.objects.size===1&&c.objects.get(1).state===1&&!c.objects.get(1).pins});
@@ -48,7 +49,12 @@ test('handle WAIT','UGPLAY','HANDLE 1 /WAIT',0,{card,check:c=>c.objects.size===1
 test('handle repeat','UGPLAY','HANDLE 1 /WAIT',0,{card});
 test('WAV WAIT','UGPLAY','T.WAV /WAIT',0,{files:{'T.WAV':wav(4000)},check:c=>c.objects.size===1&&!c.objects.get(1).pins});
 test('RAW file','UGPLAY',`T.RAW ${opts} /WAIT`,0,{files:{'T.RAW':raw}});
-for(const cli of ['T.RAW','T.RAW /RATE:7999 /BITS:8 /CH:1 /FMT:U8','T.RAW /RATE:8000 /BITS:16 /CH:1 /FMT:U8','HANDLE 65536','HANDLE 0x10000','T.MOD','LIST X','SEEK 0 0','T.WAV /GS','FXHANDLE 1 /VOICE:7','FXHANDLE 1 /PRIORITY:0','FXHANDLE 1 /PRIORITY:255'])test('syntax '+cli,'UGPLAY',cli,1);
+const mod=mod4();
+let modRun=test('MOD4 verified upload','UGLOAD','FOUR.MOD /TYPE:MOD /VERIFY',0,{files:{'FOUR.MOD':mod},check:c=>c.objects.size===1&&c.objects.get(1).kind===3&&c.objects.get(1).state===1});
+test('MOD4 native handle repeat','UGPLAY','HANDLE 1 /LOOP',0,{card:modRun.card,check:c=>c.foreground?.mod&&c.objects.get(1).pins===1});
+test('MOD4 snapshot tracker fields','UGMON','/COUNT:1 /HZ:10',0,{card:modRun.card,check:c=>c.foreground?.mod&&c.foreground.tracker.speed===6});
+test('MOD4 STOP retains READY','UGPLAY','STOP',0,{card:modRun.card,check:c=>!c.foreground&&c.objects.get(1).state===1&&c.objects.get(1).pins===0});
+for(const cli of ['T.RAW','T.RAW /RATE:7999 /BITS:8 /CH:1 /FMT:U8','T.RAW /RATE:8000 /BITS:16 /CH:1 /FMT:U8','HANDLE 65536','HANDLE 0x10000','LIST X','SEEK 0 0','T.WAV /GS','FXHANDLE 1 /VOICE:7','FXHANDLE 1 /PRIORITY:0','FXHANDLE 1 /PRIORITY:255'])test('syntax '+cli,'UGPLAY',cli,1);
 for(const cli of ['STOP /GAIN:1','PAUSE /PAN:2','RESUME /PRIORITY:128','FXSTOP 1 /VOICE:8','HANDLE 1 /SLOW','HANDLE 1 /CRC:00000000','HANDLE 1 /TYPE:WAV','T.WAV /TYPE:RAW','HANDLE 1 /VOICE:255','HANDLE 1 /PRIORITY:128'])test('ignored option rejected '+cli,'UGPLAY',cli,1);
 for(const cli of ['/HZ:0','/HZ:11','/COUNT:0','/COUNT:4294967296','/GS','X'])test('monitor syntax '+cli,'UGMON',cli,1);
 card=new PcmCard(catalog);asset(card);test('loop foreground','UGPLAY','HANDLE 1 /LOOP',0,{card});
@@ -87,7 +93,7 @@ for(const app of ['UGLOAD','UGPLAY','UGMON'])for(const [cli,o,code] of [
  [app==='UGLOAD'?`T.RAW /TYPE:RAW ${opts}`:app==='UGPLAY'?'HANDLE 1':'/COUNT:1',{mode:1},2],
  [app==='UGLOAD'?`T.RAW /TYPE:RAW ${opts}`:app==='UGPLAY'?'HANDLE 1':'/COUNT:1',{api:2},3],
 ])test(app+' reject '+JSON.stringify(o),app,cli,code,o);
-for(const cli of ['T.RAW /TYPE:RAW /RATE:8000 /BITS:8 /CH:1','T.RAW /TYPE:RAW /RATE:48001 /BITS:8 /CH:1 /FMT:U8','T.WAV /TYPE:WAV /RATE:8000','T.MOD /TYPE:MOD'])test('load syntax '+cli,'UGLOAD',cli,1);
+for(const cli of ['T.RAW /TYPE:RAW /RATE:8000 /BITS:8 /CH:1','T.RAW /TYPE:RAW /RATE:48001 /BITS:8 /CH:1 /FMT:U8','T.WAV /TYPE:WAV /RATE:8000'])test('load syntax '+cli,'UGLOAD',cli,1);
 for(const hz of [1,3,5,7,10])test('monitor interval '+hz,'UGMON',`/COUNT:3 /HZ:${hz}`,0,{check:(c,m)=>m.text.match(/output_frames=/g)?.length===3});
 test('monitor ESC preserves sound','UGMON','',0,{card,escAfter:3,check:c=>!c.foreground});
 test('monitor stalled card frames','UGMON','/COUNT:2',8,{stoppedAudio:true});

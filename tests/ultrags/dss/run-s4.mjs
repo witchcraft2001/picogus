@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {loadZ80,parseExe,SprinterMachine,runImage} from './ug-harness.mjs';
 import {SlowCard} from './slow-card.mjs';
 import {crc32} from './config-card.mjs';
-import {verifyBuild,executionInputs} from '../../../tools/ultrags/build-evidence.mjs';
+import {verifyBuild,executionInputs,dssExeName} from '../../../tools/ultrags/build-evidence.mjs';
 const root=resolve(process.argv[2]||'.'),build=resolve(process.argv[3]||'build'),Z80=loadZ80(root);
 const inputSnapshot=executionInputs(root);
 const assembly=verifyBuild(root,join(build,'ultrags/dss'));
@@ -26,8 +26,8 @@ console.log('PASS S4 shared actual C/model fixtures: '+reference.length);
 const fullOnly=!!process.env.UG_S4_FULL;
 function test(name,app,cli,expected=0,opts={}) {
  if(fullOnly && name!=='8MiB actual EXE')return {card:opts.card??new SlowCard(catalog,opts)};
- const bytes=readFileSync(join(build,'ultrags/dss',app+'.EXE')),h=parseExe(bytes);
- executed.set(app,{name:app+'.EXE',size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
+ const exeName=dssExeName(app),bytes=readFileSync(join(build,'ultrags/dss',exeName)),h=parseExe(bytes);
+ executed.set(app,{name:exeName,size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
  const card=opts.card??new SlowCard(catalog,opts),m=new SprinterMachine({card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,turboHardware:opts.cpuHz!==3500000,commandLine:cli,movingClock:!opts.stopped,clockStart:opts.clockStart??86390,escAfter:opts.escAfter??Infinity,logLimit:1000,files:opts.files??{},disk:opts.disk??{}});
  const frames=[],statusReads={x:0,gs:0};let request=[],active;
  const rawRead=card.readPort.bind(card),rawWrite=card.writePort.bind(card);
@@ -131,7 +131,7 @@ test('bad dump range','UGDUMP','1 BAD.BIN /OFFSET:70002',4,{card,check:(c,m)=>!m
 test('missing file' ,'UGLOAD','NOFILE.BIN /TYPE:BLOB',5,{check:c=>!c.objects.size});
 test('existing output','UGDUMP','1 BACK.BIN',5,{card,files:{'BACK.BIN':Buffer.from('keep')},check:(c,m)=>m.files.get('BACK.BIN').toString()==='keep'});
 test('overwrite','UGDUMP','1 BACK.BIN /LENGTH:17 /OVERWRITE',0,{card,files:{'BACK.BIN':Buffer.alloc(100)},check:(c,m)=>m.files.get('BACK.BIN')?.equals(input.subarray(0,17))});
-for(const cli of ['TEST.BIN','TEST.BIN /TYPE:MOD','TEST.BIN /TYPE:BLOB /CRC:123','TEST.BIN /TYPE:BLOB /CRC:123456789','TEST.BIN /TYPE:BLOB /SLOT:2'])test('syntax '+cli,'UGLOAD',cli,1);
+for(const cli of ['TEST.BIN','TEST.BIN /TYPE:UNKNOWN','TEST.BIN /TYPE:BLOB /CRC:123','TEST.BIN /TYPE:BLOB /CRC:123456789','TEST.BIN /TYPE:BLOB /SLOT:2'])test('syntax '+cli,'UGLOAD',cli,1);
 for(const cli of ['65536 X.BIN','0x10000 X.BIN','1 X.BIN /OFFSET:4294967296','1 X.BIN /LENGTH:-1'])test('syntax '+cli,'UGDUMP',cli,1);
 for(const [app,cli] of [['UGLOAD','TEST.BIN /TYPE:BLOB /OVERWRITE'],['UGLOAD','TEST.BIN /TYPE:BLOB /OFFSET:0'],['UGLOAD','TEST.BIN /TYPE:BLOB /LENGTH:1'],['UGDUMP','1 X.BIN /TYPE:BLOB'],['UGDUMP','1 X.BIN /CRC:00000000'],['UGMEM','ROUNDTRIP 32 /CRC:00000000'],['UGMEM','ROUNDTRIP 32 /TYPE:BLOB'],['UGMEM','ROUNDTRIP 32 /OFFSET:0'],['UGMEM','ROUNDTRIP 32 /OVERWRITE']])test('foreign option '+app+' '+cli,app,cli,1,{check:c=>!c.objects.size});
 if(process.env.UG_S4_FULL) test('8MiB actual EXE','UGMEM','ROUNDTRIP 8388608 /SLOW',0,{budget:10000000000,check:c=>!c.objects.size});

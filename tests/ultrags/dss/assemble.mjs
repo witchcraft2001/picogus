@@ -9,9 +9,9 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { buildInputs } from '../../../tools/ultrags/build-evidence.mjs';
+import { buildInputs, dssExeName } from '../../../tools/ultrags/build-evidence.mjs';
 
 const REPO = resolve(process.argv[2] || '.');
 const OUT = resolve(process.argv[3] || 'build/ultrags/dss');
@@ -26,6 +26,13 @@ const sources = [
   ...readdirSync(join(REPO, 'host/sprinter/ultrags/apps')).filter(f => f.endsWith('.asm')).sort().map(f => join(REPO, 'host/sprinter/ultrags/apps', f)),
   ...readdirSync(STDIR).filter((f) => f.endsWith('.asm')).sort().map((f) => join(STDIR, f)),
 ];
+const names = sources.map(src => dssExeName(src.split('/').pop()));
+if (new Set(names).size !== names.length) throw new Error('duplicate DSS 8.3 EXE names');
+// Remove only obsolete outputs belonging to these sources after a name change.
+for (const src of sources) {
+  const oldName = src.split('/').pop().replace(/\.asm$/, '.EXE').toUpperCase();
+  if (!names.includes(oldName) && readdirSync(OUT).includes(oldName)) unlinkSync(join(OUT, oldName));
+}
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 const manifest = { assembler: null, inputs: buildInputs(REPO, OUT), files: [] };
 const version = spawnSync(SJASM, ['--version'], { encoding: 'utf8' });
@@ -36,7 +43,8 @@ if (!/\bv1\.22\.0\b/.test(manifest.assembler)) throw new Error(`sjasmplus 1.22.0
 let failed = 0;
 for (const src of sources) {
   const name = src.split('/').pop().replace(/\.asm$/i, '');
-  const exe = join(OUT, `${name.toUpperCase()}.EXE`);
+  const exeName = dssExeName(name);
+  const exe = join(OUT, exeName);
   const lst = join(OUT, `${name}.lst`);
   try {
     execFileSync(SJASM, [
@@ -44,8 +52,8 @@ for (const src of sources) {
       `--raw=${exe}`, `--lst=${lst}`, src,
     ], { stdio: 'pipe' });
     const b = readFileSync(exe);
-    manifest.files.push({ name: `${name.toUpperCase()}.EXE`, size: b.length, sha256: sha(b), src: src.slice(REPO.length + 1) });
-    console.log(`  ${name.toUpperCase()}.EXE ${b.length}B`);
+    manifest.files.push({ name: exeName, size: b.length, sha256: sha(b), src: src.slice(REPO.length + 1) });
+    console.log(`  ${exeName} ${b.length}B`);
   } catch (e) {
     failed++;
     console.error(`FAIL ${name}: ${(String(e.stdout || '') + String(e.stderr || '') || e.message).split('\n').slice(0, 10).join(' | ')}`);

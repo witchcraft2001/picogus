@@ -2,8 +2,8 @@
 
 Software gate: **HOST_PASS / DSS-EXE_PASS / REAL_PENDING**. S6 remains
 **IN_PROGRESS** until the physical measurements below pass. API 1.0 and Settings
-are unchanged. MOD, legacy GS loading and playlists belong to later stages and
-are rejected by the S6 CLI before hardware access.
+are unchanged. MOD4 native support is being added in S7; legacy GS loading and
+playback and playlists remain later work. This S6 guide covers RAW/WAV only.
 
 Load an asset once, keep its printed object handle, play it repeatedly, then free
 it explicitly. A handle identifies stored bytes in the printed session;

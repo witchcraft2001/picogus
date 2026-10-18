@@ -18,6 +18,8 @@ PCM_OPTION:
     jr c,.numeric
     dec a
     ld (PCM_KIND),a
+    ; BLOBTYPE is the explicit /TYPE option marker, not the object kind.
+    ; ALLOC takes its kind from PCM_KIND, including BLOB=0.
     ld a,1
     ld (BLOBTYPE),a
     or a
@@ -166,6 +168,9 @@ PCM_PREFLIGHT:
     cp 2
     ld b,4
     jr z,.check
+    cp 3
+    ld b,8
+    jr z,.check
     ld b,1
     ld a,(PCM_DESC+5)
     cp 8
@@ -256,6 +261,11 @@ PCM_SHOW_TYPE:
     cp 1
     jr z,.type
     ld hl,pcm_wav_text
+    cp 3
+    jr nz,.type
+    ld hl,pcm_mod_text
+    call SHOW
+    ret
 .type:
     call SHOW
     ld hl,(HANDLE)
@@ -302,11 +312,12 @@ PCM_UNSUPPORTED:
     ld hl,pcm_unsupported_text
     ld (REASON),hl
     jp PROTOCOL
-pcm_types: DB "/TYPE:BLOB",0,1,"/TYPE:RAW",0,2,"/TYPE:WAV",0,3,0
+pcm_types: DB "/TYPE:BLOB",0,1,"/TYPE:RAW",0,2,"/TYPE:WAV",0,3,"/TYPE:MOD",0,4,0
 pcm_prefixes: DB "/RATE:",0,"/BITS:",0,"/CH:",0,"/FMT:",0
 pcm_formats: DB "U8",0,1,"S8",0,2,"S16LE",0,3,0
 pcm_raw_text: DB " type=RAW",0
 pcm_wav_text: DB " type=WAV",0
+pcm_mod_text: DB " type=MOD4",0
 pcm_format_text: DB "FORMAT",0
 pcm_unsupported_text: DB "UNSUPPORTED_FORMAT_OR_FEATURE",0
     ASSERT BUF+1024 <= BACK
