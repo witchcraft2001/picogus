@@ -214,6 +214,11 @@ BLOB_OPTION:
     scf
     ret
 BLOB_SETUP:
+    ld a,1
+    ld bc,0
+    ld e,32
+    call RPC
+    jp c,RPC_ERROR
     ld a,(RESP)
     and 2
     jp z,PROTOCOL
@@ -234,15 +239,10 @@ BLOB_SETUP:
 .showtransport:
     call SHOW
     call NL
-    ld a,0
-    ld bc,0
-    ld e,36
-    call RPC
+    ; Setup must not silently adopt a rebooted card after ENTRY printed the
+    ; original session. Check before opening a file or allocating an object.
+    call SESSION_CHECK
     jp c,RPC_ERROR
-    ld hl,RESP+12
-    ld de,SESSION
-    ld bc,8
-    ldir
     ret
 ; Keep DSS-returned AF/DE, preserve IX/IY for all file calls except seek.
 FILECALL:
@@ -349,7 +349,12 @@ RESERVE:
     or a
     sbc hl,de
     jp nc,MEM_ERROR
+    call SESSION_CHECK
+    jp c,RPC_ERROR
     xor a
+    IFDEF APP_PCM
+    ld a,(PCM_KIND)
+    ENDIF
     ld (REQ),a
     ld hl,SIZE32
     ld de,REQ+1
@@ -395,8 +400,20 @@ ALLOC_ERROR:
     ld a,(UG_LAST_SOURCE)
     cp 1
     jr nz,.known
+.unknown:
+    ld a,(UG_LAST_ERROR)
+    ld (SAVEDERR),a
+    ld a,1
+    ld (UGTM.NOESC),a
+    ld a,UG_XC_TRANSPORT_RESET
+    call UG_XCTRL
+    call SESSION_CHECK
     ld hl,alloc_unknown
     ld (REASON),hl
+    ld a,(SAVEDERR)
+    ld (UG_LAST_ERROR),a
+    ld a,1
+    ld (UG_LAST_SOURCE),a
 .known:
     ld a,(UG_LAST_ERROR)
     jp RPC_ERROR
@@ -548,8 +565,11 @@ SESSION_CHECK:
 .changed:
     xor a
     ld (OWN),a
+    ld hl,blob_session_text
+    ld (REASON),hl
     scf
     ret
+blob_session_text: DB "SESSION_CHANGED",0
 SEAL_BLOB:
     ld hl,(HANDLE)
     ld (REQ),hl
@@ -599,7 +619,15 @@ SEAL_BLOB:
     ld bc,7
     ld e,4
     call RPC
+    IFDEF APP_PCM
+    IFDEF APP_LOAD
+    jp c,PCM_SEAL_ERROR
+    ELSE
     jp c,RPC_ERROR
+    ENDIF
+    ELSE
+    jp c,RPC_ERROR
+    ENDIF
     ld hl,RESP
     ld de,ACTUALCRC
     ld bc,4
@@ -709,6 +737,7 @@ PATTERN:
     or c
     jr nz,.loop
     ret
+    IFNDEF APP_PROTO
 ROUNDTRIP:
     call BLOB_SETUP
     call RESERVE
@@ -732,10 +761,21 @@ ROUNDTRIP:
     call COMPARE_BLOCK
     call ADVANCE
     jr .read
+    ELSE
+ROUNDTRIP:
+    jp SYNTAX
+    ENDIF
+    IFDEF APP_LOAD
 LOAD_FILE:
+    call UPLOAD_FILE
+    jp PASS
+UPLOAD_FILE:
     call BLOB_SETUP
     call OPEN_INPUT
     call APP_TIME_INIT
+    IFDEF APP_PCM
+    call PCM_PREFLIGHT
+    ENDIF
     call RESERVE
     call START_BLOCKS
 .loop:
@@ -744,11 +784,27 @@ LOAD_FILE:
     ld a,0x13
     call IO_BLOCK
     call FOLD_FILE
+    call SESSION_CHECK
+    jp c,RPC_ERROR
     call WRITE_BLOCK
     call ADVANCE
     jr .loop
 .seal:
+    call SESSION_CHECK
+    jp c,RPC_ERROR
+    IFDEF APP_PCM
+    call PCM_CONFIGURE
+    ENDIF
     call SEAL_BLOB
+    ; Once READY, errors/PLAY refusal never delete the published asset.
+    IFDEF APP_PCM
+    ld a,(PCM_KIND)
+    or a
+    jr z,.blob_owner
+    xor a
+    ld (OWN),a
+.blob_owner:
+    ENDIF
     ld a,(VERIFY)
     or a
     jr z,.done
@@ -761,6 +817,8 @@ LOAD_FILE:
     jr z,.done
     ld a,0x13
     call IO_BLOCK
+    call SESSION_CHECK
+    jp c,RPC_ERROR
     call READ_BLOCK
     call COMPARE_BLOCK
     call ADVANCE
@@ -776,8 +834,12 @@ LOAD_FILE:
     call SHOW
     ld hl,SIZE32
     call DEC32
+    IFDEF APP_PCM
+    call PCM_SHOW_TYPE
+    ELSE
     ld hl,type_text
     call SHOW
+    ENDIF
     ld hl,crc_text
     call SHOW
     ld hl,ACTUALCRC
@@ -785,7 +847,14 @@ LOAD_FILE:
     call HEX_BYTES
     call NL
     call APP_SPEED
-    jp PASS
+    call CLOSE_FILE
+    jp c,FILE_ERROR
+    ret
+    ELSE
+LOAD_FILE:
+    jp SYNTAX
+    ENDIF
+    IFDEF APP_DUMP
 DUMP_FILE:
     call BLOB_SETUP
     ld hl,(HANDLE)
@@ -869,6 +938,8 @@ DUMP_FILE:
 .loop:
     call NEXT_BLOCK
     jr z,.done
+    call SESSION_CHECK
+    jp c,RPC_ERROR
     call READ_BLOCK
     ld a,0x14
     call IO_BLOCK
@@ -896,6 +967,10 @@ DUMP_FILE:
 .result:
     call NL
     jp PASS
+    ELSE
+DUMP_FILE:
+    jp SYNTAX
+    ENDIF
 BLOB_CLEANUP:
     ; A held ESC must not cancel the bounded INFO/FREE recovery itself.
     ld a,1
@@ -939,6 +1014,26 @@ BLOB_CLEANUP:
     ENDIF
     call SESSION_CHECK
     ret c
+    IFDEF APP_PCM
+    IFDEF APP_LOAD
+    ; Even a failed reconciliation must never turn a READY PCM into a
+    ; temporary object. A later bounded cleanup probe may see SEAL finish.
+    ld a,(PCM_KIND)
+    or a
+    jr z,.free
+    ld hl,(HANDLE)
+    ld (REQ),hl
+    ld a,18
+    ld bc,2
+    ld e,38
+    call RPC
+    ret c
+    ld a,(RESP+3)
+    cp 1
+    ret z
+.free:
+    ENDIF
+    ENDIF
     ld hl,(HANDLE)
     ld (REQ),hl
     ld a,17
@@ -953,6 +1048,7 @@ BLOB_CLEANUP:
     ld (ERR),a
     ret
  ; DSS clock sampling, modulo midnight, outside grants. u32 totals.
+    IFNDEF APP_PROTO
 APP_TIME_CLOCK:
     push ix
     push iy
@@ -1120,6 +1216,7 @@ APP_SPEED:
     ld hl,TIMEQUOT
     call DEC32
     jp NL
+    ENDIF
 crc_prefix: DB "/CRC:",0
 offset_prefix: DB "/OFFSET:",0
 length_prefix: DB "/LENGTH:",0

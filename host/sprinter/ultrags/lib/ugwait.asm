@@ -121,23 +121,3 @@ UG_WAIT_NEXT:
     pop de
     pop bc
     ret
-; Yield before the ninth frame byte; register values and flags preserved.
-UG_FRAME_YIELD:
-    push af
-    ld a,(UGTM.CHUNK)
-    cp 8
-    jr c,.count
-    push bc
-    push de
-    push hl
-    call UG_ISA_CLOSE
-    call UG_WIN_OPEN
-    pop hl
-    pop de
-    pop bc
-    xor a
-.count:
-    inc a
-    ld (UGTM.CHUNK),a
-    pop af
-    ret

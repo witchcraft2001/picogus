@@ -5,21 +5,20 @@
 ; The ISA bus is reached through memory window 3 (0C000h-0FFFFh):
 ;   * PAGE3 port 00E2h selects what WIN3 maps; the ISA-ports control byte
 ;     is D4h+slot*2 (D7=1 D6=1 D4=1 enable, D2/D1 = slot, D0=0).
-;   * PORT_SYSTEM 1FFDh must be switched to 11h for the ISA mapping to be
-;     visible in WIN3.  PORT_SYSTEM is READ-BACK per the platform DCP
-;     scheme: the original value is sampled with IN A,(C) and later
-;     restored verbatim - restoring a hardcoded 01h is forbidden.
+;   * PORT_SYSTEM 1FFDh is write-only (reads return mapper data).
+;     DSS uses 11h while mapped and 01h after closing.
+;   * SYS_PORT.RAM 3Ch receives 2 before ISA (Turbo off), 3 after
+;     closing (DSS default Turbo on). Actual entry speed is unknowable
+;     without measurement; neither SYSTEM nor CONFIG_DE is a snapshot.
 ;   * PORT_ISA 9FBDh holds A19..A14/AEN/RESET; writing 2 or C0h pulses the
 ;     ISA RESET line and is never done here.
 ; While the window is open, CPU addresses 0C000h+isa_addr hit the ISA bus;
 ; RAM there is unreachable - code and stack must live below 0C000h.
 ;
-; Context contract (spec 3.1 MUST): UG_ISA_OPEN saves IFF (LD A,I parity
-; with the NMOS erratum re-read), PAGE3 and the read-back SYSTEM value;
-; UG_ISA_CLOSE restores all three, on success and on error paths alike.
-; The window is per-call and short-lived: public library entries open it
-; for one bounded bus operation, then restore the sampled context.  It is
-; never held across DSS work, frame waits, or between caller operations.
+; Context contract: preserve PAGE3 and IFF on every window. Return to
+; DSS SYSTEM=01h / software Turbo enabled; hardware Turbo permission
+; remains independent. No BIOS calls or CONFIG_DE accesses are needed.
+; Code/stack stay below C000h, with DI across the complete mapping change.
 ;
 ; Valid slots on this platform are 0 and 1 only.  Public entries preserve
 ; IX/IY and return CF=1/A=UG_ERR_* on defined failures.
@@ -32,8 +31,11 @@
 
 ; Sprinter platform ports (16-bit, accessed via IN/OUT (C))
 UG_PORT_PAGE3	EQU 0x00E2		; window-3 control
-UG_PORT_SYSTEM	EQU 0x1FFD		; system port (readable shadow)
+UG_PORT_SYSTEM	EQU 0x1FFD		; write-only mapping control
 UG_PORT_ISA	EQU 0x9FBD		; ISA high address lines / RESET / AEN
+
+UG_PORT_SYS_RAM EQU 0x003C	; SYS_PORT.RAM, Turbo command (2/3)
+UG_SYSTEM_DSS EQU 0x01
 
 UG_SYSTEM_ISA	EQU 0x11		; SYSTEM value enabling ISA in WIN3
 UG_PAGE3_ISA	EQU 0xD4		; PAGE3 ISA-ports base byte; +slot*2
@@ -60,10 +62,8 @@ UG_ISA_OPEN:
 	ret	nz			; refuse nested open
 	ld	a,b
 	ld	(UGCTX.SLOT),a
-    IFDEF UG_DSS_TIMED
     xor a
     ld (UGTM.CHUNK),a
-    ENDIF
 	ld	a,l
 	ld	(UGCTX.BASE),a
 	ld	a,h
@@ -83,13 +83,14 @@ UG_ISA_OPEN:
 	inc	a
 .iffStore:
 	ld	(UGCTX.IFFSAVE),a
-	; save original PAGE3 and the READ-BACK system value
+	; Save PAGE3; disable Turbo directly while preserving the DSS RAM map.
 	ld	bc,UG_PORT_PAGE3
 	in	a,(c)
 	ld	(UGCTX.PAGE3SAVE),a
+	ld	bc,UG_PORT_SYS_RAM
+	ld	a,2
+	out	(c),a
 	ld	bc,UG_PORT_SYSTEM
-	in	a,(c)
-	ld	(UGCTX.SYSSAVE),a
 	; switch SYSTEM to the ISA mapping mode
 	ld	a,UG_SYSTEM_ISA
 	out	(c),a
@@ -109,7 +110,7 @@ UG_ISA_OPEN:
 	ret
 
 ; ----------------------------------------------------------- UG_ISA_CLOSE
-; Restores PAGE3, SYSTEM and IFF to the values sampled at UG_ISA_OPEN.
+; Restores PAGE3/IFF and the canonical DSS mapping and Turbo permission.
 ; in : - ; out: CF=0 closed; CF=1 A=UG_ERR_STATE was not open
 ; clobbers AF,BC
 UG_ISA_CLOSE:
@@ -118,12 +119,15 @@ UG_ISA_CLOSE:
 	ld	a,UG_ERR_STATE
 	scf
 	ret	z
-	; drop the ISA mapping first, then hand the window back to RAM
+	; Close ISA before restoring PAGE3, then return to DSS Turbo.
+	ld	bc,UG_PORT_SYSTEM
+	ld	a,UG_SYSTEM_DSS
+	out	(c),a
 	ld	bc,UG_PORT_PAGE3
 	ld	a,(UGCTX.PAGE3SAVE)
 	out	(c),a
-	ld	bc,UG_PORT_SYSTEM
-	ld	a,(UGCTX.SYSSAVE)	; original value, NOT canonical 01h
+	ld	bc,UG_PORT_SYS_RAM
+	ld	a,3
 	out	(c),a
 	xor	a
 	ld	(UGCTX.ISOPEN),a
@@ -133,6 +137,29 @@ UG_ISA_CLOSE:
 	ret	z
 	ei
 	ret
+
+; Yield before the ninth frame byte; register values and flags preserved.
+UG_FRAME_YIELD:
+    push af
+    ld a,(UGTM.CHUNK)
+    cp 8
+    jr c,.count
+    push bc
+    push de
+    push hl
+    call UG_ISA_CLOSE
+    ld a,(UGCTX.SLOT)
+    ld hl,(UGCTX.BASE)
+    call UG_ISA_OPEN
+    pop hl
+    pop de
+    pop bc
+    xor a
+.count:
+    inc a
+    ld (UGTM.CHUNK),a
+    pop af
+    ret
 
 ; ------------------------------------------------- window port addressing
 ; UG_WINADDR: in HL = absolute ISA address (<4000h);
@@ -275,9 +302,7 @@ UG_REQ_WRITE:
 .wr:	ld	a,b
 	or	c
 	ret	z
-    IFDEF UG_DSS_TIMED
     call UG_FRAME_YIELD
-    ENDIF
 	ld	a,(hl)
 	ld	(de),a
 	inc	hl
@@ -299,9 +324,7 @@ UG_RESP_READ:
 .rd:	ld	a,b
 	or	c
 	ret	z
-    IFDEF UG_DSS_TIMED
     call UG_FRAME_YIELD
-    ENDIF
 	ld	a,(hl)
 	ld	(de),a
 	inc	de
@@ -320,9 +343,7 @@ UG_RESP_SKIP:
 .rd:	ld	a,b
 	or	c
 	ret	z
-    IFDEF UG_DSS_TIMED
     call UG_FRAME_YIELD
-    ENDIF
 	ld	a,(hl)
 	dec	bc
 	jr	.rd

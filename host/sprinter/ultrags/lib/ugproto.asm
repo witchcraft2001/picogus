@@ -51,8 +51,8 @@ UG_WAIT_BUDGET	EQU 0x4000
 ; GS latch WC/WN poll budget (~0.4s @21MHz)
 UG_GS_BUDGET	EQU 0x4000
 
-; conservative pre-measurement ISA chunk (spec 3.1: FIXED, chunk<=32)
-UG_CHUNK_DEF	EQU 32
+; conservative pre-measurement ISA chunk (spec 3.1: protected 3.5 MHz ISA, chunk<=8)
+UG_CHUNK_DEF	EQU 8
 UG_CHUNK_SLOW	EQU 8
 
 ; ------------------------------------------------------------ UG_SET_ERR
@@ -118,6 +118,21 @@ UG_CPU_PROFILE:
 	ld	(UG_PROFILE),a
 	ld	(UG_CHUNK),hl
 	xor	a
+	ret
+
+; Always cap the actual window, including caller-supplied profiles.
+; out BC=1..8; clobbers AF. Zero/oversized chunks use the safe default.
+UG_SAFE_CHUNK:
+	ld bc,(UG_CHUNK)
+	ld a,b
+	or a
+	jr nz,.cap
+	ld a,c
+	dec a
+	cp 8
+	ret c
+.cap:
+	ld bc,8
 	ret
 
 ; ------------------------------------------------- internal window helper
@@ -868,7 +883,7 @@ UG_WRITE:
 	sbc	hl,de			; HL = remaining
 	jr	z,.w_data_done
 	; k = min(UG_CHUNK, remaining), and ALIAS caps at 32 (window size)
-	ld	bc,(UG_CHUNK)
+	call	UG_SAFE_CHUNK
 	or	a
 	sbc	hl,bc			; remaining - chunk
 	jr	nc,.w_usechunk		; remaining>=chunk -> k=BC
@@ -1141,7 +1156,7 @@ UG_READ:
 	or	a
 	sbc	hl,de
 	jr	z,.r_data_done
-	ld	bc,(UG_CHUNK)
+	call	UG_SAFE_CHUNK
 	or	a
 	sbc	hl,bc
 	jr	nc,.r_usechunk
@@ -1390,8 +1405,8 @@ UG_FRAME_CRC:
 	jp	UG_SET_ERR
 
 ; --------------------------------------------------------- UG_SNAPSHOT
-; in HL = caller buffer (>=128 bytes).  One bounded window:
-; SNAP_LATCH then 128 sequential SNAP_DATA reads.
+; in HL = caller buffer (>=128 bytes). SNAP_LATCH once, then
+; 128 consuming SNAP_DATA reads in windows of at most eight bytes.
 ; out CF=0; CF=1 A=err.  clobbers AF,BC,DE,HL
 UG_SNAPSHOT:
 	push	hl			; caller buffer
@@ -1402,7 +1417,9 @@ UG_SNAPSHOT:
 	call	UG_REG_W
 	pop	de			; DE = dest ptr: UG_REG_R clobbers HL!
 	ld	bc,128
-.sloop:	ld	a,UG_REG_SNAP_DATA
+.sloop:
+    call UG_FRAME_YIELD
+	ld	a,UG_REG_SNAP_DATA
 	call	UG_REG_R		; preserves BC and DE
 	ld	(de),a
 	inc	de

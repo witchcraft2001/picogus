@@ -1,6 +1,7 @@
-# S6 code review — 2026-10-10
+# S6 review history and completion — 2026-10-18
 
-S6 выполнен частично. Итог ревью: **HOST_PARTIAL / DSS-EXE_PENDING / REAL_PENDING**.
+Текущий программный gate: **HOST_PASS / DSS-EXE_PASS / REAL_PENDING**; S6 остаётся IN_PROGRESS.
+Ниже сохранено исходное ревью 2026-10-10: его outstanding-пункты закрывает дополнение в конце файла.
 Ревью охватывает staged изменения S6 и внесённые поверх них исправления. Commit,
 push, прошивка платы и изменения соседних репозиториев не выполнялись.
 
@@ -72,3 +73,83 @@ WAIT/control/monitor, включая FX и lost ACK. Затем закрыть �
 fixtures, полную A01–A04/F02/F03/P11/concurrency матрицу, две свежие полные сборки и
 полные packages. Физические измерения и слушательскую проверку выполнять отдельно;
 §16 оставлен IN_PROGRESS, capabilities MOD/playlist не включены.
+
+## Завершение программного S6 — 2026-10-18
+
+Добавлены общий RAW/WAV loader, PCM_CONFIG, UGPLAY file/HANDLE/foreground/FX,
+UGMON и UGTEST PCM/FX. READY PCM assets сохраняются до явного FREE; WAIT/ESC
+управляет собственным playback token. Неверный новый объект не останавливает
+foreground; замена playing/paused требует REPLACE. Lost ALLOC/PLAY не повторяются:
+transport reset, session/state reconciliation, подтверждение нового token либо
+TIMEOUT с неопределённым результатом. Утилиты будущих этапов отклоняются до bus I/O.
+
+Независимая DSS PCM/FX-модель сверяется с реальными C-векторами. Она моделирует
+время, quantum events, EOF, pins, stereo allocator/steal и циклические tokens;
+actual EXE проходят контекстную, файловую и recovery-матрицы. Индексированные
+S16LE goldens включают 1890 scalar cases и clipping с проверяемым frame accounting.
+Добавлена проверка больших source phases через 1/2/4 МиБ и точного EOF 8 МиБ.
+Фоновая verified загрузка и readback играющего PCM проверяются C и actual EXE.
+
+S6 gate теперь требует полный S0–S5 software gate, обе полные 8-МиБ actual-EXE
+ROUNDTRIP, свежие PCM/FX HOST/DSS evidence, firmware provenance и полную поставку
+EXE/UF2/ZIP/IMG. Verifier отвергает устаревшие входы, заменённые файлы и пропущенные
+proof artifacts даже при пересчитанном manifest. Две свежие сборки и byte compare:
+`build/S6-complete-a`, `build/S6-complete-b`, `REPORT-S6-COMPARISON.txt`.
+Команды воспроизведения и Tester Notes — S6-README.md.
+
+Прежние staged ISA/Turbo исправления сохранены: SYS_PORT.RAM=2/3, PAGE3/IFF,
+<=8 payload bytes и отдельные ISA/DI budgets. Protocol/API/Settings не изменены.
+LRCLK, физическая непрерывность I2S, render/bus budgets и слушательская проверка
+остаются REAL_PENDING. MOD/legacy GS/playlist и MOD8+FX performance — следующие
+этапы; они не объявляются реализованными этим gate. Commit/push/прошивка платы
+не выполнялись.
+
+Заключительный CLI-аудит: общий parser модуля UGTEST теперь отклоняет команды
+UGMEM до DISCOVER/UG_OPEN; `UGTEST FREE 1` проверяется actual EXE на syntax code=1
+без аппаратных записей. Эта поправка не разрешает недокументированные suites.
+
+## Повторное ревью — 2026-10-18
+
+- P1: потерянный SEAL ACK оставлял OWN=1 даже у READY PCM, и error cleanup удалял
+  загруженный семпл. Добавлены transport reset и проверка session/OBJECT_INFO,
+  сохранение READY с напечатанным handle и TIMEOUT; SEAL/PLAY не повторяются.
+  Cleanup дополнительно проверяет READY перед FREE. Actual EXE проверяет RAW,
+  WAV и смену session с повторно использованным номером handle.
+- P2: FX `/WAIT` принимал исчезновение instance после PSRAM fault за EOF и
+  возвращал PASS. Добавлена сверка счётчика PSRAM errors до PLAY и после
+  исчезновения token; новый сбой возвращает audio error. Отдельные сценарии
+  проверяют старую sticky ошибку и повторный сбой с тем же audio_error.
+- P2: параметры VOICE/PRIORITY/GAIN/PAN у команд управления молча игнорировались.
+  Parser теперь учитывает явно переданные параметры, включая значения по
+  умолчанию; неподходящие ключи отклоняются без аппаратных обращений.
+- P1: UGTEST PCM/FX при lost PLAY ACK оставлял неизвестный playback token
+  и pinned тестовый asset. Cleanup после применения очереди сверяет session,
+  находит instances по собственному handle, останавливает их и освобождает
+  временный объект; чужой foreground сохраняется. Оба suites проверены actual EXE.
+  Проверка PCM/FX capabilities перенесена до ALLOC временного объекта suite.
+- Уточнение плана: обычный выход UGPLAY после ACK оставляет звук и playback pins
+  активными, как прямо требует §1.1 ТЗ. Pins снимаются при EOF/STOP/ESC, а READY
+  asset сохраняется во всех случаях до FREE. Формулировка README о снятии pins
+  при любом выходе программы исправлена; FREE играющего объекта остаётся PINNED.
+- P2: BLOB_SETUP мог молча принять новую session после напечатанной старой session.
+  Все приложения теперь фиксируют session при первом INFO; setup сверяет её
+  до открытия файла и ALLOC. UGLOAD/UGPLAY при перезапуске карты на этой границе
+  возвращают SESSION_CHANGED и сохраняют созданный в новой session чужой объект.
+- P1: после DSS read и смены session совпавший LOADING handle мог принять чужие
+  bytes и SEAL. Добавлена сверка session непосредственно перед ALLOC, после
+  файлового I/O, перед следующими upload/readback blocks и SEAL/тестовым PLAY.
+  Отдельный actual-EXE тест проверяет неизменённые bytes/state/uploaded чужого
+  LOADING объекта; READY-only тест этого нарушения не обнаруживал.
+- P2: DSS-модель исключала queued STOP из projected state при выдаче token и
+  могла повторно выдать ещё живой FX ID при wrap. Выдача теперь учитывает реально
+  активные instances и принятые PLAY до render boundary, как production C.
+  Pending STOP + wrap проверяется независимо в C и DSS-модели.
+
+Функциональные дефекты сначала воспроизведены тестами на прежнем EXE
+(lost SEAL удалял READY; FX fault возвращал code=0; UGTEST оставлял pinned loop),
+затем исправлены.
+Физические измерения остаются REAL_PENDING; S6 сохраняет IN_PROGRESS.
+Команды повторной проверки: `s6-package BUILD=build/S6-audit-a`, затем
+`s6-package BUILD=build/S6-audit-b` и `s6-compare.py` для этих каталогов.
+Результаты: `build/S6-audit-b/REPORT-S6.txt` и
+`build/S6-audit-b/REPORT-S6-COMPARISON.txt`.

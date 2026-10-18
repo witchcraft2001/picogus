@@ -12,12 +12,14 @@ for(const name of ['UGTEST','ST-S1-BENCH','ST-S1-DROP','ST-S1-DUP','ST-S1-COUNTE
 function test(name,exe,cli,expected=0,opts={}) {
   const bytes=readFileSync(join(build,'dss',exe+'.EXE')), h=parseExe(bytes);
   const card=opts.absent?null:new DiagCard(opts.card);
-  const m=new SprinterMachine({card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,commandLine:cli,movingClock:!opts.stopped,clockStart:opts.clockStart??86390,escAfter:opts.escAfter??Infinity,logLimit:1000});
+  const m=new SprinterMachine({card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,turboHardware:opts.cpuHz!==3500000,commandLine:cli,movingClock:!opts.stopped,clockStart:opts.clockStart??86390,escAfter:opts.escAfter??Infinity,logLimit:1000});
   m.mem.set(bytes,h.loadAddr);
   const run=runImage(Z80,m,{entry:h.entry,stack:h.stack,iff:opts.iff??1,budget:opts.budget??150000000});
   const violations=[...m.violations];
   if(m.system!==m.systemInit||m.page3!==m.page3Init||!!run.end.iff1!==!!(opts.iff??1)||run.end.sp!==h.stack-2)violations.push('cleanup context mismatch');
-  if(m.maxWindowUs>=10000)violations.push('DI >=10ms');
+  if(m.maxWindowUs>=10000 || m.maxDiUs>=10000)violations.push('ISA/DI >=10ms');
+  if(m.turboWrites && !m.turbo)violations.push('DSS Turbo not enabled');
+  if((name==='help'||name.startsWith('CLI ')) && m.turboWrites)violations.push('Turbo touched before argument validation');
   if(card?.state)violations.push('live diagnostic grant after exit');
   if(card?.profile&&run.exitCode!==0)violations.push('live spike after failure');
   if(opts.noNative&&card&&(card.totalWritten||card.totalRead||card.session!==2))violations.push('native access before CLI/identity validation');
@@ -26,7 +28,7 @@ function test(name,exe,cli,expected=0,opts={}) {
   if(opts.card?.fuseReported&&run.exitCode===0)violations.push('unhandled diagnostic fuse');
   const matchedViolations=opts.expectedViolation ? violations.length>0&&violations.every(v=>opts.expectedViolation.test(v)) : violations.length===0;
   const ok=run.exitCode===expected&&matchedViolations&&m.text.includes(`RESULT ${expected?'FAIL':'PASS'} code=${expected}`);
-  results.push({name,ok,exit:run.exitCode,expected,steps:run.steps,cycles:run.cycles,text:m.text,violations,card:card?{written:card.totalWritten,read:card.totalRead}:null,maxWindowUs:m.maxWindowUs});
+  results.push({name,ok,exit:run.exitCode,expected,steps:run.steps,cycles:run.cycles,text:m.text,violations,card:card?{written:card.totalWritten,read:card.totalRead}:null,maxWindowUs:m.maxWindowUs,maxDiUs:m.maxDiUs});
   console.log(`${ok?'PASS':'FAIL'} S1 ${name} code=${run.exitCode} ${run.steps}i violations=${violations.length} ${ok?'':violations.slice(0,2).join(';')+' '+m.text}`);
   return results.at(-1);
 }
@@ -45,7 +47,7 @@ for(const cli of ['/SLOT:2','/BASE:06A0','/BYTES:0','/BYTES:4294967296','/BLOCK:
 for(const method of ['STACK','ALIAS','SLOW'])test('unsupported-'+method,'ST-S1-BENCH','/METHOD:'+method,3,{noNative:true});
 test('timeout','ST-S1-BENCH','/BYTES:256 /LOOPS:1',8,{card:{timeout:true}});
 test('fuse-reported','ST-S1-BENCH','/BYTES:256 /LOOPS:1',9,{card:{fuseReported:true}});
-for(const [name,code,opts] of [['DROP',9,{}],['DUP',9,{}],['COUNTER',9,{}],['OVERBLOCK',9,{}],['DSSWIN',0,{expectedViolation:/DSS call .* while ISA window open/}],['CLEANUP',0,{expectedViolation:/DSS call .* while ISA window open|cleanup context mismatch/}],['FUSE',0,{card:{fuseReported:true},expectedViolation:/unhandled diagnostic fuse/}]])
+for(const [name,code,opts] of [['DROP',9,{}],['DUP',9,{}],['COUNTER',9,{}],['OVERBLOCK',9,{}],['DSSWIN',0,{expectedViolation:/DSS call .* while ISA window open/}],['CLEANUP',0,{expectedViolation:/DSS call .* while ISA window open|cleanup context mismatch|DSS Turbo not enabled/}],['FUSE',0,{card:{fuseReported:true},expectedViolation:/unhandled diagnostic fuse/}]])
   test('defective-selftest-'+name,'ST-S1-'+name,'/BYTES:256 /LOOPS:1 /CHECK:NONE',code,opts);
 test('finite-delay-CLI','ST-S1-BENCH','/ASSERT:1000 /RESPONSE:1000 /BYTES:33 /BLOCK:32 /LOOPS:1 /CHECK:NONE');
 test('delay-over-limit','ST-S1-BENCH','/ASSERT:1001',1);

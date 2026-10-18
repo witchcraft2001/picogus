@@ -10,7 +10,7 @@ const build=arg('--build','build'),pkg=arg('--package',join(build,'ultrags/s6-pa
 const root=resolve(new URL('../..',import.meta.url).pathname);
 execFileSync(process.env.UG_PYTHON||'python3',[join(root,'tools/ultrags/s6-report.py'),'--build',build],{stdio:'ignore'});
 const manifest=JSON.parse(readFileSync(join(pkg,'manifest.json'),'utf8'));
-if(manifest.stage!=='S6 increment' || manifest.status!==status || manifest.scope!==scope) throw Error('incorrect S6 increment scope/status');
+if(manifest.stage!=='S6' || manifest.status!==status || manifest.scope!==scope) throw Error('incorrect S6 scope/status');
 const expected=expectedFiles(root,build),names=new Set();
 for(const f of manifest.files) {
   if(typeof f.name!=='string' || !expected.has(f.name) || names.has(f.name)) throw Error('invalid/duplicate/unexpected path '+f.name);
@@ -19,7 +19,8 @@ for(const f of manifest.files) {
   if(data.length!==f.size || createHash('sha256').update(data).digest('hex')!==f.sha256) throw Error('manifest mismatch '+f.name);
   if(!data.equals(readFileSync(expected.get(f.name)))) throw Error('stale/replaced package artifact '+f.name);
 }
-if(names.size!==expected.size) throw Error('incomplete S6 increment');
+if(names.size!==expected.size) throw Error('incomplete S6 package');
+execFileSync(process.execPath,[join(root,'tools/ultrags/verify-package.mjs'),'--stage','S6','--package',pkg,'--exe-dir',join(build,'ultrags/dss'),'--fixtures',join(build,'ultrags/fixtures')],{stdio:'ignore'});
 const actual=[];
 const walk=(dir)=>{for(const entry of readdirSync(join(pkg,dir),{withFileTypes:true})) {
   const name=dir?dir+'/'+entry.name:entry.name;

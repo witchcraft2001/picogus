@@ -471,15 +471,9 @@ BENCH_ROW:
     ld a,(BM_CURRENT)
     or a
     jr z,.print_chunk
-    ld hl,(UG_CHUNK)
-    cp 2
-    jr nz,.print_chunk
-    ld de,33
-    or a
-    sbc hl,de
-    ld hl,(UG_CHUNK)
-    jr c,.print_chunk
-    ld hl,32
+    call UG_SAFE_CHUNK
+    ld h,b
+    ld l,c
 .print_chunk:
     call DEC16
     ld hl,loops_text
@@ -886,7 +880,7 @@ row_text: DB "BENCH method=",0
 direction_text: DB " direction=",0
 check_text: DB " check=",0
 block_text: DB " block=",0
-chunk_text: DB " chunk=",0
+chunk_text: DB " isa_mhz=3.5 turbo_between=ON chunk=",0
 loops_text: DB " loops=",0
 setup_text: DB " setup_seconds=",0
 payload_text: DB " payload_seconds=",0
@@ -899,3 +893,6 @@ bulk_skip: DB "BULK SKIP NOT_SUPPORTED",0
 cost_text: DB "crc_cost_seconds=",0
 cost_unknown: DB "crc_cost_seconds=UNAVAILABLE measurement_overflow=SATURATED",0
 overflow_text: DB "measurement_overflow=SATURATED speed=UNAVAILABLE",0
+
+    ASSERT BACK+1024 <= BM
+    ASSERT BM+96 <= REQ ; common 128-byte RPC request must not overwrite benchmark state

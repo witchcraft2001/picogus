@@ -1,0 +1,10 @@
+    IFDEF APP_PLAY
+    DB "UGPLAY file.WAV|file.RAW | HANDLE handle [/WAIT /LOOP /REPLACE]",13,10
+    DB "RAW: /RATE:N /BITS:8|16 /CH:1|2 /FMT:U8|S8|S16LE",13,10
+    DB "STOP|PAUSE|RESUME | FX file | FXHANDLE handle",13,10
+    DB "/VOICE:N /PRIORITY:N /GAIN:0..64 /PAN:0..255 /STEAL",13,10
+    DB "FXSTOP id|ALL | FXPAUSE id | FXRESUME id",13,10
+    ELSE
+    DB "UGMON /COUNT:N /HZ:1..10 (default 5); ESC exits monitor",13,10
+    ENDIF
+    DB "/SLOT:0|1 /BASE:hex /QUIET /?",13,10,0

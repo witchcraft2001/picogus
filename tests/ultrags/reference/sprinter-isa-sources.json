@@ -1,0 +1,43 @@
+{
+  "owner_correction": "2026-10-18: current Turbo cannot be read reliably; direct SYS_PORT writes; restore DSS Turbo ON",
+  "sources": [
+    {
+      "name": "picogus_support",
+      "path": "/Users/dmitry/dev/zx/sprinter/sources/picogus_support",
+      "revision": "09d63ff09c045068ddfbb5dbcc2c7e026aa226c9",
+      "files": {
+        "src/isa_window.asm": "4c41b8522431db1fcd2e4efbdfb35dfed444e817ee893a6df8b70829c16db90c",
+        "src/turbo.asm": "b430cb6411ba14640b7937feae84a64be1a4f0b9ab1ac47d9d170415a7bb5280",
+        "src/include/platform.inc": "918e63c1391c4a2e87cbb7efb595f86d07c720c1d9262b0c52e749b0b445a02f",
+        "LICENSE": "68a7f0511420022f8d44aed7fb55552fb96362eec373b7fab981294842b8ced9"
+      },
+      "use": "Source audit only; no code copied"
+    },
+    {
+      "name": "Sprinter BIOS source (3.07 checkout; port constants, not a 3.06 execution)",
+      "path": "/Users/dmitry/dev/zx/sprinter/sprinter_bios",
+      "revision": "314ba263d69de25c6b85789c5b9d39f39f07a35d",
+      "files": {
+        "Shared_Includes/constants/SP2000.inc": "000a6fd05653763a22d732163445e3ca738054883c69ae445910a241c6dd2267",
+        "src/bios/shared/DEFINES.INC": "08cf112d9397693c3df02a27de6b8d500fd1ad9f34dd9671acdefcc8d4038523",
+        "src/bios/exp/FUNC_SERVICE.asm": "301793c4a89b6a2aed5f2d51d7455c3b3b22aae78aa37a410238587c846c1815"
+      },
+      "use": "Source audit only; no code copied"
+    },
+    {
+      "name": "MAME Sprinter port model",
+      "path": "/Users/dmitry/dev/zx/sprinter/mame",
+      "revision": "645d9858005383395590a5b292695d02530cf5d9",
+      "files": {
+        "src/mame/sinclair/sprinter.cpp": "c0d9309f44f29be63b0742457ca1b85478b4a7c179daac3d55b2710a103b3112"
+      },
+      "use": "Source audit only; no code copied"
+    },
+    {
+      "name": "BIOS 3.06 reference ROM from release_v306_25.05.2025",
+      "path": "/Users/dmitry/dev/zx/sprinter/mame_images/mame_release_v306_25.05.2025/roms/sprinter/_SPRIN.bin",
+      "sha256": "e3ea654135d7670cd4ad25975ceab9dbec92c6ecbfa7ca7063d764798800e912",
+      "use": "Pinned reference for REAL baseline; not executed by hardware-only harness"
+    }
+  ]
+}

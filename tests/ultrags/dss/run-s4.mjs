@@ -28,7 +28,7 @@ function test(name,app,cli,expected=0,opts={}) {
  if(fullOnly && name!=='8MiB actual EXE')return {card:opts.card??new SlowCard(catalog,opts)};
  const bytes=readFileSync(join(build,'ultrags/dss',app+'.EXE')),h=parseExe(bytes);
  executed.set(app,{name:app+'.EXE',size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
- const card=opts.card??new SlowCard(catalog,opts),m=new SprinterMachine({card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,commandLine:cli,movingClock:!opts.stopped,clockStart:opts.clockStart??86390,escAfter:opts.escAfter??Infinity,logLimit:1000,files:opts.files??{},disk:opts.disk??{}});
+ const card=opts.card??new SlowCard(catalog,opts),m=new SprinterMachine({card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,turboHardware:opts.cpuHz!==3500000,commandLine:cli,movingClock:!opts.stopped,clockStart:opts.clockStart??86390,escAfter:opts.escAfter??Infinity,logLimit:1000,files:opts.files??{},disk:opts.disk??{}});
  const frames=[],statusReads={x:0,gs:0};let request=[],active;
  const rawRead=card.readPort.bind(card),rawWrite=card.writePort.bind(card);
  if(opts.compact) {
@@ -55,6 +55,9 @@ function test(name,app,cli,expected=0,opts={}) {
  const run=runImage(Z80,m,{entry:h.entry,stack:h.stack,iff:opts.iff??1,budget:opts.budget??100000000});
  card.readPort=rawRead;card.writePort=rawWrite;
  const errors=[...m.violations];
+ if(m.maxDiUs>=10000 || m.maxWindowUs>=10000)errors.push("ISA/DI budget >=10ms");
+ if(m.turboWrites && !m.turbo)errors.push("DSS Turbo not enabled");
+ if((cli.trim()==="/?" || expected===1) && m.turboWrites)errors.push("Turbo touched before argument validation");
  const compact=[];
  if(opts.compact) {
   const blocks=frames.filter(f=>[32,33,34,35].includes(f.request[0]&127));
@@ -73,7 +76,7 @@ function test(name,app,cli,expected=0,opts={}) {
  const result=opts.selftest?m.mem[0xba00]===0x55&&m.mem[0xba01]===0xaa&&!m.mem[0xba03]:m.text.includes(`RESULT ${expected?'FAIL':'PASS'} code=${expected}`);
  const ok=run.exitCode===expected&&!errors.length&&result;
  console.log(`${ok?'PASS':'FAIL'} S4 ${name} exit=${run.exitCode}`+(ok?'':JSON.stringify({text:m.text,errors,trace:m.trace,ops:card.trace?.slice(-8)})));
- results.push({name,ok,exit:run.exitCode,expected,text:m.text,errors,steps:run.steps,hostCrcCalls:m.crcCalls,maxWindowUs:m.maxWindowUs,...(opts.compact?{compact,statusReads}:{})});
+ results.push({name,ok,exit:run.exitCode,expected,text:m.text,errors,steps:run.steps,hostCrcCalls:m.crcCalls,maxWindowUs:m.maxWindowUs,maxDiUs:m.maxDiUs,...(opts.compact?{compact,statusReads}:{})});
  if(!ok)throw Error(name);
  return {card,m};
 }

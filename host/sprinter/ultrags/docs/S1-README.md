@@ -99,8 +99,9 @@ SWD — альтернативный recovery по документации пл
 Все имена и ключи case-insensitive. Слот выбирается явно (default 0); сканирования
 нет. `/BASE:02A0` — единственная база этой standalone сборки. Другой адрес
 отклоняется до bus access. Decimal числа допускают `0x`; BASE всегда hex.
-CPU ключ **не переключает CPU**: `/CPU:21` выбирает chunk32, `/CPU:3.5` и
-`/CPU:UNKNOWN` — chunk8. UNKNOWN — default. BLOCK задаёт grant1..1024,
+Все ISA-окна принудительно работают с Turbo off; при закрытии включается Turbo DSS.
+`/CPU:21`, `/CPU:3.5`, `/CPU:UNKNOWN` сохранены; все ограничены chunk8.
+Исходный режим не определяется. См. [ISA-TURBO.md](ISA-TURBO.md). BLOCK задаёт grant1..1024,
 независимо от размера chunk. STACK запрещён при неизвестном NMI-контракте.
 
 ```text

@@ -31,6 +31,9 @@ def validate(evidence, build):
     assert set(evidence.get('executables', {})) == set(PROGRAMS), 'incomplete S6 executable evidence'
     assert set(evidence.get('logs', {})) == set(PROGRAMS), 'incomplete S6 executed-test logs'
     assert set(evidence.get('commands', {})) == set(PROGRAMS), 'incomplete S6 compiler commands'
+    assert set(evidence.get('fixtures',{}))=={'s6-commands.jsonl','s6-audio.s16le','s6-audio-index.jsonl'}, 'missing S6 fixtures'
+    for name,value in evidence['fixtures'].items():
+        assert value==digest(Path(build)/name), 'stale S6 fixture '+name
     for name in PROGRAMS:
         assert evidence['executables'][name] == digest(Path(build)/name), 'stale S6 executable '+name
         assert evidence['logs'][name] == digest(Path(build)/(name+'.log')), 'stale S6 test log '+name

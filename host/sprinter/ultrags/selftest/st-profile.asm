@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
-; POSITIVE: distinct CPU profiles and unknown-mode FIXED fallback.
+; POSITIVE: CPU hints with protected ISA chunks and unknown-mode FIXED fallback.
 	INCLUDE "st-head.inc"
 	ld a,1
 	call UG_CPU_PROFILE
@@ -7,7 +7,7 @@
 	or a
 	jp nz,st_fail
 	ld hl,(UG_CHUNK)
-	ld de,32
+	ld de,8
 	or a
 	sbc hl,de
 	jp nz,st_fail

@@ -78,6 +78,14 @@ ENTRY:
     IFDEF UGTEST_S4
     ld a,(ix+1)
     and 0xDF
+    cp 'F'
+    jp z,S4TEST.ENTRY
+    ld a,(ix+2)
+    and 0xDF
+    cp 'C'
+    jp z,S4TEST.ENTRY
+    ld a,(ix+1)
+    and 0xDF
     cp 'P'
     jr nz,.diag
     ld a,(ix+2)
@@ -496,7 +504,7 @@ FLAG:
 .f33:
 	cp 33
 	jr nz,.f34
-	ld a,32
+	ld a,8
 	ld (CHUNK),a
 	or a
 	ret
@@ -1605,7 +1613,7 @@ FILL:
 	jr nz,.loop
 	ld (PATTERN),a
 	ret
-TRANSFER: ; A=1 write, 2 read. chunks always <=32 / <=8
+TRANSFER: ; A=1 write, 2 read. chunks always <=8 (ISA at 3.5 MHz)
 	ld (OPTION),a
 	ld hl,(CURRENT)
 	ld (LEFT),hl
@@ -2058,7 +2066,11 @@ uncertainty_text: DB " timing_error_bound_seconds=0x",0
 speed_text: DB "bytes_per_second=0x",0
 short_text: DB "SPEED=INSUFFICIENT_INTERVAL resolution_seconds=1",13,10,0
 skip_text: DB "SKIP SLOW reason=S1_SRAM_FIXED_ONLY",13,10,"SKIP ALIAS reason=S5_PENDING",13,10,"SKIP STACK reason=UNSAFE_NMI",13,10,0
-help_text: DB "UGTEST BUS /REAL [/MIRROR] | UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024",13,10
+help_text:
+    IFDEF UGTEST_S4
+    DB "UGTEST PROTO|PCM|FX [/REAL] (ULTRAGS firmware)",13,10
+    ENDIF
+    DB "UGTEST BUS /REAL [/MIRROR] | UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024",13,10
 	DB "/METHOD:ALL|FIXED /DIRECTION:BOTH|WRITE|READ /CHECK:NONE|CRC|BOTH /SOAK:seconds",13,10
 	DB "/SLOT:0|1 /BASE:02A0 /CPU:21|3.5|UNKNOWN /SPIKE:1|2 /QUIET /?",13,10
 	DB "/ASSERT:0..1000 /RESPONSE:0..1000 (microseconds; finite diagnostic delays)",13,10,0
@@ -2068,6 +2080,8 @@ help_text: DB "UGTEST BUS /REAL [/MIRROR] | UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..
     IFDEF UGTEST_S4
     MODULE S4TEST
     DEFINE APP_PROTO
+    DEFINE APP_PCM
+    DEFINE APP_S6TEST
     INCLUDE "ugmem.asm"
     ENDMODULE
     ASSERT $ < 0xB800

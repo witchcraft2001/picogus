@@ -39,7 +39,7 @@ UG_PROFILE	EQU UGMEM_BASE+21	; u8, detected CPU profile id
 UG_CHUNK	EQU UGMEM_BASE+22	; u16, DI-budget chunk size (bytes)
 
 ; ---- ISA/MMU saved context (per open window, not nested) ----
-UGCTX.SYSSAVE	EQU UGMEM_BASE+24	; u8, PORT_SYSTEM value at ISA_OPEN
+UGCTX.SYSSAVE	EQU UGMEM_BASE+24	; reserved legacy byte; SYSTEM is write-only
 UGCTX.PAGE3SAVE	EQU UGMEM_BASE+25	; u8, PAGE3 value at ISA_OPEN
 UGCTX.IFFSAVE	EQU UGMEM_BASE+26	; u8, IFF state at ISA_OPEN (0/1)
 UGCTX.ISOPEN	EQU UGMEM_BASE+27	; u8, nonzero while ISA window open

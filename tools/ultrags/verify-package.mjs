@@ -211,6 +211,14 @@ for (const e of pman.payload) {
 ok(exeChecked === build.files.length && JSON.stringify(pman.payload.filter(e => e.src.startsWith('build/ultrags/dss/')).map(e => e.name).sort()) === JSON.stringify(build.files.map(e => e.name).sort()), `byte identity checked on ${exeChecked} EXEs`);
 ok(fxChecked === fixtureManifest.files.length, `byte identity checked on ${fxChecked} fixtures`);
 
+if (stage === 'ISA') {
+  for (const [name,src] of [['ISA.TXT','host/sprinter/ultrags/docs/ISA-TURBO.md'],
+    ['ISASRC.JSN','tests/ultrags/reference/sprinter-isa-sources.json']]) {
+    const bytes=readFileSync(join(root,src));
+    ok(zip.get(name)?.equals(bytes) && img.get(name)?.equals(bytes), 'ISA current source '+name);
+  }
+}
+
 // MANIFEST.TXT inside the containers is consistent
 for (const [cont, map] of [['zip', zip], ['img', img]]) {
   const mt = map.get('MANIFEST.TXT');

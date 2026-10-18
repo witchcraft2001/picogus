@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { readZip, readFat12 } from './verify-package.mjs';
 import { sha256, verifyBuild, repoRoot, executionInputs } from './build-evidence.mjs';
 const arg=(flag,d)=> { const i=process.argv.indexOf(flag); return i>=0?process.argv[i+1]:d; };
+const stage=arg('--stage','S0b'),slug=stage.toLowerCase();
 const pkg=resolve(arg('--package','build/ultrags/package'));
 const exe=resolve(arg('--exe-dir','build/ultrags/dss'));
 const fixtures=resolve(arg('--fixtures','build/ultrags/fixtures'));
@@ -19,12 +20,13 @@ const tmp=mkdtempSync(join(dirname(pkg),'package-tests-'));
 const copyRoot=join(tmp,'source'), copyExe=join(tmp,'ultrags/dss'), copyPkg=join(tmp,'ultrags/package'), copyFx=join(tmp,'ultrags/fixtures');
 const build=verifyBuild(repoRoot,exe);
 for (const p of new Set([...Object.keys(build.inputs.sources),...Object.keys(executionInputs(repoRoot)),
-  'tools/ultrags/gen-fixtures.mjs','tools/ultrags/package-s0b.mjs'])) {
+  'tools/ultrags/gen-fixtures.mjs','tools/ultrags/package-s0b.mjs',
+  ...(stage==='ISA'?['tests/ultrags/reference/sprinter-isa-sources.json']:[])])) {
   mkdirSync(dirname(join(copyRoot,p)),{recursive:true}); cpSync(join(repoRoot,p),join(copyRoot,p));
 }
 for (const [from,to] of [[exe,copyExe],[join(exe,'../gen'),join(copyExe,'../gen')],
   [join(exe,'../logs'),join(copyExe,'../logs')],[pkg,copyPkg],[fixtures,copyFx]]) cpSync(from,to,{recursive:true});
-const args=['--package',copyPkg,'--exe-dir',copyExe,'--fixtures',copyFx,'--repo',copyRoot];
+const args=['--stage',stage,'--package',copyPkg,'--exe-dir',copyExe,'--fixtures',copyFx,'--repo',copyRoot];
 function run(script,args_) {
   const r=spawnSync(process.execPath,[script,...args_],{encoding:'utf8'});
   if (r.error) throw r.error;
@@ -57,10 +59,12 @@ mutate('executed self-test hash mismatch rejected',join(copyExe,'../logs/ugdiag-
  const e=JSON.parse(b);e.executed[1].sha256='0'.repeat(64);return JSON.stringify(e);},/executed EXE hashes\/set differ/);
 mutate('fixture generator drift rejected',join(copyRoot,'tools/ultrags/gen-fixtures.mjs'),append,/stale fixture generator inputs/);
 mutate('packer drift rejected',join(copyRoot,'tools/ultrags/package-s0b.mjs'),append,/FAIL source\/build\/execution\/package provenance/);
-mutate('IMG tamper rejected by actual verifier',join(copyPkg,'ug-s0b.img'),b=>{b[33*512+17]^=255;return b;},/FAIL img sha256/);
-mutate('ZIP tamper rejected by actual verifier',join(copyPkg,'ug-s0b.zip'),b=>{b[50]^=255;return b;},/FAIL zip sha256|CRC mismatch|local\/central mismatch/);
+if(stage==='ISA') mutate('ISA source audit drift rejected',join(copyRoot,'tests/ultrags/reference/sprinter-isa-sources.json'),
+  b=>Buffer.concat([b,Buffer.from('\n')]),/FAIL ISA current source ISASRC/);
+mutate('IMG tamper rejected by actual verifier',join(copyPkg,`ug-${slug}.img`),b=>{b[33*512+17]^=255;return b;},/FAIL img sha256/);
+mutate('ZIP tamper rejected by actual verifier',join(copyPkg,`ug-${slug}.zip`),b=>{b[50]^=255;return b;},/FAIL zip sha256|CRC mismatch|local\/central mismatch/);
 // Independently forged filesystem metadata must also be structurally rejected.
-const img=readFileSync(join(pkg,'ug-s0b.img'));
+const img=readFileSync(join(pkg,`ug-${slug}.img`));
 const signature=Buffer.from(img); signature[510]=0;
 assert.throws(()=>readFat12(signature),/missing boot signature/); passed('FAT12 boot signature enforced');
 const second=Buffer.from(img); second[10*512+100]^=1;
@@ -68,13 +72,13 @@ assert.throws(()=>readFat12(second),/FAT copies differ/); passed('both FAT copie
 const cycle=Buffer.from(img); cycle[512+3]=2; cycle[512+4]&=0xF0;
 cycle.copy(cycle,10*512,512,10*512);
 assert.throws(()=>readFat12(cycle),/FAT chain/); passed('cyclic/truncated FAT chain rejected');
-const zip=readFileSync(join(pkg,'ug-s0b.zip'));
+const zip=readFileSync(join(pkg,`ug-${slug}.zip`));
 const badZip=Buffer.from(zip); badZip[14]^=1;
 assert.throws(()=>readZip(badZip),/local\/central mismatch/); passed('ZIP local and central headers must agree');
 const repeat=join(tmp,'repeat');
-const rerun=run(packer,['--exe-dir',exe,'--fixtures',fixtures,'--out',repeat]);
+const rerun=run(packer,['--stage',stage,'--exe-dir',exe,'--fixtures',fixtures,'--out',repeat]);
 assert.equal(rerun.status,0,rerun.text);
-for (const name of ['ug-s0b.zip','ug-s0b.img','package-manifest.json'])
+for (const name of [`ug-${slug}.zip`,`ug-${slug}.img`,'package-manifest.json'])
   assert.deepEqual(readFileSync(join(pkg,name)),readFileSync(join(repeat,name)),`${name}: not reproducible`);
 passed('independent second pack produces identical ZIP/IMG/manifest bytes');
 console.log(`package tests: ${pass} pass, 0 fail`);

@@ -6,7 +6,7 @@
 // Modelled hardware (no host-side shortcuts):
 //   * flat 64 KiB RAM, seeded-random filled at power-up
 //   * Sprinter platform ports via full 16-bit IO addresses:
-//       00E2h PAGE3 (read/write), 1FFDh PORT_SYSTEM (readable shadow),
+//       00E2h PAGE3 (read/write), 1FFDh PORT_SYSTEM (write-only; reads mapper data), 3Ch SYS_PORT.RAM,
 //       9FBDh PORT_ISA (A19..A14/AEN/RESET - readable shadow)
 //   * ISA-8 window in WIN3 (0C000h..0FFFFh): active iff
 //       (system & 10h) != 0  &&  (page3 & F1h) == D0h
@@ -35,6 +35,7 @@ const require = createRequire(import.meta.url);
 
 export const PORT_PAGE3 = 0x00E2;
 export const PORT_SYSTEM = 0x1FFD;
+export const PORT_SYS_RAM = 0x003C;
 export const PORT_ISA = 0x9FBD;
 export const WIN3_BASE = 0xC000;
 export const UGMEM_BASE = 0xBC00;
@@ -89,11 +90,23 @@ export function parseExe(file) {
 
 // ------------------------------ machine --------------------------------
 export class SprinterMachine {
-  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x21, page3Init = 0x03, cpuHz = CPU_HZ, commandLine = null, movingClock = false, clockStart = 86390, escAfter = Infinity, logLimit = Infinity, files = {}, disk = {} }) {
+  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x01, page3Init = 0x03, cpuHz = CPU_HZ, commandLine = null, movingClock = false, clockStart = 86390, escAfter = Infinity, logLimit = Infinity, files = {}, disk = {}, turboInit = cpuHz === CPU_HZ, turboHardware = true, rejectTurboIsa = true, mapperRead = 0xA7, configDe = 0xA5 }) {
     if (![3_500_000, 21_000_000].includes(cpuHz)) throw new Error('unsupported CPU frequency');
     this.files=new Map(Object.entries(files).map(([p,b])=>[p.toUpperCase(),Buffer.from(b)]));
     this.disk=disk; this.fileHandles=new Map(); this.nextFileHandle=1; this.fileCalls=0;
-    this.cpuHz = cpuHz;
+    this.turbo = turboInit;
+    this.turboHardware = turboHardware;
+    this.cpuHz = this.turbo && turboHardware ? CPU_HZ : 3_500_000;
+    this.rejectTurboIsa = rejectTurboIsa;
+    this.mapperRead = mapperRead;
+    this.turboWrites = 0;
+    this.elapsedTicks = 0; // units of 1/21 MHz, exact at both CPU speeds
+    this.maxDiUs = 0;
+    this.diStart = null;
+    this.diWindow = false;
+    this.systemPage = new Uint8Array(0x4000);
+    this.systemPage[0x13A] = configDe; // deliberately independent of actual Turbo
+
     this.commandLine = commandLine;
     this.movingClock = movingClock;
     this.clockStart = clockStart;
@@ -145,16 +158,21 @@ export class SprinterMachine {
   memRead = (a) => {
     a &= 0xFFFF;
     if (a >= WIN3_BASE && this.isaOpen) {
+      if (this.rejectTurboIsa && this.turbo && this.turboHardware)
+        throw new Error('ISA access with Turbo enabled');
       const isa = this.isaAddr(a);
       const v = this.card && this.isaSlot === this.cardSlot ? this.card.readPort(isa) : 0xFF;
       if (this.isaLog.length < this.logLimit) this.isaLog.push({ t: this.cycles, dir: 'r', slot: this.isaSlot, isa, val: v });
       return v;
     }
+    if (a >= WIN3_BASE && this.page3 === 0xFE) return this.systemPage[a - WIN3_BASE];
     return this.mem[a];
   };
   memWrite = (a, v) => {
     a &= 0xFFFF; v &= 0xFF;
     if (a >= WIN3_BASE && this.isaOpen) {
+      if (this.rejectTurboIsa && this.turbo && this.turboHardware)
+        throw new Error('ISA access with Turbo enabled');
       const isa = this.isaAddr(a);
       if (this.isaLog.length < this.logLimit) this.isaLog.push({ t: this.cycles, dir: 'w', slot: this.isaSlot, isa, val: v });
       // NMI trigger: arms when the bus write hits the configured ISA
@@ -164,29 +182,38 @@ export class SprinterMachine {
       if (this.card && this.isaSlot === this.cardSlot) this.card.writePort(isa, v);
       return;
     }
+    if (a >= WIN3_BASE && this.page3 === 0xFE) { this.systemPage[a - WIN3_BASE] = v; return; }
     this.mem[a] = v;
   };
   ioRead = (p) => {
     p &= 0xFFFF;
     if (this.ioLog.length < this.logLimit) this.ioLog.push({ t: this.cycles, dir: 'in', port: p });
     if (p === PORT_PAGE3) return this.page3;             // readable shadow
-    if (p === PORT_SYSTEM) return this.system;           // DCP read-back
+    if (p === PORT_SYSTEM) return this.mapperRead;       // mapper, NOT SYSTEM
     if (p === PORT_ISA) return this.portIsa;
     return 0xFF;
   };
   ioWrite = (p, v) => {
     p &= 0xFFFF; v &= 0xFF;
     if (this.ioLog.length < this.logLimit) this.ioLog.push({ t: this.cycles, dir: 'out', port: p, val: v });
+    if ((p & 255) === PORT_SYS_RAM) {
+      if (this.isaOpen) throw new Error('Turbo command with ISA mapped');
+      if (v !== 2 && v !== 3) throw new Error('unexpected SYS_PORT command');
+      this.turbo = !!(v & 1);
+      this.cpuHz = this.turbo && this.turboHardware ? CPU_HZ : 3_500_000;
+      this.turboWrites++;
+      return;
+    }
     if (p === PORT_PAGE3 || p === PORT_SYSTEM) {
       const before = this.isaOpen;
       if (p === PORT_PAGE3) this.page3 = v;
       else this.system = v;
-      if (!before && this.isaOpen) this.windowStart = this.cycles;
+      if (!before && this.isaOpen) this.windowStart = this.elapsedTicks;
       if (before && !this.isaOpen && this.windowStart !== null) {
         this.windowCount++;
-        this.maxWindowUs = Math.max(this.maxWindowUs, (this.cycles - this.windowStart) * 1e6 / this.cpuHz);
-        if (this.windows.length < this.logLimit) this.windows.push({ cycles: this.cycles - this.windowStart,
-          us: (this.cycles - this.windowStart) * 1e6 / this.cpuHz });
+        this.maxWindowUs = Math.max(this.maxWindowUs, (this.elapsedTicks - this.windowStart) / 21);
+        if (this.windows.length < this.logLimit) this.windows.push({ ticks21MHz: this.elapsedTicks - this.windowStart,
+          us: (this.elapsedTicks - this.windowStart) / 21 });
         this.windowStart = null;
       }
       return;
@@ -199,12 +226,13 @@ export class SprinterMachine {
   };
 
   // advance model time by real T-states (21 MHz -> ~47.6ns per T)
-  tick(tstates) {
+  tick(tstates, hz = this.cpuHz) {
     this.cycles += tstates;
-    this.nowFrac += tstates;
-    const ticksPerUs = this.cpuHz / 1e6;
-    const us = Math.floor(this.nowFrac / ticksPerUs);
-    if (us > 0) { this.nowFrac -= us * ticksPerUs; this.card?.tickUs(us); }
+    const ticks = tstates * (CPU_HZ / hz);
+    this.elapsedTicks += ticks;
+    this.nowFrac += ticks;
+    const us = Math.floor(this.nowFrac / 21);
+    if (us > 0) { this.nowFrac -= us * 21; this.card?.tickUs(us); }
   }
 
   // true while the card holds an active data grant (BEGIN .. END/CANCEL)
@@ -279,7 +307,7 @@ export class SprinterMachine {
         break;
       case 0x21:                                       // SYSTIME -> H,L,B
         if (this.movingClock) {
-          const sec = (this.clockStart + Math.floor(this.cycles / this.cpuHz)) % 86400;
+          const sec = (this.clockStart + Math.floor(this.elapsedTicks / CPU_HZ)) % 86400;
           st.h = Math.floor(sec / 3600); st.l = Math.floor(sec / 60) % 60; st.b = sec % 60;
         } else { st.h = 12; st.l = 34; st.b = 56; }
         break;
@@ -345,7 +373,15 @@ export function runImage(Z80, mach, { entry, stack, iff = 1, budget = 4_000_000 
     if(mach.crcEntries.has(st.pc))mach.crcCalls++;
     mach.trace.push({ pc: st.pc, sp: st.sp, iff1: st.iff1 });
     if (mach.trace.length > 16) mach.trace.shift();
-    mach.tick(z.run_instruction());
+    const op = mach.mem[st.pc], hz = mach.cpuHz;
+    if (op === 0xF3 && mach.diStart === null) mach.diStart = mach.elapsedTicks;
+    mach.tick(z.run_instruction(), hz);
+    if (mach.isaOpen) mach.diWindow = true;
+    if (mach.diStart !== null && mach.diWindow && !mach.isaOpen &&
+        (op === 0xC9 || ((op & 0xC7) === 0xC0 && z.getState().sp === ((st.sp + 2) & 0xFFFF)))) {
+      mach.maxDiUs = Math.max(mach.maxDiUs, (mach.elapsedTicks - mach.diStart) / 21);
+      mach.diStart = null; mach.diWindow = false;
+    }
     steps++;
     // deferred NMI: fires after the armed instruction completes.  Real
     // semantics: PC is pushed through the CURRENT SP (which may be a

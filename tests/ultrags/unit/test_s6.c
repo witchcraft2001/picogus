@@ -11,15 +11,28 @@
 #include "picogus.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+static FILE *vectors;
+static void hex(FILE *f,const uint8_t *p,unsigned n) { for(unsigned i=0;i<n;i++) fprintf(f,"%02x",p[i]); }
 static Settings settings;
 static ug_psram_t ps;
 static uint8_t response[128], wav[64], raw[512];
 static bool pump_audio;
-static unsigned background_quanta;
+static unsigned background_quanta, background_frame;
 static void audio_slice(void) {
-    if(pump_audio) { int16_t samples[256]; assert(ug_storage_render(samples,128));background_quanta++; }
+    if(pump_audio) {
+        int16_t samples[256]; assert(ug_storage_render(samples,128));
+        /* Foreground U8 saw plus two constant stereo effects at fx master=16.
+         * The sum stays below clipping, so every corruption or skipped frame is
+         * observable, including during SEAL, transfer commits and readback. */
+        for(unsigned i=0;i<128;i++) {
+            assert(samples[2*i]==(int16_t)((64+(background_frame+i)%32)*256+8192));
+            assert(samples[2*i+1]==-8192);
+        }
+        background_frame+=128;background_quanta++;
+    }
 }
 void ug_storage_grant_ack(uint32_t now);
 uint8_t ug_storage_data_write(uint8_t byte,uint32_t now);
@@ -29,6 +42,7 @@ static uint8_t call(uint8_t op,const uint8_t *req,uint8_t n,uint8_t *len) {
     uint8_t status=0,done=0; unsigned limit=10000;
     do { done=ug_storage_command(op,req,n,response,len,&status,time_us_32()); assert(limit--);if(!done) audio_slice(); }
     while(!done);
+    if(vectors) { fprintf(vectors,"{\"op\":%u,\"q\":\"",op);hex(vectors,req,n);fprintf(vectors,"\",\"status\":%u,\"r\":\"",status);hex(vectors,response,*len);fprintf(vectors,"\"}\n"); }
     return status;
 }
 static uint16_t alloc_obj(uint8_t kind,uint32_t size) {
@@ -40,14 +54,14 @@ static void write_obj(uint16_t h,const uint8_t *data,uint16_t n) {
     uint8_t a[9]={0},len; put16(a,h); ug_put32(a+2,0); put16(a+6,n); a[8]=1;
     assert(call(UG_OP_WRITE_BEGIN,a,9,&len)==0 && len==4);
     uint32_t token=ug_get32(response); ug_storage_grant_ack(time_us_32());
+    if(vectors) { fputs("{\"data\":\"",vectors);hex(vectors,data,n);fputs("\"}\n",vectors); }
     for(unsigned i=0;i<n;i++) { assert(ug_storage_data_write(data[i],time_us_32())==0);if(i%32==31) audio_slice(); }
     uint8_t e[4]; ug_put32(e,token);
     assert(call(UG_OP_WRITE_END,e,4,&len)==0 && len==0);
 }
 static void seal_obj(uint16_t h) {
-    uint8_t a[7]={0},len,status=0; put16(a,h); bool done=false; unsigned limit=10000;
-    do { done=ug_storage_command(UG_OP_SEAL,a,7,response,&len,&status,time_us_32()); if(!limit-- || status) { fprintf(stderr,"SEAL h=%u status=%u len=%u done=%u\n",h,status,len,done); assert(0); } if(!done)audio_slice(); } while(!done);
-    assert(len==4);
+    uint8_t a[7]={0},len; put16(a,h);
+    assert(!call(UG_OP_SEAL,a,7,&len) && len==4);
 }
 static uint16_t pcm_asset(const uint8_t *data,uint16_t size,uint32_t rate,uint8_t channels,uint8_t bits,uint8_t fmt,uint32_t ls,uint32_t le) {
     uint16_t h=alloc_obj(1,size); write_obj(h,data,size);
@@ -82,6 +96,43 @@ static void build_wav(void) {
     ug_put32(wav+48,11025);ug_put32(wav+52,11025);put16(wav+56,1);put16(wav+58,8);
     ug_put32(wav+4,52);
 }
+static void vector_render(unsigned n) {
+    int16_t out[256];assert(n<=128);ug_storage_render(out,n);
+    fprintf(vectors,"{\"render\":%u}\n",n);
+}
+static void shared_vectors(const char *path) {
+    vectors=fopen(path,"w");assert(vectors);
+    uint8_t len,q[8]={0},statq[2]={8,4};
+    uint16_t h=raw_asset();
+    const uint8_t stereo[8]={0,64,0,192,0,64,0,192};
+    uint16_t sh=pcm_asset(stereo,8,48000,2,16,2,0,0);
+    build_wav();uint16_t wh=alloc_obj(2,60);write_obj(wh,wav,60);seal_obj(wh);
+    put16(q,wh);assert(!call(UG_OP_OBJECT_INFO,q,2,&len));
+    uint16_t id=play_pcm(h,0,64,128);vector_render(1);
+    control(UG_OP_CONTROL,id,1);vector_render(128);
+    put16(q,h);assert(!call(UG_OP_OBJECT_INFO,q,2,&len));
+    control(UG_OP_CONTROL,id,2);vector_render(1);
+    put16(q,h);q[4]=0;q[5]=64;q[6]=128;q[7]=2;
+    assert(call(UG_OP_PLAY_FX,q,8,&len)==UG_ERR_BAD_ARGUMENT);
+    q[4]=255;assert(call(UG_OP_PLAY_FX,q,8,&len)==UG_ERR_BAD_ARGUMENT);
+    for(unsigned i=0;i<4;i++) play_fx(h,0,2);
+    put16(q,h);q[4]=100;q[5]=64;q[6]=128;q[7]=2;
+    assert(call(UG_OP_PLAY_FX,q,8,&len)==UG_ERR_NO_VOICE);
+    assert(!call(UG_OP_FX_STATUS,statq,2,&len)); /* accepted events not live */
+    vector_render(2);assert(!call(UG_OP_FX_STATUS,statq,2,&len));
+    q[0]=q[1]=0;assert(!call(UG_OP_STOP_FX,q,2,&len));vector_render(1);
+    uint16_t sid=play_fx(sh,0,2);play_fx(sh,0,2);vector_render(1);
+    control(UG_OP_CONTROL_FX,sid,1);vector_render(1);
+    assert(!call(UG_OP_FX_STATUS,statq,2,&len));
+    put16(q,h);put16(q+2,0x100);q[4]=200;q[5]=64;q[6]=128;q[7]=1;
+    assert(!call(UG_OP_PLAY_FX,q,8,&len));vector_render(1);
+    assert(!call(UG_OP_FX_STATUS,statq,2,&len));
+    memset(q,0,sizeof(q));assert(!call(UG_OP_STOP_FX,q,2,&len));control(UG_OP_CONTROL,id,0);vector_render(1);
+    play_pcm(wh,1,64,128);vector_render(128);
+    put16(q,wh);assert(!call(UG_OP_OBJECT_INFO,q,2,&len));
+    fclose(vectors);vectors=NULL;
+    uint8_t reset[5]={0};ug_put32(reset,UG_RESET_STORE_KEY);assert(!call(UG_OP_RESET_STORE,reset,5,&len));
+}
 int main(void) {
     mock_reset(); ug_hw_claim_audio();ug_hw_claim_psram_sm();
     assert(!ug_psram_init(&ps,pio1,1,1.85f,8u<<20,false));
@@ -90,6 +141,7 @@ int main(void) {
     ug_storage_bind(&ps,17);int16_t pre[4]={123,456,789,12};assert(!ug_storage_render(pre,2));for(unsigned j=0;j<4;j++) assert(!pre[j]);ug_storage_publish(8u<<20,0,0);
     uint8_t info[1]={0},len; assert(call(UG_OP_CAPS,info,0,&len)==0 && response[21]==4 && ug_get32(response+4)==7);
 
+    const char *vp=getenv("UG_S6_VECTORS");if(vp) shared_vectors(vp);
     uint16_t h=raw_asset(); uint8_t p[6]={0};put16(p,h);put16(p+2,1);p[4]=64;p[5]=128;
     assert(call(UG_OP_PLAY_PCM,p,6,&len)==0 && len==2);uint16_t play=get16(response);
     int16_t out[256]; assert(ug_storage_render(out,128)); assert(out[0]!=0 && out[1]!=0);
@@ -171,14 +223,15 @@ int main(void) {
     control(UG_OP_CONTROL,play,1);assert(ug_storage_render(out,1) && out[1]!=0);snapshot();assert(response[24]==2);
     control(UG_OP_CONTROL,play,0);assert(ug_storage_render(out,1) && pins(h)==0 && pins(stereo_h)==2);
     play=play_pcm(h,0,64,0);assert(ug_storage_render(out,1) && pins(stereo_h)==2);
-    pump_audio=true;build_wav();uint16_t background=alloc_obj(2,60);write_obj(background,wav,60);seal_obj(background);
+    mix[1]=16;assert(!call(UG_OP_SET_MIX,mix,4,&len));
+    background_frame=1;pump_audio=true;build_wav();uint16_t background=alloc_obj(2,60);write_obj(background,wav,60);seal_obj(background);
     uint8_t rd[9]={0};put16(rd,h);put16(rd+6,512);rd[8]=129;
     assert(call(UG_OP_READ_BEGIN,rd,9,&len)==0 && len==8);
     uint32_t token=ug_get32(response),crc=ug_get32(response+4);ug_storage_grant_ack(time_us_32());
     statq[0]=8;statq[1]=7;assert(call(UG_OP_FX_STATUS,statq,2,&len)==0 && len==114);
     for(unsigned j=0;j<512;j++) { uint8_t byte;assert(!ug_storage_data_read(&byte,time_us_32()) && byte==raw[j]);if(j%32==31)audio_slice(); }
     uint8_t end[8];ug_put32(end,token);ug_put32(end+4,crc);assert(call(UG_OP_READ_END,end,8,&len)==0);
-    pump_audio=false;assert(background_quanta>20 && pins(h)==1 && pins(stereo_h)==2);
+    pump_audio=false;printf("S6 concurrent: %u exact stereo frames during upload/SEAL/playing readback PASS\n",background_quanta*128);assert(background_quanta>20 && pins(h)==1 && pins(stereo_h)==2);
     assert(call(UG_OP_STOP_FX,stop,2,&len)==0);control(UG_OP_CONTROL,play,0);ug_storage_render(out,1);
     /* IDs wrap without colliding with a still-live looped instance. */
     uint16_t kept=play_fx(h,0x0100,2);ug_storage_render(out,1);uint16_t churn=0;
@@ -186,7 +239,18 @@ int main(void) {
         if(churn) control(UG_OP_CONTROL_FX,churn,0);
         churn=play_fx(h,0x0200,0);assert(churn && churn!=kept);ug_storage_render(out,1);
     }
-    assert(pins(h)==2);assert(call(UG_OP_STOP_FX,stop,2,&len)==0);ug_storage_render(out,1);assert(pins(h)==0);
+    assert(pins(h)==2);
+    /* Advance to the last token before wrap, then leave STOP queued while
+     * reserving another PLAY. The renderer still owns the old token. */
+    uint16_t before_kept=kept==1?65535:(uint16_t)(kept-1);
+    while(churn!=before_kept) {
+        control(UG_OP_CONTROL_FX,churn,0);
+        churn=play_fx(h,0x0200,0);assert(churn && churn!=kept);ug_storage_render(out,1);
+    }
+    control(UG_OP_CONTROL_FX,kept,0);
+    uint16_t after_stop=play_fx(h,0x0100,2);assert(after_stop!=kept && after_stop!=churn);
+    ug_storage_render(out,1);assert(pins(h)==2);
+    assert(call(UG_OP_STOP_FX,stop,2,&len)==0);ug_storage_render(out,1);assert(pins(h)==0);
 
     /* Fault output is zero and releases both lanes/pins. */
     play=play_pcm(stereo_h,0,64,128);ps.up=false;ug_storage_render(out,128);ps.up=true;

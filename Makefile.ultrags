@@ -109,7 +109,7 @@ dss: $(UGBUILD)/gen/ug_wire.inc
 
 # test-dss executes the EXACT bytes the dss target built (byte-identity
 # chain: packaged EXE == executed EXE is verified by verify-package.mjs)
-test-dss: dss s2-host s3-host s4-host s5-host
+test-dss: dss s2-host s3-host s4-host s5-host s6-host
 	UG_S2_CATALOG="$(abspath $(BUILD))/host/s2-catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-ugdiag.mjs $(ROOT) $(UGBUILD) --exe-dir=$(UGBUILD)/dss
 
 # honest S0b stage package: store-only ZIP + 1.44MiB FAT12 image,
@@ -258,17 +258,31 @@ s5-check: s4-check s5-host s5-pio s5-full s5-variants
 s5-package: s5-check
 	$(NODE) $(ROOT)/tools/ultrags/package-s5.mjs --build $(BUILD)
 
-# S6 PCM/WAV core: independent host parser/storage/render checks plus the
-# existing S0a-S5 regression and release firmware builds. DSS/REAL acceptance
-# remains explicit in the generated report until those gates exist.
+# S6: RAW/WAV, resident handles, dedicated FX and actual assembled applications.
+# Full S0a-S5 regressions, indexed audio goldens and independent C/model vectors.
+# Physical audio/ISA acceptance remains REAL_PENDING after the software gate.
 s6-host:
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/s6-host.py --build $(BUILD)/host/s6 --cc "$(CC)"
 
 s6-check: s5-check s6-host ultrags fixtures
 	$(NODE) $(ROOT)/tools/ultrags/stage-excerpt.mjs --stage S6 --output $(UGBUILD)/excerpts/ultrags-S6.md
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/s6-report.py --build $(BUILD)
-	@echo "S6 HOST_PARTIAL / DSS-EXE_PENDING / REAL_PENDING; implemented firmware subset checked"
+	@echo "S6 HOST_PASS / DSS-EXE_PASS / REAL_PENDING; physical audio/timing gate remains open"
 
 s6-package: s6-check
 	$(NODE) $(ROOT)/tools/ultrags/package-s6.mjs --build $(BUILD)
 	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_s6_package.py --build $(BUILD)
+
+# DSS ISA clock correction only; firmware acceptance remains separate.
+.PHONY: isa-dss-check
+isa-dss-check: test-dss fixtures
+	$(NODE) $(ROOT)/tests/ultrags/dss/turbo-contract.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tools/ultrags/s5-variants.mjs $(BUILD)
+	UG_S4_FULL=1 $(NODE) $(ROOT)/tests/ultrags/dss/run-s4.mjs $(ROOT) $(BUILD)
+	UG_S5_FULL=1 $(NODE) $(ROOT)/tests/ultrags/dss/run-s5.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tools/ultrags/package-s0b.mjs --stage ISA --exe-dir $(UGBUILD)/dss \
+		--fixtures $(UGBUILD)/fixtures --out $(UGBUILD)/package
+	$(NODE) $(ROOT)/tools/ultrags/verify-package.mjs --stage ISA --exe-dir $(UGBUILD)/dss \
+		--fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/package
+	$(NODE) $(ROOT)/tools/ultrags/test-package.mjs --stage ISA --exe-dir $(UGBUILD)/dss \
+		--fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/package

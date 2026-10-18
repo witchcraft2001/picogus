@@ -7,6 +7,11 @@
 
 static uint8_t memory[8u<<20];
 static int fail;
+static FILE *golden, *index_file;
+static uint64_t golden_samples;
+static void put_sample(int16_t v) {
+    if(golden) { assert(fputc((uint16_t)v&255,golden)!=EOF);assert(fputc((uint16_t)v>>8,golden)!=EOF);golden_samples++; }
+}
 static int read_mem(void *ctx,uint32_t off,uint8_t *dst,uint32_t n) {
     (void)ctx; assert(n<=256 && off<=sizeof(memory) && n<=sizeof(memory)-off);
     memcpy(dst,memory+off,n);
@@ -73,6 +78,7 @@ static void matrix(void) {
         }
         uint64_t duration=((uint64_t)frames*repeat*48000+rate-1)/rate;
         unsigned count=(repeat && !loop)?(unsigned)duration+17:2200;
+        if(index_file) fprintf(index_file,"{\"offset_bytes\":%llu,\"output_frames\":%u,\"source_frames\":%u,\"rate\":%u,\"channels\":%u,\"format\":%u,\"repeats\":%u,\"loop\":%u,\"pan\":%u,\"gain\":%u,\"class_gain\":%u,\"master\":%u,\"duration_frames\":%llu}\n",(unsigned long long)golden_samples*2,count,frames,rate,ch,fmt,repeat,loop,pan,gain,class_gain,master,(unsigned long long)duration);
         for(unsigned frame=0;frame<count;) {
             int16_t out[256]; unsigned n=count-frame; if(n>128)n=128;
             assert(!ug_mixer_render(&m,out,n));
@@ -84,6 +90,7 @@ static void matrix(void) {
                     expected=reference(frame+j,rate,frames,repeat,loop,0,ch,fmt,
                                        255-pan,gain,class_gain,master);
                 }
+                put_sample(out[2*j+side]);
                 if(out[2*j+side]!=expected) {
                     fprintf(stderr,"oracle rate=%u ch=%u fmt=%u repeats=%u loop=%u pan=%u frame=%u side=%u got=%d want=%d\n",
                             rate,ch,fmt,repeat,loop,pan,frame+j,side,out[2*j+side],expected);
@@ -105,6 +112,8 @@ static void faults_and_peaks(void) {
     }
     int16_t out[1920]; ug_mixer_render(&m,out,960);
     assert(out[0]==32767 && out[1]==0 && m.stats.clips==960);
+    if(index_file) fprintf(index_file,"{\"offset_bytes\":%llu,\"output_frames\":960,\"case\":\"12-lane-clipping\"}\n",(unsigned long long)golden_samples*2);
+    for(unsigned i=0;i<1920;i++) put_sample(out[i]);
     assert(m.peaks[0]==32768 && m.peaks[1]==0 && m.lane_peaks[0]==32512);
     m.stats.clips=m.stats.frames=UINT32_MAX; ug_mixer_render(&m,out,1);
     assert(m.stats.clips==UINT32_MAX && m.stats.frames==UINT32_MAX);
@@ -117,4 +126,28 @@ static void faults_and_peaks(void) {
     assert(m.lanes[0].cache_tag[0]==UG_CACHE_TAG_INVALID && m.stats.fetch_errors);
     puts("S6 clipping/20 ms peaks/saturating counters/partial cache read fault PASS");
 }
-int main(void) { matrix(); faults_and_peaks(); return 0; }
+static void long_boundaries(void) {
+    ug_mem_if mem={read_mem,NULL,NULL,sizeof(memory)};
+    const unsigned points[]={1u<<20,2u<<20,4u<<20,8u<<20};
+    for(unsigned k=0;k<4;k++) {
+        unsigned at=points[k]-3,n=k==3?3:9;
+        for(unsigned i=0;i<n;i++) memory[at+i]=(uint8_t)(128+i*7);
+        ug_mixer m;ug_mixer_init(&m,mem);
+        assert(!ug_lane_set(&m,0,0,sizeof(memory),0,0,0,64,0,UG_FMT_U8,UG_LANE_MONO,0,0));
+        ug_lane_pcm_rate(&m.lanes[0],48000,48000,1);
+        m.lanes[0].phase=(uint64_t)at<<32;
+        int16_t out[18];assert(!ug_mixer_render(&m,out,n));
+        for(unsigned i=0;i<n;i++) { assert(out[2*i]==(int)i*7*256 && !out[2*i+1]); }
+        assert((m.lanes[0].phase>>32)==(k==3?sizeof(memory)-1:(uint64_t)at+n));
+        if(k==3) assert(!m.lanes[0].active);
+    }
+    puts("S6 long phase: source indices crossing 1/2/4 MiB and exact 8 MiB EOF PASS");
+}
+int main(void) {
+    const char *path=getenv("UG_S6_AUDIO");if(path) { golden=fopen(path,"wb");assert(golden); }
+    path=getenv("UG_S6_AUDIO_INDEX");if(path) { index_file=fopen(path,"w");assert(index_file); }
+    matrix(); faults_and_peaks(); long_boundaries();
+    if(index_file) assert(!fclose(index_file));
+    if(golden) { assert(!fclose(golden));printf("S6 golden: %llu interleaved samples, stereo S16LE 48000 Hz; exact independent oracle PASS\n",(unsigned long long)golden_samples); }
+    return 0;
+}

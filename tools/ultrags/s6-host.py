@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-import argparse, json, shlex, subprocess, sys
+import argparse, json, shlex, subprocess, sys, os
 from pathlib import Path
 from s6_inputs import ROOT, PROGRAMS, digest, inputs, validate
 
@@ -22,14 +22,16 @@ for name,sources in PROGRAMS.items():
         '-I'+str(gen), *[str(ROOT/source) for source in sources], '-o',str(a.build/name)]
     commands[name]=cmd
     subprocess.run(cmd,check=True)
-    result=subprocess.run([str(a.build/name)],check=True,timeout=60,capture_output=True,text=True)
+    env=dict(os.environ,UG_S6_VECTORS=str(a.build/"s6-commands.jsonl"),UG_S6_AUDIO=str(a.build/"s6-audio.s16le"),UG_S6_AUDIO_INDEX=str(a.build/"s6-audio-index.jsonl"))
+    result=subprocess.run([str(a.build/name)],env=env,check=True,timeout=60,capture_output=True,text=True)
     log=result.stdout+result.stderr; print(log,end='',flush=True)
     (a.build/(name+'.log')).write_text(log)
 assert before==inputs(a.build), 'S6 inputs changed during execution; rerun'
 evidence={'status':'PASS','inputs':before,'commands':commands,
           'executables':{name:digest(a.build/name) for name in PROGRAMS},
           'logs':{name:digest(a.build/(name+'.log')) for name in PROGRAMS},
+          'fixtures':{name:digest(a.build/name) for name in ('s6-commands.jsonl','s6-audio.s16le','s6-audio-index.jsonl')},
           'compiler':subprocess.check_output(shlex.split(a.cc)+['--version'],text=True).splitlines()[0],
-          'sanitizer':'UBSan','scope':'implemented firmware subset; DSS, full S6 matrix and REAL pending'}
+          'sanitizer':'UBSan','scope':'S6 firmware C/UBSan, indexed audio goldens and shared command vectors; REAL pending'}
 validate(evidence,a.build)
 evp.write_text(json.dumps(evidence,indent=2)+'\n')

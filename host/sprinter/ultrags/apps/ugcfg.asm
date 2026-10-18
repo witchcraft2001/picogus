@@ -72,6 +72,17 @@ ENTRY:
     call PRINT
     jp PASS
 .run:
+    call VALIDATE_ARGS
+    jp c,SYNTAX
+    ld a,(CMD)
+    cp 3
+    jr nz,.discover
+    ld a,(TARGET)
+    or a
+    jp z,UNKNOWN
+    cp 9
+    jp nc,UNKNOWN
+.discover:
     call DISCOVER
     jp c,EXIT
     ld a,(CMD)
@@ -204,6 +215,71 @@ PARSE:
     ret z
 .bad:
     scf
+    ret
+ ; Validate values before discovery: malformed input must never map ISA.
+VALIDATE_ARGS:
+    ld a,(CMD)
+    cp 3
+    jp z,MODE_ARG
+    cp 4
+    jp z,PORTS_ARGS
+    cp 5
+    jp z,GS_ARG
+    or a
+    ret
+MODE_ARG:
+    ld hl,(ARGS+2)
+    ld de,modes
+    call LOOKUP
+    jr nc,.found
+    ; Both decimal and 0x-prefixed IDs are bytes, without truncation.
+    ld hl,(ARGS+2)
+    call MODE_NUMBER
+    ret c
+    ld a,e
+.found:
+    or a
+    ld (TARGET),a
+    or a
+    ret
+PORTS_ARGS:
+    ld hl,(ARGS+2)
+    call HEX
+    ret c
+    ld (NEWBASE),de
+    ex de,hl
+    call VALID_BASE
+    ret c
+    ld hl,(ARGS+4)
+    ld de,off_text
+    call EQUAL
+    ld de,0xFFFF
+    jr z,.alias
+    ld hl,(ARGS+4)
+    call HEX
+    ret c
+    push de
+    ex de,hl
+    call VALID_BASE
+    pop de
+    ret c
+.alias:
+    ld (NEWALIAS),de
+    ld hl,(NEWBASE)
+    or a
+    sbc hl,de
+    scf
+    ret z
+    or a
+    ret
+GS_ARG:
+    ld hl,(ARGS+2)
+    ld de,onoff
+    call LOOKUP
+    ret c
+    dec a
+    ld (TARGET),a
+    or a
     ret
 OPTION:
     push hl
@@ -857,21 +933,7 @@ LIST:
     djnz .loop
     jp PASS
 MODE:
-    ld hl,(ARGS+2)
-    ld de,modes
-    call LOOKUP
-    jr nc,.found
-    ; Both decimal and 0x-prefixed IDs are bytes, without truncation.
-    ld hl,(ARGS+2)
-    call MODE_NUMBER
-    jp c,SYNTAX
-    ld a,e
-.found:
-    or a
-    jp z,UNKNOWN
-    cp 9
-    jp nc,UNKNOWN
-    ld (TARGET),a
+    ld a,(TARGET)
     dec a
     ld l,a
     ld h,0
@@ -957,32 +1019,6 @@ VERIFY:
     jp c,EXIT
     jp PASS
 PORTS:
-    ld hl,(ARGS+2)
-    call HEX
-    jp c,SYNTAX
-    ld (NEWBASE),de
-    ex de,hl
-    call VALID_BASE
-    jp c,SYNTAX
-    ld hl,(ARGS+4)
-    ld de,off_text
-    call EQUAL
-    ld de,0xFFFF
-    jr z,.alias
-    ld hl,(ARGS+4)
-    call HEX
-    jp c,SYNTAX
-    push de
-    ex de,hl
-    call VALID_BASE
-    pop de
-    jp c,SYNTAX
-.alias:
-    ld (NEWALIAS),de
-    ld hl,(NEWBASE)
-    or a
-    sbc hl,de
-    jp z,SYNTAX
     ld hl,(NEWBASE)
     ld de,(NEWALIAS)
     call APPLY_PAIR
@@ -1053,12 +1089,7 @@ SET_PORT:
     scf
     ret
 GS:
-    ld hl,(ARGS+2)
-    ld de,onoff
-    call LOOKUP
-    jp c,SYNTAX
-    dec a
-    ld (TARGET),a
+    ld a,(TARGET)
     or a
     jr z,.write
     ld hl,warning_text

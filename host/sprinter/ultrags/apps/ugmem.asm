@@ -25,7 +25,7 @@ REASON EQU V+18
 HANDLE EQU V+20
 MODE EQU V+22
 EXPECT EQU V+23
-REQ EQU V+24
+REQ EQU 0x5880 ; 128-byte private request, disjoint from app variables
 BOOT EQU V+29
 DECVAL EQU V+32
 DECPTR EQU V+36
@@ -100,6 +100,11 @@ ENTRY:
     inc hl
     inc de
     djnz .magic
+    ; Bind all file/temporary-object operations to the discovered session.
+    ld hl,RESP+12
+    ld de,SESSION
+    ld bc,8
+    ldir
     ld a,(RESP+7)
     ld (BOOT),a
     ld hl,session_text
@@ -116,6 +121,9 @@ ENTRY:
     ld a,(RESP)
     and 128
     jp z,PROTOCOL
+    IFDEF APP_AUDIO
+    jp AUDIO_RUN
+    ENDIF
     IFDEF APP_LOAD
     jp LOAD_FILE
     ELSE
@@ -127,6 +135,10 @@ ENTRY:
     jp BENCH_RUN
     ENDIF
     ld a,(CMD)
+    IFDEF APP_S6TEST
+    cp 8
+    jp nc,S6TEST_RUN
+    ENDIF
     cp 1
     jp z,INFO
     cp 2
@@ -160,6 +172,15 @@ INIT:
     ld (hl),0
     ldir
     call UG_LIB_INIT
+    IFDEF APP_PCM
+    call PCM_INIT
+    ENDIF
+    IFDEF APP_AUDIO
+    call AUDIO_INIT
+    ENDIF
+    IFDEF APP_S6TEST
+    call S6TEST_INIT
+    ENDIF
     IFDEF APP_BENCH
     call BENCH_INIT
     ENDIF
@@ -239,6 +260,9 @@ PARSE:
     xor a
     ret
     ENDIF
+    IFDEF APP_AUDIO
+    jp AUDIO_PARSE
+    ENDIF
     ld a,(ARGC)
     or a
     jp z,.bad
@@ -248,6 +272,9 @@ PARSE:
     ld a,(BLOBTYPE)
     or a
     jp z,.bad
+    IFDEF APP_PCM
+    jp PCM_VALIDATE
+    ENDIF
     xor a
     ret
     ELSE
@@ -266,8 +293,16 @@ PARSE:
     ld de,commands
     call LOOKUP
     jp c,.bad
+    IFDEF APP_PROTO
+    ; UGTEST's module shares the parser, but only suites are public here.
+    ; Reject UGMEM verbs before DISCOVER/UG_OPEN or transport reset.
+    cp 7
+    jp c,.bad
+    ENDIF
     ld (CMD),a
     ld b,1
+    cp 8
+    jr nc,.count
     cp 7
     jr z,.count
     cp 3
@@ -320,6 +355,25 @@ PARSE:
     scf
     ret
 OPTION:
+    IFDEF APP_S6TEST
+    push hl
+    ld de,s6_real_option
+    call EQUAL
+    pop hl
+    ret z
+    ENDIF
+    IFDEF APP_PCM
+    push hl
+    call PCM_OPTION
+    pop hl
+    ret nc
+    ENDIF
+    IFDEF APP_AUDIO
+    push hl
+    call AUDIO_OPTION
+    pop hl
+    ret nc
+    ENDIF
     IFDEF APP_BENCH
     push hl
     call BENCH_OPTION
@@ -659,6 +713,7 @@ RPC:
     ld a,3
     scf
     ret
+    IFNDEF APP_PROTO
 INFO:
     ld hl,boot_text
     call SHOW
@@ -818,12 +873,34 @@ LIST:
     call DEC16
     call NL
     jp .loop
+    ELSE
+INFO:
+TEST:
+RESET:
+FREE:
+LIST:
+    jp SYNTAX
+    ENDIF
 RPC_ERROR:
     ld b,a
     ld a,(UG_LAST_SOURCE)
     cp 1
     jr z,.host
     ld a,b
+    cp 11
+    jr nz,.audio
+    ld hl,format_error_text
+    ld (REASON),hl
+    ld a,6
+    jp EXIT
+.audio:
+    cp UG_ERR_NO_VOICE
+    jr nz,.crcstatus
+    ld hl,no_voice_text
+    ld (REASON),hl
+    ld a,7
+    jp EXIT
+.crcstatus:
     cp 4
     jr nz,.busy
     ld a,9
@@ -879,6 +956,12 @@ PASS:
     xor a
 EXIT:
     ld (ERR),a
+    IFDEF APP_AUDIO
+    call AUDIO_CLEANUP
+    ENDIF
+    IFDEF APP_S6TEST
+    call S6TEST_CLEANUP
+    ENDIF
     call BLOB_CLEANUP
     call UG_CLOSE
     ld a,(ERR)
@@ -1000,6 +1083,7 @@ DEC32:
     ld bc,4
     ldir
 DECIMAL:
+    push ix
     xor a
     ld (LEADING),a
     ld ix,powers
@@ -1047,12 +1131,19 @@ DECIMAL:
     or (ix+1)
     or (ix+2)
     or (ix+3)
-    ret z
+    jr z,.done
     xor a
     jr .next
+.done:
+    pop ix
+    ret
 powers:
     DD 1000000000,100000000,10000000,1000000,100000,10000,1000,100,10,1,0
-commands: DB "INFO",0,1,"LIST",0,2,"TEST",0,3,"RESET",0,4,"FREE",0,5,"ROUNDTRIP",0,6,"PROTO",0,7,0
+commands: DB "INFO",0,1,"LIST",0,2,"TEST",0,3,"RESET",0,4,"FREE",0,5,"ROUNDTRIP",0,6,"PROTO",0,7
+    IFDEF APP_S6TEST
+    DB "PCM",0,8,"FX",0,9
+    ENDIF
+    DB 0
 options: DB "/QUIET",0,1,"/?",0,2,"/VERIFY",0,3,"/SLOW",0,4,"/OVERWRITE",0,5,"/TYPE:BLOB",0,6,0
 test_modes: DB "QUICK",0,1,"FULL",0,2,0
 reset_modes: DB "WARM",0,1,"COLD",0,2,0
@@ -1063,10 +1154,24 @@ info_magic: DB "UGS1",1,0,8
 help_text: DB "UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024 /METHOD:ALL|SLOW|FIXED|ALIAS|STACK",13,10
     DB "/DIRECTION:BOTH|WRITE|READ /CHECK:NONE|CRC|BOTH /SOAK:seconds /SLOT:0|1 /BASE:hex /QUIET",13,10,0
     ELSE
+    IFDEF APP_AUDIO
+help_text: INCLUDE "ugaudio_help.inc"
+    ELSE
+    IFDEF APP_PROTO
+help_text: DB "UGTEST PROTO|PCM|FX [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
+    ELSE
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
     DB "ROUNDTRIP bytes /SLOW /VERIFY /SLOT:0|1 /BASE:hex /QUIET /?",13,10
+    DB "UGLOAD file /TYPE:RAW|WAV|BLOB /RATE:N /BITS:8|16 /CH:1|2 /FMT:U8|S8|S16LE",13,10
     DB "UGLOAD file /TYPE:BLOB [/CRC:hhhhhhhh] | UGDUMP handle file [/OFFSET:N /LENGTH:N /OVERWRITE]",13,10,0
     ENDIF
+    ENDIF
+    ENDIF
+    IFDEF APP_S6TEST
+s6_real_option: DB "/REAL",0
+    ENDIF
+format_error_text: DB "FORMAT",0
+no_voice_text: DB "NO_VOICE",0
 warning_text: DB "WARNING RESET destroys all loaded objects",13,10,0
 unavailable_text: DB "ROUNDTRIP_UNAVAILABLE_UNTIL_S4",0
 generic_reason: DB "MEMORY_OR_PROTOCOL",0
@@ -1092,11 +1197,22 @@ fail_text: DB "RESULT FAIL code=",0
 reason_text: DB " reason=",0
 newline: DB 13,10,0
     INCLUDE "ugblob.asm"
+    IFDEF APP_PCM
+    INCLUDE "ugpcm.asm"
+    ENDIF
+    IFDEF APP_AUDIO
+    INCLUDE "ugaudio.asm"
+    ENDIF
     IFDEF APP_PROTO
     INCLUDE "ugtestproto.asm"
+    IFDEF APP_S6TEST
+    INCLUDE "ugtestpcm.asm"
+    ENDIF
     ENDIF
     IFDEF APP_BENCH
     INCLUDE "ugbench_blob.asm"
     ENDIF
     INCLUDE "ugproto.asm"
     ASSERT $ < 0xB800
+
+    ASSERT UGMEM_END+512 <= 0xBFFE

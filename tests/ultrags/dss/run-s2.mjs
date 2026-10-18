@@ -17,17 +17,20 @@ for(const c of reference){
 console.log('PASS S2 actual C/model differential fixtures: '+reference.length);
 function test(name,cli,expected=0,opts={}) {
  const card=opts.card??new ConfigCard(opts.catalog??catalog,opts);
- const m=new SprinterMachine({card:opts.absent?null:card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,commandLine:cli,movingClock:!opts.stopped,escAfter:opts.escAfter??Infinity,logLimit:1000});
+ const m=new SprinterMachine({card:opts.absent?null:card,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,turboHardware:opts.cpuHz!==3500000,commandLine:cli,movingClock:!opts.stopped,escAfter:opts.escAfter??Infinity,logLimit:1000});
  const dss=m.dssCall.bind(m);
  m.dssCall=s=>{const result=dss(s);if(result!=='exit'){s.ix=0xdead;s.iy=0xbeef;}return result;};
  m.mem.set(bytes,h.loadAddr);const run=runImage(Z80,m,{entry:h.entry,stack:h.stack,iff:opts.iff??1,budget:30000000});
  const errors=[...m.violations];
+ if(m.maxDiUs>=10000 || m.maxWindowUs>=10000)errors.push("ISA/DI budget >=10ms");
+ if(m.turboWrites && !m.turbo)errors.push("DSS Turbo not enabled");
+ if((cli.trim()==="/?" || expected===1) && m.turboWrites)errors.push("Turbo touched before argument validation");
  if(m.system!==m.systemInit||m.page3!==m.page3Init||!!run.end.iff1!==!!(opts.iff??1)||run.end.sp!==h.stack-2)errors.push('context');
  if(opts.noMutation&&card.mutations.length)errors.push('mutated');
  if(opts.check&&!opts.check(card,m))errors.push('postcondition');
  const ok=run.exitCode===expected&&!errors.length&&m.text.includes(`RESULT ${expected?'FAIL':'PASS'} code=${expected}`);
  console.log(`${ok?'PASS':'FAIL'} S2 ${name} exit=${run.exitCode} ${ok?'':JSON.stringify({text:m.text,errors,trace:m.trace})}`);
- results.push({name,ok,exit:run.exitCode,expected,text:m.text,errors,steps:run.steps,maxWindowUs:m.maxWindowUs});return card;
+ results.push({name,ok,exit:run.exitCode,expected,text:m.text,errors,steps:run.steps,maxWindowUs:m.maxWindowUs,maxDiUs:m.maxDiUs});return card;
 }
 test('info','INFO',0,{check:(c,m)=>m.text.includes('bulk_alias=OFF')});
 test('info-alias-range','INFO',0,{mode:8,alias:0x280,check:(c,m)=>m.text.includes('bulk_alias=0280-029F')});

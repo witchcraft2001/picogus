@@ -10,7 +10,7 @@
 //
 // Vertical scenarios:
 //   main      - full write/read/compare roundtrip + SNAP + GS latch
-//   ctxB      - foreign SYSTEM/PAGE3 + IFF=0 restore (sampled, not 01h)
+//   ctxB      - different PAGE3 + IFF=0 restore; canonical DSS SYSTEM
 //   slowio    - execDelay 200us -> real BUSY polling loops
 //   absent    - card absent: honest fail at UG_OPEN
 //   wrongmode - card strapped to another multifw mode: honest fail
@@ -156,6 +156,9 @@ function checkRoundtrip({ card, mach, run, fin, res, rd16, tag, iffExpected }) {
   !!fin.iff1 === !!iffExpected && mach.system === mach.systemInit && mach.page3 === mach.page3Init
     ? ok(`${tag}: ctx restored`, `system=${hex(mach.system, 2)} page3=${hex(mach.page3, 2)} iff=${fin.iff1}`)
     : bad(`${tag}: ctx restored`, `system=${hex(mach.system, 2)}/${hex(mach.systemInit, 2)} page3=${hex(mach.page3, 2)}/${hex(mach.page3Init, 2)} iff1=${fin.iff1}/${iffExpected}`);
+  mach.maxDiUs < 2000 && mach.maxWindowUs < mach.maxDiUs
+    ? ok(`${tag}: full DI budget`, `${mach.maxDiUs.toFixed(2)}us; ISA ${mach.maxWindowUs.toFixed(2)}us`)
+    : bad(`${tag}: full DI budget`, `${mach.maxDiUs}us`);
   mach.isaOpen === false ? ok(`${tag}: window closed`)
     : bad(`${tag}: window closed`, `page3=${hex(mach.page3, 2)}`);
   const wrBlk = mach.isaLog.filter((e) => e.dir === 'w' && e.isa === CARD_BASE).length;
@@ -206,13 +209,13 @@ function checkHonestFail({ card, mach, run, fin, res, rd16, tag, expectErr }) {
 
 // ---- 3. vertical scenarios ----
 {
-  const s = scenario('main', { systemInit: 0x21, page3Init: 0x03, iff: 1 });
+  const s = scenario('main', { systemInit: 0x01, page3Init: 0x03, iff: 1 });
   console.log(`console(main): ${JSON.stringify(s.mach.text.trim())}`);
   checkRoundtrip(s);
-  // ISA open sequence: SYSTEM readback + PAGE3 read, then writes
+  // ISA open sequence: PAGE3 read, Turbo off, then ISA mapping writes
   const io = s.mach.ioLog.map((e) => e.dir === 'out' ? `W${e.port.toString(16)}=${e.val}` : `R${e.port.toString(16)}`);
-  const i = [io.indexOf('R1ffd'), io.indexOf('Re2'), io.indexOf('W1ffd=17'), io.indexOf('We2=212'), io.indexOf('W9fbd=0')];
-  i.every((x) => x >= 0) && i[0] < i[2] && i[2] < i[3] && i[3] < i[4]
+  const i = [io.indexOf('Re2'), io.indexOf('W3c=2'), io.indexOf('W1ffd=17'), io.indexOf('We2=212'), io.indexOf('W9fbd=0')];
+  i.every((x) => x >= 0) && !io.includes('R1ffd') && i[0] < i[1] && i[1] < i[2] && i[2] < i[3] && i[3] < i[4]
     ? ok('isa-open sequence', i.map((x) => io[x]).join(' '))
     : bad('isa-open sequence', io.slice(0, 12).join(' '));
   // spec 5 order: EVERY config-port access precedes the first BASE access
@@ -239,28 +242,28 @@ function checkHonestFail({ card, mach, run, fin, res, rd16, tag, expectErr }) {
     : bad('bounded windows', `only ${opens} ISA opens (window held open)`);
 }
 {
-  const s = scenario('ctxB', { systemInit: 0x35, page3Init: 0xE9, iff: 0 });
+  const s = scenario('ctxB', { systemInit: 0x01, page3Init: 0xE9, iff: 0 });
   checkRoundtrip(s);                     // same roundtrip, foreign ctx + IFF=0
 }
 {
-  // EXEC/PREPARING exercised: replies land only after 200us of card time;
+  // EXEC/PREPARING exercised: replies land only after 1000us of card time;
   // the ASM X_STATUS poll loop must really wait for the REPLY bit
-  const s = scenario('slowio', { systemInit: 0x21, page3Init: 0x03, iff: 1, execDelayUs: 200 });
+  const s = scenario('slowio', { systemInit: 0x01, page3Init: 0x03, iff: 1, execDelayUs: 1000 });
   checkRoundtrip(s);
   const polls = s.mach.isaLog.filter((e) => e.dir === 'r' && e.isa === CARD_BASE + 1).length;
   polls > 40 ? ok('slowio: BUSY polling real', `${polls} X_STATUS reads`)
     : bad('slowio: polling', `only ${polls} status reads`);
 }
 {
-  const s = scenario('absent', { systemInit: 0x21, page3Init: 0x03, iff: 1, absent: true });
+  const s = scenario('absent', { systemInit: 0x01, page3Init: 0x03, iff: 1, absent: true });
   checkHonestFail({ ...s, expectErr: 0x0D });
 }
 {
-  const s = scenario('wrongmode', { systemInit: 0x21, page3Init: 0x03, iff: 1, mode: 1 });
+  const s = scenario('wrongmode', { systemInit: 0x01, page3Init: 0x03, iff: 1, mode: 1 });
   checkHonestFail({ ...s, expectErr: 0x06 });
 }
 {
-  const s = scenario('wrongslot', { systemInit: 0x21, page3Init: 0x03, iff: 1, cardSlot: 1 });
+  const s = scenario('wrongslot', { systemInit: 0x01, page3Init: 0x03, iff: 1, cardSlot: 1 });
   checkHonestFail({ ...s, expectErr: 0x0D });
 }
 
@@ -317,7 +320,7 @@ const SELFTESTS = [
   ['st-ctxpg3', {}, {}, (m, c, r) =>
       (m.exitCode === 0 && m.page3 === 0x99) ? null : `exit=${m.exitCode} page3=${hex(m.page3, 2)}`],
   ['st-ctxsys', {}, {}, (m, c, r) =>
-      (m.exitCode === 0 && m.system === 0x77) ? null : `exit=${m.exitCode} system=${hex(m.system, 2)}`],
+      (m.exitCode === 0 && m.system === 0x01) ? null : `exit=${m.exitCode} system=${hex(m.system, 2)}`],
   ['st-ctxiff', { iff: 1 }, {}, (m, c, r) =>
       (m.exitCode === 0 && !m.z.getState().iff1) ? null : `exit=${m.exitCode} iff1=${m.z.getState().iff1}`],
   ['st-ctxsp', {}, {}, (m, c, r) => m.violations.some((v) => v.includes('stack inside ISA window'))
@@ -369,7 +372,7 @@ const SELFTESTS = [
       const lastIsaT = m.isaLog[m.isaLog.length - 1].t;
       const tail = m.ioLog.filter((e) => e.t > lastIsaT);
       const badTail = tail.filter((e) =>
-        !(e.dir === 'out' && (e.port === PORT_PAGE3 || e.port === PORT_SYSTEM)));
+        !(e.dir === 'out' && (e.port === PORT_PAGE3 || e.port === PORT_SYSTEM || e.port === 0x3C)));
       if (badTail.length) return `io entries after last isa access: ${badTail.length}`;
       if (tail.some((e) => e.port === PORT_PAGE3 && (e.val & 0xF1) === 0xD0))
         return 'PAGE3 remapped to ISA window after last isa access';
@@ -411,7 +414,7 @@ for (const opts of [
 ]) SELFTESTS.push(['st-transfer', opts, {}, (m,c,r) => {
   if (m.exitCode !== 0 || r[3] !== 0 || c.objects.size || c.transfer) return 'transfer/cleanup failed';
   if (opts.nmiIsa !== undefined && m.nmiDelivered === 0) return 'safe NMI never injected';
-  const expectedChunk = opts.profile === 1 ? 32 : 8;
+  const expectedChunk = 8;
   const groups = []; let group = 0;
   for (const e of [...m.isaLog.map(e => ({ ...e, type: 'isa' })),
     ...m.ioLog.filter(e => e.dir === 'out' && e.port === PORT_PAGE3 && e.val === m.page3Init).map(e => ({ ...e, type: 'close' }))].sort((a,b) => a.t-b.t)) {
@@ -433,6 +436,31 @@ for (const opts of [
   return null;
 }]);
 
+// Per-window guard, independent of session state and firmware identity.
+for (const slot of [0,1]) for (const turboInit of [false,true])
+for (const turboHardware of [false,true]) for (const iff of [0,1])
+for (const page3Init of [0x03,0xE9,0xFE]) {
+  const opts={tag:`turbo-${slot}-${turboInit}-${turboHardware}-${iff}-${page3Init}`,
+    profile:slot,cardSlot:slot,turboInit,turboHardware,iff,page3Init};
+  SELFTESTS.push(['st-turbo',opts,{},m=>{
+    if(m.exitCode || m.turboWrites!==4 || !m.turbo || m.windowCount!==2) return 'guard/reopen';
+    if(m.systemPage[0x13A]!==0xA5) return 'CONFIG_DE was modified';
+    if(m.ioLog.some(e=>e.dir==='in' && e.port!==PORT_PAGE3)) return 'unreliable state read';
+    if(m.maxDiUs<=m.maxWindowUs || m.maxDiUs>=2000) return 'complete DI section budget';
+    const writes=m.ioLog.filter(e=>e.dir==='out').map(e=>[e.port,e.val]);
+    const window=[[0x3C,2],[PORT_SYSTEM,0x11],[PORT_PAGE3,0xD4+slot*2],[PORT_ISA,0],
+      [PORT_SYSTEM,1],[PORT_PAGE3,page3Init],[0x3C,3]];
+    return JSON.stringify(writes)===JSON.stringify([...window,...window])?null:'IO order';
+  }]);
+}
+// Negative model control: a consuming read must be rejected before it reaches the card.
+{
+  let reads=0;
+  const m=new SprinterMachine({card:{readPort(){reads++;return 0;}},systemInit:0x11,page3Init:0xD4});
+  try {m.memRead(0xC1D0);bad('Turbo ISA rejection','accepted');}
+  catch(e) {e.message==='ISA access with Turbo enabled' && reads===0 ? ok('Turbo ISA rejection') : bad('Turbo ISA rejection',e.message);}
+}
+
 for (const [file, cardOpts, , expect] of SELFTESTS) {
   const exePath = join(OUTDIR, `${file.toUpperCase()}.EXE`);
   let bytes;
@@ -446,7 +474,7 @@ for (const [file, cardOpts, , expect] of SELFTESTS) {
   let sh;
   try { sh = parseExe(bytes); } catch (e) { bad(`${file} header`, e.message); continue; }
   const card = new UgCard({ alias: cardOpts.alias ?? 0xFFFF, noReply: !!cardOpts.noReply });
-  const mach = new SprinterMachine({ card, cardSlot: cardOpts.cardSlot ?? 0, seed: 0x5EED02, systemInit: 0x21, page3Init: 0x03, cpuHz: cardOpts.cpuHz ?? 21_000_000 });
+  const mach = new SprinterMachine({ card, cardSlot: cardOpts.cardSlot ?? 0, seed: 0x5EED02, systemInit: 0x01, page3Init: cardOpts.page3Init ?? 0x03, turboInit: cardOpts.turboInit, turboHardware: cardOpts.turboHardware, cpuHz: cardOpts.cpuHz ?? 21_000_000 });
   if (cardOpts.psramFail) card.injectPsramFail = true;
   if (cardOpts.shortBegin) {
     const begin = card._writeBegin.bind(card);
@@ -470,7 +498,7 @@ for (const [file, cardOpts, , expect] of SELFTESTS) {
   if (why === null && intendedViolation && (mach.exitCode !== 0 || res[3] !== 0 ||
       !mach.violations.length || mach.violations.some(v => !intendedViolation.test(v))))
     why = 'target defect masked by unrelated exit/error/violation';
-  const deliberatelyDefective = new Set(['st-dsswin', 'st-dssgrant', 'st-ctxpg3', 'st-ctxsys', 'st-ctxiff', 'st-ctxsp', 'st-nmihaz', 'st-loop']);
+  const deliberatelyDefective = new Set(['st-dsswin', 'st-dssgrant', 'st-ctxpg3', 'st-ctxiff', 'st-ctxsp', 'st-nmihaz', 'st-loop']);
   if (why === null && !deliberatelyDefective.has(file)) {
     const fin = mach.z.getState();
     if (mach.violations.length) why = `unrelated violations: ${mach.violations.join('; ')}`;
@@ -513,6 +541,12 @@ try {
     for(const e of s5.executed)executed.set(e.name,e);
     for(const r of s5.results)r.ok?ok(`S5 ${r.name}`):bad(`S5 ${r.name}`,r.errors.join(';'));
   }
+  if(assemblyEvidence.files.some(e=>e.name==='UGPLAY.EXE')) {
+    execFileSync(process.execPath,[join(REPO,'tests/ultrags/dss/run-s6.mjs'),REPO,parentBuild],{stdio:'inherit'});
+    const s6=JSON.parse(readFileSync(join(LOGS,'s6-run.json')));
+    for(const e of s6.executed)executed.set(e.name,e);
+    for(const r of s6.results)r.ok?ok(`S6 ${r.name}`):bad(`S6 ${r.name}`,r.errors.join(';'));
+  }
   for (const r of s3.results) r.ok ? ok(`S3 ${r.name}`) : bad(`S3 ${r.name}`,r.errors.join(';'));
 
   for (const r of s2.results) r.ok ? ok(`S2 ${r.name}`) : bad(`S2 ${r.name}`,r.errors.join(';'));
@@ -543,7 +577,7 @@ function done(runs_) {
     },
     runs: runs_.map((r) => ({
       tag: r.tag,
-      cpuHz: r.mach.cpuHz, windows: r.mach.windows, traceTail: r.mach.trace,
+      cpuHz: r.mach.cpuHz, maxWindowUs: r.mach.maxWindowUs, maxDiUs: r.mach.maxDiUs, windows: r.mach.windows, traceTail: r.mach.trace,
       exitCode: r.mach.exitCode, steps: r.run.steps, cycles: r.run.cycles,
       endPc: r.fin.pc, minSp: r.mach.minSpSeen, maxSp: r.mach.maxSpSeen,
       systemInit: r.mach.systemInit, page3Init: r.mach.page3Init,

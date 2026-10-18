@@ -22,7 +22,7 @@ import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
 const stage = arg('--stage', 'S0b');
-if (!['S0b','S1','S2','S3','S4','S5'].includes(stage)) throw new Error('unknown package stage');
+if (!['S0b','S1','S2','S3','S4','S5','S6','ISA'].includes(stage)) throw new Error('unknown package stage');
 const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -76,8 +76,45 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = stage === 'S5' ? [
+const help = stage === 'S6' ? [
+ 'Ultra GS S6 - HOST_PASS / DSS-EXE_PASS / REAL_PENDING; S6 IN_PROGRESS.',
+ 'UGLOAD file.RAW /TYPE:RAW /RATE:11025 /BITS:8 /CH:1 /FMT:U8 /VERIFY',
+ 'UGLOAD file.WAV /TYPE:WAV /VERIFY -> retain printed object handle.',
+ 'UGPLAY HANDLE <handle> /WAIT; repeat without reloading the object.',
+ 'UGPLAY file.WAV /WAIT; UGPLAY HANDLE <handle> /LOOP /REPLACE',
+ 'UGPLAY STOP; UGPLAY PAUSE; UGPLAY RESUME',
+ 'UGPLAY FX file.WAV; UGPLAY FXHANDLE <handle> /LOOP',
+ 'FX options: /VOICE:8 /PRIORITY:128 /GAIN:64 /PAN:128 /STEAL /WAIT',
+ 'UGPLAY FXPAUSE <fx_id>; FXRESUME <fx_id>; FXSTOP <fx_id>|ALL',
+ 'UGMON /COUNT:20 /HZ:5; ESC exits monitor without stopping audio.',
+ 'READY assets survive EOF/STOP/ESC/program exit; UGMEM FREE <handle> releases them.',
+ 'UGTEST PCM; UGTEST FX. These require idle dedicated FX lanes.',
+ 'Default BULK FAST, /SLOW GS_DATA, /VERIFY CRC + byte readback; /CRC known object CRC.',
+ 'Use MANIFEST.TXT to map fixture filenames and required RAW metadata.',
+ 'ISA: Turbo off per window, <=8 payload bytes; DSS Turbo on after close.',
+ 'MOD, playlists and legacy GS loading are unsupported until later stages.',
+ 'PGMULTI is the seven-mode bundle. Standalone PGULTRA replaces all flash.',
+ 'PGPOST/PGPMULT/PGPDIAG/PGPNOD are experimental; BUS uses S1 diagnostic.',
+ 'ST-*.EXE are intentionally defective HOST tests; never run on hardware.',
+ 'Physical LRCLK/I2S, render/bus budgets and listening remain REAL_PENDING.',
+ 'IMG is a DSS-readable FAT12 data disk. Read S6-README.md beside the containers.',
+].join('\r\n') : stage === 'ISA' ? [
+ 'Ultra GS ISA correction - DSS tools only; REAL_PENDING; S6 IN_PROGRESS.',
+ 'ISA at 3.5 MHz via SYS_PORT.RAM=2; close SYSTEM=01h, PAGE3, SYS_PORT.RAM=3.',
+ 'Returns to DSS Turbo ON even if entry Turbo was OFF. Hardware inhibit is independent.',
+ 'Payload chunks <=8; GS_DATA=1. No BIOS call or CONFIG_DE snapshot.',
+ 'UGCFG INFO; UGMEM ROUNDTRIP 8388608; UGMEM ROUNDTRIP 8388608 /SLOW',
+ 'UGLOAD TEST.BIN /TYPE:BLOB /VERIFY; UGDUMP <handle> BACK.BIN /VERIFY',
+ 'UGBENCH /BYTES:65537 /LOOPS:1 /METHOD:FIXED /CHECK:BOTH',
+ 'Read ISA.TXT for platform contract and Tester Notes. ISASRC.JSN pins source hashes.',
+ 'Firmware is supplied separately. BUS requires the S1 diagnostic firmware.',
+ 'ST-*.EXE include deliberately broken harness tests; never run them on hardware.',
+ 'IMG is a FAT12 data disk; this package does not claim S6 or hardware acceptance.',
+].join('\r\n') : stage === 'S5' ? [
  'Ultra GS S5 - HOST_PASS / DSS-EXE_PASS / REAL_PENDING',
+ 'ISA: SYS_PORT.RAM Turbo OFF per window (3.5 MHz), DSS Turbo ON between/after.',
+ 'Entry speed is not detected/restored. SYSTEM is write-only; closes to 01h.',
+ 'All protected payload chunks <=8; GS_DATA=1. Hardware Turbo inhibit is independent.',
  'UGCFG MODE ULTRAGS',
  'UGMEM ROUNDTRIP 8388608',
  'UGMEM ROUNDTRIP 65536 /SLOW',
@@ -180,6 +217,11 @@ const help = stage === 'S5' ? [
   '',
 ].join('\r\n');
 add('HELP.TXT', Buffer.from(help, 'ascii'), 'generated');
+if (stage==='ISA') {
+  for (const [name,src] of [['ISA.TXT','host/sprinter/ultrags/docs/ISA-TURBO.md'],
+    ['ISASRC.JSN','tests/ultrags/reference/sprinter-isa-sources.json']])
+    add(name,readFileSync(join(repoRoot,src)),src);
+}
 if (stage==='S1') add('README.MD', readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/S1-README.md')), 'host/sprinter/ultrags/docs/S1-README.md');
 const license = [
   `Ultra GS ${stage} package`,
