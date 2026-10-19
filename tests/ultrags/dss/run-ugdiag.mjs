@@ -279,8 +279,8 @@ const SELFTESTS = [
   ['st-badslot', { cardSlot: 1 }, {}, (m, c, r) => {
       if (m.exitCode !== 0 || r[3] !== 0) return `exit=${m.exitCode} err=${r[3]}`;
       // slot-2/3 opens must produce ZERO bus traffic; the whole run has
-      // exactly the slot-1 UG_OPEN sequence (4W+5R cfg + 2R api = 11)
-      return m.isaLog.length === 11 && m.isaLog.every(e => e.slot === 1)
+      // exactly the slot-1 UG_OPEN sequence (two confirmed selects per register: 16W+13R cfg + 2R api = 31)
+      return m.isaLog.length === 31 && m.isaLog.every(e => e.slot === 1)
         ? null : `isaLog=${m.isaLog.length} (bad-slot opens leaked bus writes)`;
     }],
   ['st-respbuf', {}, {}, (m, c, r) => {

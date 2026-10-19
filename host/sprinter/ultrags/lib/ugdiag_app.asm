@@ -1,7 +1,11 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Private standalone transport. Does not call UG_OPEN or bypass its mode8 gate.
 ; DSS IX entry ABI: length-prefixed command line. All DSS calls use closed windows.
-	ORG 0x8000
+    IFDEF UGTEST_S4
+    ORG 0x7800 ; combined BUS/PROTO/PCM/FX code, below B800 workspace
+    ELSE
+    ORG 0x8000
+    ENDIF
 HEADER:
 	DB "EXE",1
 	DW 128,0,0,0,0,0,ENTRY,ENTRY,0xBFFE

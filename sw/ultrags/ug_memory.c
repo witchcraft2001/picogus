@@ -36,7 +36,7 @@ void ug_memory_step(ug_memory_job_t *j,uint32_t now) {
     if(!j->active) return;
     ug_psram_t *ps=j->ps; uint32_t a=0,n=1; uint8_t e;
     if(j->phase==0) {
-        uint8_t id[8];
+        uint8_t id[3];
         if(ug_psram_read_id(ps,id)) { bad(j,0,0,0,now); return; }
         if(id[0]!=0x0d || id[1]!=0x5d) { finish(j,UG_ERR_UNSUPPORTED_MEMORY,now); return; }
         /* Legacy parts with EID=FF have no usable density hint. Capacity

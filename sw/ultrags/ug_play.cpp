@@ -15,6 +15,9 @@
 #include "pico/rand.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
+#ifdef UG_ISA_EARLY_READ
+#include "ug_handshake.h"
+#endif
 extern void ug_board_maintenance(void);
 static ug_psram_t ps;
 static float spi_divider;
@@ -44,6 +47,9 @@ volatile ug_psram_attempt ug_psram_attempts[2];
 volatile unsigned ug_psram_attempt_count;
 extern board_type_t BOARD_TYPE;
 void play_ultrags(void) {
+#ifdef UG_ISA_EARLY_READ
+    ug_handshake_guard_core1();
+#endif
     ug_hw_claim_audio(); ug_hw_claim_psram_sm();
     spi_divider=(float)clock_get_hz(clk_sys)/(UG_PSRAM_SCK_MHZ*2000000.0f);
     uint8_t audio_error=0;

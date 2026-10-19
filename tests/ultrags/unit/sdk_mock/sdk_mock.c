@@ -44,10 +44,14 @@ void restore_interrupts(uint32_t old) { mock_irq_disabled=old; }
 void tight_loop_contents(void) { mock_waits++; if(mock_tail_steps && !mock_cs_stuck) mock_tail_steps--; }
 bool pio_can_add_program(PIO p,const struct pio_program *g) { return p->used+g->length<=32; }
 uint pio_add_program(PIO p,const struct pio_program *g) { assert(pio_can_add_program(p,g)); uint off=p->used; p->used+=g->length; return off; }
+void pio_add_program_at_offset(PIO p,const struct pio_program *g,uint off) { assert(off==p->used && !p->enabled[1]); p->used+=g->length; p->program_length[off]=g->length;p->program_id[off]=g->id; }
+void pio_remove_program(PIO p,const struct pio_program *g,uint off) { assert(!p->enabled[1] && p->used==off+g->length);p->used=off;p->program_length[off]=0; }
+void pio_sm_set_wrap(PIO p,uint sm,uint bottom,uint top) { assert(!p->enabled[sm] && bottom==spi_offset);p->wrap[sm]=top; }
+void pio_sm_exec(PIO p,uint sm,uint instr) { assert(!p->enabled[sm] && instr==spi_offset); }
 void pio_sm_claim(PIO p,uint sm) { assert(!p->claimed[sm]); p->claimed[sm]=true; }
 bool pio_sm_is_claimed(PIO p,uint sm) { return p->claimed[sm]; }
 void pio_sm_set_enabled(PIO p,uint sm,bool en) { p->enabled[sm]=en; }
-void pio_sm_set_clkdiv_int_frac(PIO p,uint sm,uint i,uint8_t f) { (void)p;(void)sm; assert(i==120 && f==113); }
+void pio_sm_set_clkdiv_int_frac(PIO p,uint sm,uint i,uint8_t f) { if(sm==3)assert(i==120 && f==113);p->divider256[sm]=i*256+f; }
 bool pio_sm_is_tx_fifo_empty(PIO p,uint sm) { (void)p;(void)sm;return true; }
 uint pio_sm_get_pc(PIO p,uint sm) { (void)p;(void)sm;return spi_offset+(mock_tail_steps?1:0); }
 uint pio_get_dreq(PIO p,uint sm,bool tx) { (void)p;(void)tx;return sm; }
@@ -88,8 +92,9 @@ void mock_complete_mask(unsigned mask) {
     mock_dma.ints0|=mask; irq_handler();
 }
 psram_spi_inst_t psram_spi_init_clkdiv(PIO p,int sm,float div,bool fudge) {
-    (void)div; psram_spi_inst_t s={p,sm,pio_add_program(p,fudge?&spi_psram_fudge_program:&spi_psram_program),2,3,4};
-    spi_offset=s.offset; dma_channel_claim(2);dma_channel_claim(3);dma_channel_claim(4);p->enabled[sm]=true;return s;
+    psram_spi_inst_t s={p,sm,pio_add_program(p,fudge?&spi_psram_fudge_program:&spi_psram_program),2,3,4};
+    spi_offset=s.offset;p->divider256[sm]=(uint32_t)(div*256);p->program_length[s.offset]=fudge?10:9;p->program_id[s.offset]=false;
+    dma_channel_claim(2);dma_channel_claim(3);dma_channel_claim(4);p->enabled[sm]=true;return s;
 }
 void psram_spi_uninit(psram_spi_inst_t s,bool fudge) { assert(!s.pio->enabled[s.sm] && !mock_tail_steps); s.pio->used-=fudge?10:9; s.pio->claimed[s.sm]=false;dma_claims[2]=dma_claims[3]=dma_claims[4]=false; }
 void psram_read(psram_spi_inst_t *s,uint32_t off,uint8_t *dst,uint32_t n) { (void)s;psram_hook();assert(!mock_tail_steps && n<=31 && off+n<=sizeof(mock_memory));for(unsigned i=0;i<n;i++) dst[i]=mock_memory[((off+i)%mock_capacity)&mock_alias_mask];mock_tail_steps=3;mock_read_calls++;if(n>mock_max_read)mock_max_read=n; }
@@ -103,5 +108,7 @@ void mock_hold_snapshot(void) { assert(pthread_mutex_lock(mock_last_mutex)==0); 
 void mock_release_snapshot(void) { assert(pthread_mutex_unlock(mock_last_mutex)==0); }
 
 void pio_spi_write_read_dma_blocking(psram_spi_inst_t *s,const uint8_t *q,size_t n,uint8_t *r,size_t m) {
-    (void)s; assert(n==6 && q[2]==0x9f && m==8); memcpy(r,mock_id,8); mock_tail_steps=3;
+    assert(n==6 && q[0]==32 && q[1]==24 && q[2]==0x9f && m==3);
+    assert(s->pio->divider256[s->sm]>=1895 && s->pio->program_length[s->offset]==9 && s->pio->program_id[s->offset]);
+    memcpy(r,mock_id,3); mock_tail_steps=3;
 }

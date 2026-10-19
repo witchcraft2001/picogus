@@ -23,7 +23,7 @@ export class DiagCard {
       if(this.spikeBusy>0){this.spikeBusy--;this.cmdResult=c.UGD_CMD_BUSY;return;}
       this.cmdResult=0;this.profile=v;this.elapsedUs=0;return;
     }
-    if(p===0x1d0) {if(!this.active){if(v===0xcc)this.active=true;}else {this.sel=v;if(v===c.UGD_SEL_BUS)this.latch();
+    if(p===0x1d0) {if(v===0xcc){this.active=true;return;}if(this.active){this.sel=v;if(v===c.UGD_SEL_BUS)this.latch();
         if(v===c.UGD_SEL_STATUS){
           this.snapshotValid=this.snapshotBusy--<=0;
           const b=Buffer.alloc(c.UGD_SPIKE_SIZE);b[0]=85;b[1]=71;b[2]=c.UG_DIAG_VERSION;
@@ -48,6 +48,7 @@ export class DiagCard {
   }
   readPort(p) {
     const mirror=!!(p&1024);p&=1023;
+    if(p===0x1d0)return this.sel;
     if(p===0x1d1)return this.sel===c.UGD_SEL_BASE?this.base&255:this.sel===c.UGD_SEL_CMD?this.cmdResult:this.sel===c.UGD_SEL_STATUS&&!this.snapshotValid?c.UGD_CMD_BUSY:0;
     if(p===0x1d2) {
       if(!this.active)return 255;

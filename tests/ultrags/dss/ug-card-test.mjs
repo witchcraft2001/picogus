@@ -76,7 +76,8 @@ const u16 = (n) => [n & 0xFF, (n >> 8) & 0xFF];
 {
   const card = new UgCard();
   card.writePort(0x1D0, 0xCC);
-  if (card.readPort(0x1D0) !== 0xDD) bad('cfg magic', 'no 0xDD'); else ok('cfg magic');
+  card.writePort(0x1D0, 0);
+  if (card.readPort(0x1D0) !== 0 || card.readPort(0x1D2) !== 0xDD) bad('cfg magic', 'selector/data mismatch'); else ok('cfg magic');
   card.writePort(0x1D0, 0x01);
   if (card.readPort(0x1D2) !== 4) bad('cfg protocol', ''); else ok('cfg protocol=4');
   card.writePort(0x1D0, 0xE4);

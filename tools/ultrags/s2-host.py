@@ -11,3 +11,17 @@ for n,src in enumerate(sources):
  subprocess.run((['c++','-std=c++17'] if src.endswith('cpp') else shlex.split(a.cc)+['-std=c11'])+flags+['-c',str(r/src),'-o',str(out)],check=True)
 exe=a.build/'s2';subprocess.run(['c++','-pthread','-fsanitize=undefined',*map(str,objects),'-o',str(exe)],check=True)
 subprocess.run([str(exe),str(a.build/'s2-catalog.bin'),str(a.build/'s2-config-fixtures.json')],check=True,timeout=60)
+
+# Cover the actual bundled runtime initializer as well as the standalone
+# configuration API. A direct ug_config_init(...,catalog,...) fixture cannot
+# catch an image accidentally built without UG_BUNDLE.
+bundle_objects=list(objects)
+for n in [0,5]:
+ src=sources[n];out=a.build/f's2-bundle-{n}.o';bundle_objects[n]=out
+ subprocess.run((['c++','-std=c++17'] if src.endswith('cpp') else shlex.split(a.cc)+['-std=c11'])+flags+['-DUG_BUNDLE=1','-c',str(r/src),'-o',str(out)],check=True)
+bundle_exe=a.build/'s2-bundle'
+subprocess.run(['c++','-pthread','-fsanitize=undefined',*map(str,bundle_objects),'-o',str(bundle_exe)],check=True)
+subprocess.run([str(bundle_exe)],check=True,timeout=60)
+print('S2 runtime entry: standalone + bundled modes 1..6/8 HOST_PASS')
+
+subprocess.run([__import__('sys').executable,str(r/'tools/ultrags/config-exchange.py'),'--build',str(a.build),'--catalog',str(a.build/'s2-catalog.bin')],check=True)

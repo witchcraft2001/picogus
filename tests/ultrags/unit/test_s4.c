@@ -60,6 +60,35 @@ static void data(unsigned n,bool rd) {
     }
 }
 static void end(unsigned token,bool rd,bool verify,unsigned err) {ug_put32(q,token);if(verify&&rd)ug_put32(q+4,ug_crc32(bytes,block_length));rpc(rd?35:33,rd&&verify?8:4,err,0);}
+static unsigned timeout_interleavings;
+static void timeout_race(unsigned h) {
+    /* Deterministic two-core ordering: core1 captures now, core0 subsequently
+     * acknowledges a grant or transfers a byte, then core1 checks that old
+     * time. Exercise real framing/latches/storage, not a copied timer helper. */
+    const unsigned lags[]={1,1000,10000};
+    for(unsigned wrap=0;wrap<2;wrap++)for(unsigned bulk=0;bulk<2;bulk++)
+    for(unsigned rd=0;rd<2;rd++)for(unsigned i=0;i<3;i++) {
+        mock_now=wrap?UINT32_MAX-512:100000;
+        q[0]=h;q[1]=h>>8;ug_put32(q+2,0);q[6]=16;q[7]=0;q[8]=bulk?0:1;
+        rpc(rd?34:32,9,0,4);
+        uint32_t ack=mock_now-1;
+        ug_storage_tick(ack-lags[i]);
+        CHECK(ug_storage_grant()==(rd?16:8)); /* newer BEGIN ACK */
+        ug_minimal_dispatch(); /* publish read DB before consuming */
+        uint32_t captured=time_us_32();mock_now+=lags[i];
+        if(rd) CHECK(ug_minimal_read(bulk?0x2a0:0x2b3)==bytes[0]);
+        else ug_minimal_write(bulk?0x2a0:0x2b3,bytes[0],time_us_32());
+        uint32_t touched=mock_now-1;
+        ug_storage_tick(captured);
+        CHECK(ug_storage_grant()==(rd?16:8)); /* newer data / input latch */
+        ug_storage_tick(touched+4999999);
+        CHECK(ug_storage_transfer());
+        ug_storage_tick(touched+5000000);
+        CHECK(!ug_storage_transfer()); /* real 5s inactivity still expires */
+        ug_minimal_dispatch();obj(h);CHECK(!r[4]);
+        timeout_interleavings++;
+    }
+}
 int main(int argc,char **argv) {
     mock_reset();ug_hw_claim_audio();ug_hw_claim_psram_sm();CHECK(!ug_psram_init(&ps,pio1,1,1.85,8u<<20,false));
     settings.UltraGS.basePort=0x2a0;settings.UltraGS.bulkAlias=65535;ug_config_init(&ug_cfg,&settings,8,NULL,0,0,0);
@@ -95,6 +124,7 @@ int main(int argc,char **argv) {
     /* Keep a confirmed foreign object across all transport/fault recovery. */
     begin(other,0,32,false,false,0);
     unsigned foreign_token=ug_get32(r);data(32,false);end(foreign_token,false,false,0);
+    timeout_race(other);
     /* Unsupported BULK variants refuse before issuing or pinning a grant. */
     q[0]=h;q[1]=0;ug_put32(q+2,0);q[6]=1;q[7]=0;q[8]=2;
     rpc(32,9,UG_ERR_BAD_ARGUMENT,0);CHECK(!ug_storage_transfer());
@@ -243,6 +273,6 @@ int main(int argc,char **argv) {
     rpc(2,0,UG_ERR_BUSY,0); /* Must not reuse the cold-reset job as this RPC. */
     unsigned limit=100000;while(ug_storage_busy()&&--limit)ug_minimal_dispatch();CHECK(limit);
     rpc(2,0,0,20);CHECK(!r[16]&&!r[17]&&ug_get32(r+8)==8u<<20);
-    if(argc>1) {FILE *f=fopen(argv[1],"w");assert(f);fprintf(f,"{\"checks\":%u,\"full_bytes\":8388608,\"seal_mock_us\":%u,\"spi_slice_mock_us\":%u}\n",checks,ug_seal_elapsed_us,ug_spi_slice_max_us);fclose(f);}
+    if(argc>1) {FILE *f=fopen(argv[1],"w");assert(f);fprintf(f,"{\"checks\":%u,\"full_bytes\":8388608,\"timeout_interleavings\":%u,\"seal_mock_us\":%u,\"spi_slice_mock_us\":%u}\n",checks,timeout_interleavings,ug_seal_elapsed_us,ug_spi_slice_max_us);fclose(f);}
     printf("S4 actual C HOST_PASS: %u checks\n",checks);
 }

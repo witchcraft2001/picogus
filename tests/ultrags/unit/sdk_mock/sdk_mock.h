@@ -23,12 +23,12 @@ typedef volatile uint8_t io_rw_8;
 #define GPIO_FUNC_PIO1 1
 #define __dmb() __sync_synchronize()
 #define __compiler_memory_barrier() __asm__ __volatile__("" ::: "memory")
-typedef struct { uint32_t txf[4], rxf[4], irq; unsigned used; bool claimed[4], enabled[4]; } mock_pio;
+typedef struct { uint32_t txf[4], rxf[4], irq; unsigned used, divider256[4], wrap[4], program_length[32]; bool program_id[32], claimed[4], enabled[4]; } mock_pio;
 typedef mock_pio *PIO;
 extern mock_pio mock_pios[2];
 #define pio0 (&mock_pios[0])
 #define pio1 (&mock_pios[1])
-struct pio_program { unsigned length; };
+struct pio_program { unsigned length; bool id; };
 typedef struct { uint32_t ints0; } mock_dma_hw;
 extern mock_dma_hw mock_dma;
 #define dma_hw (&mock_dma)
@@ -57,6 +57,10 @@ void restore_interrupts(uint32_t state);
 void tight_loop_contents(void);
 bool pio_can_add_program(PIO p, const struct pio_program *program);
 uint pio_add_program(PIO p, const struct pio_program *program);
+void pio_add_program_at_offset(PIO p,const struct pio_program *program,uint offset);
+void pio_sm_set_wrap(PIO p,uint sm,uint bottom,uint top);
+void pio_sm_exec(PIO p,uint sm,uint instr);
+static inline uint pio_encode_jmp(uint off) { assert(off<32); return off; }
 uint32_t pio_sm_get(PIO p, uint sm);
 void pio_sm_put(PIO p, uint sm, uint32_t word);
 void pio_sm_claim(PIO p, uint sm);

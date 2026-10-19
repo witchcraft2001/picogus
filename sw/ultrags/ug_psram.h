@@ -49,7 +49,11 @@ int ug_psram_init(ug_psram_t *ps, PIO pio, int sm, float clkdiv,
 
 extern bool ug_psram_dma_fault;
 int ug_psram_recover(ug_psram_t *ps);
-int ug_psram_read_id(ug_psram_t *ps, uint8_t id[8]);
+/* Read the three-byte MFID/KGD/EID prefix used by the capacity probe.
+ * READ ID uses zero dummy clocks at <=25 MHz, independently of the data
+ * profile. On return the original PIO program/divider are restored; a
+ * failed transfer leaves the SM disabled until explicit recovery. */
+int ug_psram_read_id(ug_psram_t *ps, uint8_t id[3]);
 void ug_psram_uninit(ug_psram_t *ps);
 
 /* Bounded ops: offset+len must be inside pool_bytes, len <= UG_PSRAM_CHUNK.

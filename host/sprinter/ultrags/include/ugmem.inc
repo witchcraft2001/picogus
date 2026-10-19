@@ -68,6 +68,7 @@ UGXFER.TRANS	EQU UGMEM_BASE+60	; u8 transport value
 UGXFER.OFF	EQU UGMEM_BASE+61	; u32 LE block object offset
 UGXFER.BUF	EQU UGMEM_BASE+65	; u16 caller data buffer
 UGXFER.SENT	EQU UGMEM_BASE+67	; u16 bytes moved so far
+UGXFER.STAGE EQU UGMEM_BASE+69 ; diagnostic: 0 validation, 1..4 write, 5..8 read
 
 ; ---- timeout/utility ----
 UGTM.LO		EQU UGMEM_BASE+70	; u16 delay/timeout counters
@@ -82,6 +83,14 @@ UGTM.STAGNANT EQU UGMEM_BASE+81 ; u24
 UGTM.CHUNK EQU UGMEM_BASE+84
 UGXFER.SLOWCOUNT EQU UGMEM_BASE+85 ; u16, finite non-DSS latch wait
 UGTM.NOESC EQU UGMEM_BASE+87 ; cleanup/recovery ignore a held ESC; deadlines remain
+; Shared configuration selection diagnostics; no public ABI offsets move.
+UGCFG.SEL EQU UGMEM_BASE+88
+UGCFG.OBS EQU UGMEM_BASE+89
+UGCFG.SEC EQU UGMEM_BASE+90
+UGCFG.COUNT EQU UGMEM_BASE+91 ; u16, stopped-clock watchdog
+UGCFG.STAGE EQU UGMEM_BASE+93 ; 1 unlock, 2 select, 3 echo, 4 confirmed
+UGCFG.TARGET EQU UGMEM_BASE+94
+UGCFG.OUTERFAIL EQU UGMEM_BASE+95
 UG_ARGBUF	EQU UGMEM_BASE+96	; DSS command-line copy area (<=160B)
 
 ; scratch buffers used by UG_RPC internals (write-before-read; never in
@@ -99,13 +108,15 @@ UGMEM_END	EQU UGMEM_BASE+400	; reserved workspace end (< 0xC000)
 	ASSERT UGREQ.ST + 3 <= UGXFER.ID	; st/nmi/method/op before xfer
 	ASSERT UGXFER.ID + 4 <= UGXFER.N	; id(4) precedes n
 	ASSERT UGXFER.OFF + 4 <= UGXFER.BUF	; off(4) precedes buf
-	ASSERT UGXFER.SENT + 2 <= UGTM.LO	; sent(2) precedes timers
+	ASSERT UGXFER.SENT + 2 <= UGXFER.STAGE
+    ASSERT UGXFER.STAGE + 1 <= UGTM.LO
 	ASSERT UGTM.HI + 2 <= UG_ALIASCFG	; timers precede alias cfg
 	ASSERT UG_ALIASCFG + 2 <= UGREQ.GPRE	; alias cfg precedes gpre
 	ASSERT UG_ARGBUF + 160 <= UGREQ.FRAME	; arg area precedes frame
 	ASSERT UGREQ.FRAME + 140 <= UGMEM_END	; frame fits the region
 	ASSERT UGXFER.SLOWCOUNT + 2 <= UGTM.NOESC
-	ASSERT UGTM.NOESC + 1 <= UG_ARGBUF
+	ASSERT UGTM.NOESC + 1 <= UGCFG.SEL
+    ASSERT UGCFG.OUTERFAIL + 1 <= UG_ARGBUF
 	ASSERT UGMEM_END <= 0xC000		; workspace below ISA window
 
 	ENDIF ; UGMEM_INC

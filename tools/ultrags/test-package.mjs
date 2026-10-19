@@ -86,11 +86,19 @@ assert.equal(dssExeName('ugplay.asm'),'UGPLAY.EXE');
 assert.throws(()=>dssExeName('new-long-tool.asm'),/explicit 8.3 name/);
 passed('all built EXEs and ZIP/IMG members use identical unique DSS 8.3 names');
 const longZip=Buffer.from(zip);
-const eocd=longZip.length-22,central=longZip.readUInt32LE(eocd+16);
-const local=longZip.readUInt32LE(central+42),nameLength=longZip.readUInt16LE(central+28);
-// Removing the dot creates a >8-character basename without changing offsets.
-const dot=longZip.subarray(central+46,central+46+nameLength).indexOf(46);
+const eocd=longZip.length-22;
+let central=longZip.readUInt32LE(eocd+16),nameLength,dot;
+// Short documentation names (e.g. CFG.TXT) can sort before all EXEs.
+// Find an entry whose dot removal really makes an overlong basename.
+for(let i=0;i<longZip.readUInt16LE(eocd+10);i++) {
+  nameLength=longZip.readUInt16LE(central+28);
+  dot=longZip.subarray(central+46,central+46+nameLength).indexOf(46);
+  if(dot>=0 && nameLength>8)break;
+  central+=46+nameLength+longZip.readUInt16LE(central+30)+longZip.readUInt16LE(central+32);
+}
 assert.ok(dot>=0 && nameLength>8);
+const local=longZip.readUInt32LE(central+42);
+// Removing the dot preserves offsets and agreement between both headers.
 longZip[central+46+dot]=88;longZip[local+30+dot]=88;
 assert.throws(()=>readZip(longZip),/invalid DSS 8.3 filename/);
 passed('ZIP rejects long names even when local and central names agree');

@@ -14,7 +14,6 @@ export class MemoryCard extends ConfigCard {
  tickUs(us){super.tickUs(us);if(this.pending && this.now>=this.pending.at && !this.o.noReply && this.o.noReplyOp!==this.pending.op)this.complete();}
  readPort(p){
   if(this.o.absent)return 255;
-  if(p===0x1d0)return 0xdd;
   if(p-this.base===1 && this.mode===8)return (this.o.busy?2:this.response.length?4:this.pending?2:this.frame.length?0:1)|(this.error?32:0);
   if(p-this.base===6)return this.error;
   if(p-this.base===8)return this.o.api??1;
@@ -54,6 +53,7 @@ export class MemoryCard extends ConfigCard {
   const finish=status=>{const commit=()=>{this.memoryError=status;this.bootState=status?1:0;};if(!defer)commit();return [status,r,defer?commit:undefined];};
   if(op===6){if(q.readUInt32LE()!==0x55475253||q[4]>1)return err(2);this.objects.clear();this.session++;this.next=1;if(!q[4]){r=Buffer.alloc(8);r.writeBigUInt64LE(this.session);return ok();}if(this.o.memoryFault||this.o.unavailable)return finish(17);r=Buffer.alloc(8);r.writeBigUInt64LE(this.session);return finish(0);}
   if(q[0]>1)return err(2);if(this.objects.size)return err(5);
+  if(this.o.unsupportedMemory){r=Buffer.alloc(14);r.writeUInt32LE(0xffffffff,4);return finish(19);}
   if(this.o.unavailable){r=Buffer.alloc(14);r.writeUInt32LE(0xffffffff,4);return finish(17);}
   const points=new Set([0,this.pool-1]);for(let a=1;a<this.pool;a*=2){points.add(a);points.add(a-1);}
   r=Buffer.alloc(14);r.writeUInt32LE(q[0]?15*this.pool:points.size*2);r.writeUInt32LE(0xffffffff,4);r.writeUInt32LE((this.o.delayUs??1000)/1000,10);

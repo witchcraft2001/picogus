@@ -518,13 +518,34 @@ READ_BLOCK:
     ret nc
     jp TRANSFER_ERROR
 TRANSFER_ERROR:
-    ; Probe after an ambiguous END; do not repeat a non-idempotent RPC.
+    ; Retain the actual failing stage: UG_WRITE/READ already cancelled and
+    ; UGREQ.OP now describes cleanup, not necessarily a failed END.
     ld a,1
     ld (UGTM.NOESC),a
     ld a,(UG_LAST_ERROR)
     ld (SAVEDERR),a
     ld a,(UG_LAST_SOURCE)
     ld (SAVEDSOURCE),a
+    ld hl,(UGREQ.LEN)
+    push hl
+    ld hl,transfer_stage_text
+    call SHOW
+    ld a,(UGXFER.STAGE)
+    call HEX8
+    ld hl,transfer_moved_text
+    call SHOW
+    ld hl,(UGXFER.SENT)
+    call DEC16
+    ld a,'/'
+    call OUTCHAR
+    ld hl,(UGXFER.N)
+    call DEC16
+    ld hl,transfer_offset_text
+    call SHOW
+    ld hl,UG_OFFSET
+    ld b,4
+    call HEX_BYTES
+    call NL
     ld a,UG_XC_TRANSPORT_RESET
     call UG_XCTRL
     call SESSION_CHECK
@@ -539,6 +560,8 @@ TRANSFER_ERROR:
     call SHOW
     call NL
 .lost:
+    pop hl
+    ld (UGREQ.LEN),hl
     ld a,(SAVEDSOURCE)
     ld (UG_LAST_SOURCE),a
     ld a,(SAVEDERR)
@@ -1226,7 +1249,10 @@ file_reason: DB "FILE_IO",0
 verify_reason: DB "DATA_MISMATCH",0
 partial_text: DB "INCOMPLETE output file retained",13,10,0
 alloc_unknown: DB "ALLOC_RESULT_UNKNOWN",0
-recovery_text: DB "END recovery: INFO/OBJECT_INFO; operation not retried",0
+transfer_stage_text: DB "transfer_stage=0x",0
+transfer_moved_text: DB " moved=",0
+transfer_offset_text: DB " offset=0x",0
+recovery_text: DB "Transfer recovery: INFO/OBJECT_INFO; operation not retried",0
 crc_text: DB " crc=0x",0
 host_crc_text: DB "host_crc=0x",0
 host_crc_fast: DB "host_crc=NOT_COMPUTED",0

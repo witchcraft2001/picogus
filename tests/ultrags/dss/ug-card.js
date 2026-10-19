@@ -1071,7 +1071,7 @@ class UgCard {
 
   _cfgRead(port) {
     const c = this.cfg;
-    if (port === 0x1D0) return c.unlocked ? 0xDD : 0x00;
+    if (port === 0x1D0) return c.sel;
     if (port === 0x1D1) {                                        // DATA_LOW read
       if (c.sel === 0x76) return this.base & 0xFF;
       if (c.sel === 0x77) return this.alias & 0xFF;

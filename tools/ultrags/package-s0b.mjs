@@ -22,7 +22,7 @@ import { verifyBuild, verifyExecution } from './build-evidence.mjs';
 
 function arg(flag, dflt) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; }
 const stage = arg('--stage', 'S0b');
-if (!['S0b','S1','S2','S3','S4','S5','S6','S7','ISA'].includes(stage)) throw new Error('unknown package stage');
+if (!['S0b','S1','S2','S3','S4','S5','S6','S7','ISA','CFG'].includes(stage)) throw new Error('unknown package stage');
 const slug = stage.toLowerCase();
 const exeDir = resolve(arg('--exe-dir', 'build/ultrags/dss'));
 const fixDir = resolve(arg('--fixtures', 'build/ultrags/fixtures'));
@@ -66,7 +66,19 @@ for (const e of fixMan.files) {
   add(`${base}.${ext}`, b, join('build/ultrags/fixtures', e.name));
 }
 
-const help = stage === 'S7' ? [
+const help = stage === 'CFG' ? [
+ 'UGCFG configuration correction. REAL_PENDING; S7 IN_PROGRESS / GS PENDING.',
+ 'UGCFG = INFO. UGCFG ULTRAGS = MODE ULTRAGS. Default slot 0; no scan.',
+ 'UGCFG; UGCFG LIST; UGCFG ULTRAGS; UGCFG VERIFY; UGMEM INFO',
+ 'UGCFG ULTRAGS /SAVE; power off/on; UGCFG; UGCFG GUS /SAVE; power off/on.',
+ 'MODE /SAVE verifies startup before Flash write. No automatic write retry.',
+ 'SAVE_UNCONFIRMED means Flash may have changed; capture diagnostics.',
+ 'On failure: UGCFG INFO /DIAG; UGCFG LIST /DIAG. Keep the same /SLOT.',
+ 'Both /SLOT:0 and /SLOT 0 work; use 1 for the second slot.',
+ 'Read CFG.TXT (Russian Tester Notes). PGMULTI.UF2 / HASHES.TXT supplied alongside.',
+ 'ISA Turbo off per window; DSS Turbo on after close; PAGE3/IFF preserved.',
+ 'ST-*.EXE are HOST fault fixtures; never run them on hardware.',
+].join('\r\n') : stage === 'S7' ? [
  'Ultra GS S7 native review subset; S7 IN_PROGRESS / GS PENDING / REAL_PENDING.',
  'This is not the complete S7 gate or a GS 1.05 compatible release.',
  'Firmware is built separately: multifw-release/picogus.uf2 (whole bundle).',
@@ -221,6 +233,7 @@ const help = stage === 'S7' ? [
   '',
 ].join('\r\n');
 add('HELP.TXT', Buffer.from(help, 'ascii'), 'generated');
+if (stage==='CFG') add('CFG.TXT',readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/CFG-FIX.md')),'host/sprinter/ultrags/docs/CFG-FIX.md');
 if (stage==='ISA') {
   for (const [name,src] of [['ISA.TXT','host/sprinter/ultrags/docs/ISA-TURBO.md'],
     ['ISASRC.JSN','tests/ultrags/reference/sprinter-isa-sources.json']])

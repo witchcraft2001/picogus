@@ -37,6 +37,7 @@
 	INCLUDE	"ugmem.inc"
 	INCLUDE	"ug_wire.inc"
 	INCLUDE	"isa.asm"
+	INCLUDE "ugconfig.asm"
 	INCLUDE	"ugle.asm"
 	INCLUDE	"ugcrc.asm"
 	INCLUDE	"ugframe.asm"
@@ -188,42 +189,27 @@ UG_OPEN:
 	ld	a,b			; slot back
 	call	UG_ISA_OPEN		; validates slot again (defensive)
 	jp	c,.open_fail
-	; --- config protocol (common ports 1D0h..1D2h in the window) ---
-	ld	a,UG_CFG_UNLOCK
-	ld	hl,UG_CFG_CONTROL
-	call	UG_PORT_W		; unlock transaction
-	ld	hl,UG_CFG_CONTROL
-	call	UG_PORT_R		; magic readback
-	cp	UG_CFG_MAGIC_BYTE
-	jr	nz,.absent
-	ld	a,UG_CFG_SEL_PROTOCOL
-	ld	hl,UG_CFG_CONTROL
-	call	UG_PORT_W
-	ld	hl,UG_CFG_DATA_HIGH
-	call	UG_PORT_R
-	cp	UG_CFG_PROTOCOL_VER
-	jr	nz,.wrongmode		; protocol not the shared proto4
-	ld	a,UG_CFG_SEL_FW_ACTIVE
-	ld	hl,UG_CFG_CONTROL
-	call	UG_PORT_W
-	ld	hl,UG_CFG_DATA_HIGH
-	call	UG_PORT_R
-	cp	8			; FW_ACTIVE must be mode id 8 (ULTRAGS)
-	jr	nz,.wrongmode
-	; configured bulk alias (for METHOD:ALIAS), still config-domain
-	ld	a,UG_CFG_SEL_UG_ALIAS
-	ld	hl,UG_CFG_CONTROL
-	call	UG_PORT_W
-	ld	hl,UG_CFG_DATA_LOW
-	call	UG_PORT_R
-	ld	e,a
-	ld	hl,UG_CFG_DATA_HIGH
-	call	UG_PORT_R
-	ld	d,a			; DE = alias base (FFFFh when disabled)
-	ld	a,e
-	ld	(UG_ALIASCFG),a
-	ld	a,d
-	ld	(UG_ALIASCFG+1),a
+    call UG_ISA_CLOSE
+    xor a ; CMD_MAGIC=00, magic is DATA_HIGH, CONTROL echoes selector
+    call UG_CFG_READ8
+    jp c,.open_fail
+    cp UG_CFG_MAGIC_BYTE
+    jr nz,.absent
+    ld a,UG_CFG_SEL_PROTOCOL
+    call UG_CFG_READ8
+    jp c,.open_fail
+    cp UG_CFG_PROTOCOL_VER
+    jr nz,.wrongmode
+    ld a,UG_CFG_SEL_FW_ACTIVE
+    call UG_CFG_READ8
+    jp c,.open_fail
+    cp 8
+    jr nz,.wrongmode
+    ld a,UG_CFG_SEL_UG_ALIAS
+    call UG_CFG_READ16
+    jp c,.open_fail
+    ld (UG_ALIASCFG),hl
+    call UG_CFG_OPEN
 	; --- only now may BASE registers be touched ---
 	ld	a,UG_REG_API_MAJOR
 	call	UG_REG_R
@@ -630,6 +616,8 @@ UG_RPC:
 ; clobbers AF,BC,DE,HL; preserves IX
 UG_XFER_CANCEL:
 	push	ix
+    ld hl,(UGREQ.LEN)             ; retain the failed response diagnostics
+    push hl
 	ld	a,(UGTM.NOESC)
 	push	af
 	ld	a,1
@@ -668,6 +656,8 @@ UG_XFER_CANCEL:
 	ld	(UG_LAST_ERROR),a
 	pop	af
 	ld	(UGTM.NOESC),a
+    pop hl
+    ld (UGREQ.LEN),hl
 	pop	ix
 	ret
 
@@ -689,6 +679,7 @@ UG_XFER_SAVE:
 	ld	(UGXFER.SENT),a
 	ld	(UGXFER.SENT+1),a
 	ld	(UGXFER.DIR),a
+    ld (UGXFER.STAGE),a
 	ret
 
 ; ------------------------------------------- UG_XFER_VALIDATE (int.)
@@ -830,6 +821,8 @@ UG_WRITE:
 	pop	bc
 	ld	c,13
 .begin:
+    ld a,1                       ; WRITE_BEGIN, retained across cleanup RPCs
+    ld (UGXFER.STAGE),a
 	ld	a,UG_OP_WRITE_BEGIN
 	ld	hl,UG_ARGBUF
 	ld	de,UGREQ.FRAME
@@ -852,6 +845,8 @@ UG_WRITE:
 	ld	(UGREQ.TOKEN+2),hl
 	ld	a,1
 	ld	(UGXFER.DIR),a
+    ld a,2                       ; write grant gate
+    ld (UGXFER.STAGE),a
 	; ---- grant gate: WRITE_GRANT must be advertised before data ----
 	call	UG_WIN_OPEN
 	jp	c,.w_fail
@@ -862,6 +857,8 @@ UG_WRITE:
 	call	UG_ISA_CLOSE
 	pop	af
 	jp	z,.w_nogrant
+    ld a,3                       ; write payload / GS latch wait
+    ld (UGXFER.STAGE),a
     IFDEF UG_BENCH_TIMING
     call BENCH_PAYLOAD
     ENDIF
@@ -941,6 +938,8 @@ UG_WRITE:
 	sbc	hl,de
 	jr	nz,.w_internal
 	; ---- END ----
+    ld a,4
+    ld (UGXFER.STAGE),a
 	xor	a
 	call	UG_XFER_END
 	jp	c,.w_fail
@@ -1091,6 +1090,8 @@ UG_READ:
 	ld	a,(UGXFER.TRANS)
 	ld	(de),a
 	inc	de
+    ld a,5                       ; READ_BEGIN
+    ld (UGXFER.STAGE),a
 	ld	a,UG_OP_READ_BEGIN
 	ld	hl,UG_ARGBUF
 	ld	bc,9
@@ -1126,6 +1127,8 @@ UG_READ:
 .r_nocrc:
 	ld	a,2
 	ld	(UGXFER.DIR),a
+    ld a,6                       ; read grant gate
+    ld (UGXFER.STAGE),a
 	; grant gate
 	call	UG_WIN_OPEN
 	jp	c,.r_fail
@@ -1136,6 +1139,8 @@ UG_READ:
 	call	UG_ISA_CLOSE
 	pop	af
 	jp	z,.r_nogrant
+    ld a,7                       ; read payload / GS latch wait
+    ld (UGXFER.STAGE),a
     IFDEF UG_BENCH_TIMING
     call BENCH_PAYLOAD
     ENDIF
@@ -1209,6 +1214,8 @@ UG_READ:
 	or	a
 	sbc	hl,de
 	jr	nz,.r_internal
+    ld a,8
+    ld (UGXFER.STAGE),a
 	ld	a,1			; nz -> read-end form
 	call	UG_XFER_END
 	jp	c,.r_fail

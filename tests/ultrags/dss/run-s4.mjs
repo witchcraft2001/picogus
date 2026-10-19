@@ -121,7 +121,39 @@ test('held ESC during grant with delayed cleanup replies','UGMEM','ROUNDTRIP 102
 test('BEGIN deadline 2s','UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1)},noReplyOp:32,clockStart:86399,check:c=>!c.objects.size&&c.now>=1000000&&c.now<3000000});
 test('SEAL deadline 30s','UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1)},noReplyOp:19,cpuHz:3500000,budget:120000000,check:c=>!c.objects.size&&c.now>=29000000&&c.now<32000000});
 test('stopped clock BEGIN finite','UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1)},noReplyOp:32,stopped:true,budget:200000000,check:c=>!c.objects.size});
-test('lost END ACK' ,'UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1024)},noReplyOp:33,check:(c,m)=>!c.objects.size&&m.text.includes('END recovery')});
+test('lost END ACK' ,'UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1024)},noReplyOp:33,check:(c,m)=>!c.objects.size&&m.text.includes('Transfer recovery')&&m.text.includes('transfer_stage=0x04 moved=1024/1024 offset=0x00000000')});
+// Recovery RPCs overwrite UGREQ.OP and response scratch. Diagnostics must
+// retain the actual failed phase and progress, for both directions.
+for(const rd of [false,true]) {
+ const begin=rd?34:32,end=rd?35:33,first=rd?5:1;
+ for(const phase of ['begin','grant','data','end']) {
+  const stalled=new SlowCard(catalog,{noReplyOp:phase==='begin'?begin:phase==='end'?end:undefined});
+  const read=stalled.readPort.bind(stalled);
+  stalled.readPort=p=>{
+   const v=read(p),t=stalled.transfer,off=p-stalled.base;
+   if(t?.granted&&t.rd===rd) {
+    if(phase==='grant'&&off===1)return v&~(rd?16:8);
+    if(phase==='data'&&off===0x1b&&t.done>=2)return rd?v&127:v|128;
+   }
+   return v;
+  };
+  const stage=first+['begin','grant','data','end'].indexOf(phase);
+  const moved=phase==='end'?16:phase==='data'?(rd?2:1):0;
+  test(`transfer diagnostics ${rd?'read':'write'} ${phase}`,'UGMEM','ROUNDTRIP 16 /SLOW',phase==='grant'?3:8,{
+   card:stalled,check:(c,m)=>!c.objects.size&&m.text.includes(`transfer_stage=0x0${stage} moved=${moved}/16 offset=0x00000000`)
+    &&m.text.includes('operation not retried')&&c.trace.filter(t=>t.op===(phase==='end'?end:begin)).length===1
+  });
+ }
+ const wireError=new SlowCard(catalog),command=wireError.command.bind(wireError);
+ wireError.command=(op,q,defer)=>{
+  const result=command(op,q,defer);
+  return op===end&&!result[0]?[7,Buffer.alloc(0)]:result;
+ };
+ test(`transfer diagnostics ${rd?'read':'write'} card HANDLE`,'UGMEM','ROUNDTRIP 16',4,{
+  card:wireError,check:(c,m)=>!c.objects.size&&m.text.includes(`transfer_stage=0x0${rd?8:4} moved=16/16 offset=0x00000000`)
+   &&m.text.includes('rpc_source=0x02 status=0x07 response_bytes=0x00')&&c.trace.filter(t=>t.op===end).length===1
+ });
+}
 const failedRecovery=new SlowCard(catalog,{noReplyOp:33}),recoveryCommand=failedRecovery.command.bind(failedRecovery);
 failedRecovery.command=(op,q,defer)=>op===0&&failedRecovery.trace.some(t=>t.op===33)?[5,Buffer.alloc(0)]:recoveryCommand(op,q,defer);
 test('lost END ACK recovery INFO refused preserves timeout','UGLOAD','TEST.BIN /TYPE:BLOB',8,{card:failedRecovery,files:{'TEST.BIN':pattern(1024)},check:c=>c.objects.size===1&&c.objects.get(1)?.uploaded===1024});

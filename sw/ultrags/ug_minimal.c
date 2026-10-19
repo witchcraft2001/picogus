@@ -54,7 +54,7 @@ void ug_minimal_ready(uint8_t s,uint64_t session) {
 }
 bool ug_minimal_gs_idle(void) { return !gs_status() && !ug_storage_busy(); }
 bool ug_minimal_idle(void) { return __atomic_load_n(&frame_state,__ATOMIC_ACQUIRE)==IDLE && ug_minimal_gs_idle() && !ug_storage_playback_busy() && __atomic_load_n(&boot_state,__ATOMIC_ACQUIRE)!=2; }
-static int reg(uint16_t port) {
+int ug_minimal_decode_port(uint16_t port) {
     uint16_t base=ug_cfg.settings->UltraGS.basePort, alias=ug_cfg.settings->UltraGS.bulkAlias;
     if(port>=base && port-base<32) return port-base;
     if(alias!=0xffff && port>=alias && port-alias<32) return 0;
@@ -62,12 +62,12 @@ static int reg(uint16_t port) {
     if(port==0xbb && ug_config_aliases(&ug_cfg)) return 0x1b;
     return -1;
 }
-bool ug_minimal_port(uint16_t p) { return reg(p)>=0; }
-void ug_minimal_write(uint16_t p,uint8_t v,uint32_t now) {
+bool ug_minimal_port(uint16_t p) { return ug_minimal_decode_port(p)>=0; }
+void ug_minimal_write_decoded(int decoded,uint8_t v,uint32_t now) {
     ug_stat_add(1,1);
     if(ug_config_busy(&ug_cfg)) { ERROR(5); return; }
-    if(transport_fault && reg(p)!=2) { ERROR(UG_ERR_OVERFLOW); return; }
-    switch(reg(p)) {
+    if(transport_fault && decoded!=2) { ERROR(UG_ERR_OVERFLOW); return; }
+    switch(decoded) {
     case 0: {
         uint8_t e=!ug_storage_bulk()?UG_ERR_STATE:ug_storage_data_write(v,now);
         if(e) ERROR(e);
@@ -110,21 +110,38 @@ void ug_minimal_write(uint16_t p,uint8_t v,uint32_t now) {
     default:ERROR(0x14);
     }
 }
-uint8_t ug_minimal_read(uint16_t p) {
+void ug_minimal_write(uint16_t p,uint8_t v,uint32_t now) {
+    ug_minimal_write_decoded(ug_minimal_decode_port(p),v,now);
+}
+uint8_t ug_minimal_read_status(void) {
     ug_stat_add(0,1);
     unsigned current=__atomic_load_n(&frame_state,__ATOMIC_ACQUIRE);
-    if(transport_fault && (reg(p)==0 || reg(p)==3 || reg(p)==0x13)) { ERROR(UG_ERR_OVERFLOW); return 255; }
-    switch(reg(p)) {
+    return (current==IDLE && !transport_fault && !ug_config_busy(&ug_cfg)?1:0)|(current==EXEC?2:0)|(current==REPLY?4:0)|(transport_fault?0:ug_storage_grant())|(__atomic_load_n(&error,__ATOMIC_RELAXED)?32:0)|(__atomic_load_n(&gs_error,__ATOMIC_RELAXED)?64:0);
+}
+uint8_t ug_minimal_read_response(void) {
+    ug_stat_add(0,1);
+    unsigned current=__atomic_load_n(&frame_state,__ATOMIC_ACQUIRE);
+    if(transport_fault) { ERROR(UG_ERR_OVERFLOW); return 255; }
+    if(current!=REPLY) { if(current!=FAULT) ERROR(15); return 255; }
+    uint8_t value=response[read_index++];
+    if(read_index==total) {
+        ug_storage_grant_ack(time_us_32());
+        __atomic_store_n(&frame_state,IDLE,__ATOMIC_RELEASE);
+    }
+    return value;
+}
+uint8_t ug_minimal_read_decoded(int decoded) {
+    if(decoded==1) return ug_minimal_read_status();
+    if(decoded==3) return ug_minimal_read_response();
+    ug_stat_add(0,1);
+    if(transport_fault && (decoded==0 || decoded==0x13)) { ERROR(UG_ERR_OVERFLOW); return 255; }
+    switch(decoded) {
     case 0: {
         uint8_t v=255;
         uint8_t e=!ug_storage_bulk()?UG_ERR_STATE:ug_storage_data_read(&v,time_us_32());
         if(e) ERROR(e);
         return v;
     }
-    case 1: return (current==IDLE && !transport_fault && !ug_config_busy(&ug_cfg)?1:0)|(current==EXEC?2:0)|(current==REPLY?4:0)|(transport_fault?0:ug_storage_grant())|(__atomic_load_n(&error,__ATOMIC_RELAXED)?32:0)|(__atomic_load_n(&gs_error,__ATOMIC_RELAXED)?64:0);
-    case 3:
-        if(current!=REPLY) { if(current!=FAULT) ERROR(15); return 255; }
-        { uint8_t v=response[read_index++]; if(read_index==total) { ug_storage_grant_ack(time_us_32()); __atomic_store_n(&frame_state,IDLE,__ATOMIC_RELEASE); } return v; }
     case 4:return snap_index;
     case 5: if(snap_index==128) { ERROR(15); return 255; } return ug_storage_snap_byte(snap_index++);
     case 6:return __atomic_load_n(&error,__ATOMIC_RELAXED);
@@ -144,8 +161,16 @@ uint8_t ug_minimal_read(uint16_t p) {
     default:return 0;
     }
 }
+uint8_t ug_minimal_read(uint16_t p) {
+    return ug_minimal_read_decoded(ug_minimal_decode_port(p));
+}
 void ug_minimal_poll(uint32_t now) {
     if(state==RX && (uint32_t)(now-last_byte)>=1000000) { SET_STATE(FAULT); ERROR(13); }
+}
+void ug_minimal_poll_now(void) {
+    /* Idle/configuration traffic has no partial request to expire. Avoid a
+     * timer read on every ISA polling iteration, ahead of the next IOR. */
+    if(state==RX) ug_minimal_poll(time_us_32());
 }
 void ug_minimal_dispatch(void) {
     unsigned current=__atomic_load_n(&frame_state,__ATOMIC_ACQUIRE);

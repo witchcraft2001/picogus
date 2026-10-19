@@ -43,6 +43,9 @@ test('sticky-error-retry','TEST QUICK',0,{stickyError:17,simpleDelayUs:10000,del
 test('crc-valid','INFO /VERIFY');
 test('bad-crc','INFO /VERIFY',9,{badCrc:true,check:c=>c.resets===1});
 test('mem-error-crc','TEST QUICK /VERIFY',4,{memoryFault:true,check:(c,m)=>m.text.includes('expected=0x80')});
+test('psram-wire-status','TEST QUICK /VERIFY',4,{memoryFault:true,check:(c,m)=>m.text.includes('rpc_source=0x02 status=0x11 response_bytes=0x0E')});
+test('unsupported-wire-status','TEST QUICK /VERIFY',4,{unsupportedMemory:true,pool:0,memoryError:19,check:(c,m)=>m.text.includes('rpc_source=0x02 status=0x13 response_bytes=0x0E')&&m.text.includes('tested=0')&&m.text.includes('first_bad=0xFFFFFFFF')});
+test('quiet-wire-status','TEST QUICK /VERIFY /QUIET',4,{unsupportedMemory:true,pool:0,memoryError:19,check:(c,m)=>m.text==='RESULT FAIL code=4 reason=MEMORY_OR_PROTOCOL\r\n'});
 test('relocated','info /base:0280',0,{base:0x280});
 test('quiet','INFO /QUIET',0,{check:(c,m)=>m.text==='RESULT PASS code=0\r\n'});
 test('list-handles','LIST',0,{objects:[[1,16],[256,32],[65535,48]],check:(c,m)=>['0001','0100','FFFF'].every(h=>m.text.includes('handle=0x'+h))});

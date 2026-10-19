@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "mock.h"
+#include "picogus.h"
 #include "hardware/structs/watchdog.h"
 #include "hardware/structs/xip_ctrl.h"
 #include "hardware/structs/vreg_and_chip_reset.h"
 #include "multifw/ug_catalog.h"
 #include "ultrags/ug_config.h"
 #include "ultrags/ug_minimal.h"
+#include "ultrags_protocol.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,6 +98,13 @@ int main(int argc,char **argv){
  loadSettings(&s,true);ug_config_init(&ug_cfg,&s,8,cat,UG_HANDOFF_MAGIC,0x01000801,256);assert(!ug_cfg.aliases&&s.startupMode==1);
  ug_minimal_init();ug_minimal_ready(0,123);assert(ug_minimal_idle());
  const unsigned base=s.UltraGS.basePort;
+ /* Compatibility port wrappers keep their old out-of-map result/error
+  * precedence. Bus dispatch itself never responds on these foreign ports. */
+ assert(!ug_minimal_port(0x100)&&ug_minimal_read(0x100)==0);
+ ug_minimal_write(0x100,0,0);assert(ug_minimal_read(base+6)==0x14);
+ ug_minimal_transport_fault();ug_minimal_write(0x100,0,0);
+ assert(ug_minimal_read(base+6)==UG_ERR_OVERFLOW);
+ ug_minimal_init();ug_minimal_ready(0,123);
  ug_minimal_write(base+3,0,0);assert(!ug_minimal_idle());ug_minimal_write(base+3,0,0);assert(ug_minimal_read(base+1)&2);ug_minimal_dispatch();assert(ug_minimal_read(base+1)&4);
  uint8_t reply[42];for(unsigned i=0;i<38;i++)reply[i]=ug_minimal_read(base+3);assert(!memcmp(reply,"\0\44UGS1\1\0\10\0",10));assert(ug_minimal_idle());
  ug_minimal_write(base+3,0x80,0);ug_minimal_write(base+3,0,0);uint8_t req[]={0x80,0};uint32_t crc=ug_crc32(req,2);for(unsigned i=0;i<4;i++)ug_minimal_write(base+3,crc>>(i*8),0);ug_minimal_dispatch();for(unsigned i=0;i<42;i++)reply[i]=ug_minimal_read(base+3);assert(ug_get32(reply+38)==ug_crc32(reply,38));
@@ -145,6 +154,33 @@ int main(int argc,char **argv){
  assert(ug_raw_watchdog_reason==2&&ug_raw_chip_reset==0x10100);
  for(unsigned i=0;i<3;i++)assert(!mock_watchdog.scratch[i]);
  for(unsigned i=3;i<8;i++)assert(mock_watchdog.scratch[i]==100+i);
+ /* Exercise runtime entry, rather than passing a catalogue directly to
+  * ug_config_init. The physical GUS -> ULTRAGS report showed that the
+  * descriptor path must also be tested after bootloader handoff. */
+ for(unsigned mode=1;mode<=8;mode++) {
+  if(mode==7)continue;
+  getDefaultSettings(&s);
+  mock_watchdog.scratch[0]=UG_HANDOFF_MAGIC;
+  mock_watchdog.scratch[1]=0x01000000u|(mode<<8)|mode;
+  mock_watchdog.scratch[2]=1u<<mode;
+  ug_runtime_init(&s,mode);
+  assert(ug_cfg.active==mode);
+  ug_config_select(&ug_cfg,CMD_FW_CATALOG);
+#ifdef UG_BUNDLE
+  assert(ug_cfg.catalog_ok&&!ug_cfg.boot_result&&s.startupMode==mode);
+  for(unsigned i=0;i<148;i++)saved[i]=ug_config_read(&ug_cfg,true);
+  assert(!ug_catalog_validate(saved,true));
+  assert(saved[17+(mode-1)*16]==3);
+  assert(ug_config_read(&ug_cfg,true)==255);
+  /* A fresh E3 starts a new snapshot even after an exhausted stream. */
+  ug_config_select(&ug_cfg,CMD_MAGIC);
+  ug_config_select(&ug_cfg,CMD_FW_CATALOG);
+  assert(ug_config_read(&ug_cfg,true)=='U');
+#else
+  assert(!ug_cfg.catalog_ok&&ug_config_read(&ug_cfg,true)==255);
+#endif
+  for(unsigned i=0;i<3;i++)assert(!mock_watchdog.scratch[i]);
+ }
  if(argc>1){FILE *f=fopen(argv[1],"wb");assert(f);assert(fwrite(cat,1,148,f)==148);fclose(f);}
  if(argc>2) {
   getDefaultSettings(&s);s.startupMode=8;

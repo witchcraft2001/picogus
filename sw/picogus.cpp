@@ -54,6 +54,12 @@ psram_spi_inst_t* async_spi_inst;
 #define iow_program ug_posted_iow_program
 #define iow_program_init ug_posted_iow_program_init
 #endif
+#ifdef UG_ISA_EARLY_READ
+#include "ug_handshake_ior.pio.h"
+#include "ultrags/ug_handshake.h"
+#define ior_program ug_handshake_ior_program
+#define ior_program_init ug_handshake_ior_program_init
+#endif
 
 
 #ifdef ASYNC_UART
@@ -832,17 +838,44 @@ static constexpr uint32_t IOR_SET_VALUE = 0x0000ff00u;
 
 static inline void ug_iow_verdict(uint32_t value) {
 #ifndef UG_ISA_POSTED
+#ifdef UG_ISA_EARLY_READ
+    // Publish a changed native map to PIO before acknowledging the write.
+    if (value==IO_END && !ug_handshake_sync_ports(settings.UltraGS.basePort,settings.UltraGS.bulkAlias)) return;
+#endif
     pio_sm_put(pio0,IOW_PIO_SM,value);
 #else
     (void)value;
 #endif
 }
+#ifdef SOUND_ULTRAGS
+static __force_inline int ug_native_reg(uint16_t port) {
+    // Mirror ug_minimal_decode_port, but keep the fast bus-side decode in
+    // this translation unit so the compiler can place it before IO_WAIT.
+    uint16_t block=port & ~31u;
+    if(block==settings.UltraGS.basePort) return port-settings.UltraGS.basePort;
+    if(block==settings.UltraGS.bulkAlias) return 0;
+    if(port==0xb3 && ug_config_aliases(&ug_cfg)) return 0x13;
+    if(port==0xbb && ug_config_aliases(&ug_cfg)) return 0x1b;
+    return -1;
+}
+static __force_inline bool ug_native_port(uint16_t port) {
+    return ug_native_reg(port)>=0;
+}
+#endif
 static void apply_iow(uint32_t iow_read) {
     // printf("%x", iow_read);
     uint16_t port = (iow_read >> 8) & 0x3FF;
 #ifdef SOUND_ULTRAGS
-    if (ug_minimal_port(port)) {
-        ug_minimal_write(port,(uint8_t)iow_read,time_us_32());
+    // The fixed configuration interface must assert its handshake before
+    // native-port decoding. Its address never depends on Ultra GS settings.
+    int native_reg=-1;
+    if (port >= CONTROL_PORT && port <= DATA_PORT_HIGH) goto config_iow;
+    native_reg=ug_native_reg(port);
+    if (native_reg>=0) {
+        // Frame/statistics work is not a fast IO_END-only write. Assert the
+        // write handshake before calling it (a no-op in the POSTED profile).
+        ug_iow_verdict(IO_WAIT);
+        ug_minimal_write_decoded(native_reg,(uint8_t)iow_read,time_us_32());
         ug_iow_verdict(IO_END); return;
     }
 #endif
@@ -1099,6 +1132,9 @@ static void apply_iow(uint32_t iow_read) {
         }
     } else
 #endif // SOUND_MPU
+#ifdef SOUND_ULTRAGS
+config_iow:
+#endif
     // PicoGUS control
     if (port == CONTROL_PORT) {
         ug_iow_verdict(IO_WAIT);
@@ -1155,16 +1191,34 @@ static uint8_t posted_read(uint16_t port) {
 
 __force_inline void handle_ior(void) {
     uint8_t x;
+#ifdef UG_ISA_EARLY_READ
+    uint32_t capture = pio_sm_get(pio0, IOR_PIO_SM);
+    bool native_capture = ug_handshake_native(capture);
+    uint16_t port = ug_handshake_port(capture);
+#else
     uint16_t port = pio_sm_get(pio0, IOR_PIO_SM) & 0x3FF;
+#endif
 #ifdef UG_ISA_POSTED
     ug_posted_read(port,posted_owns,posted_apply,posted_read,ug_minimal_transport_fault);
     posted_config_active=false;
     return;
 #endif
 #ifdef SOUND_ULTRAGS
-    if (ug_minimal_port(port)) {
+    // Avoid the native decoder on the fixed discovery/catalogue path. A
+    // late IOCHRDY can lose a consuming read even though its index advances.
+    int native_reg=-1;
+    if (port >= CONTROL_PORT && port <= DATA_PORT_HIGH) goto config_ior;
+#ifdef UG_ISA_EARLY_READ
+    // A foreign read may have completed before a later CONFIG write changes
+    // the map. Do not consume or drive a retroactively owned native address.
+    if (port>=0x200 && !native_capture) { pio_sm_put(pio0,IOR_PIO_SM,IO_END); return; }
+#endif
+    native_reg=ug_native_reg(port);
+    if (native_reg>=0) {
         pio_sm_put(pio0,IOR_PIO_SM,IO_WAIT);
-        pio_sm_put(pio0,IOR_PIO_SM,IOR_SET_VALUE|ug_minimal_read(port)); return;
+        uint8_t value=native_reg==1?ug_minimal_read_status():
+                      native_reg==3?ug_minimal_read_response():ug_minimal_read_decoded(native_reg);
+        pio_sm_put(pio0,IOR_PIO_SM,IOR_SET_VALUE|value); return;
     }
 #endif
 #if defined(SOUND_GUS)
@@ -1294,6 +1348,9 @@ __force_inline void handle_ior(void) {
         }
     } else
 #endif // SOUND_CMS
+#ifdef SOUND_ULTRAGS
+config_ior:
+#endif
     if (port == CONTROL_PORT) {
         // Tell PIO to wait for data
         pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
@@ -1575,10 +1632,20 @@ extern void PIC_DeActivateIRQ(void);
     // gpio_set_drive_strength(ADS_PIN, GPIO_DRIVE_STRENGTH_12MA);
     gpio_set_slew_rate(ADS_PIN, GPIO_SLEW_RATE_FAST);
 
+#ifdef SOUND_ULTRAGS
+#ifdef UG_ISA_EARLY_READ
+    static_assert(sizeof(iow_program_instructions) + sizeof(ug_handshake_ior_program_instructions) <= 64,
+                  "ISA PIO0 instruction RAM overflow");
+#endif
+    hard_assert(pio_can_add_program(pio0,&iow_program));
+#endif
     uint iow_offset = pio_add_program(pio0, &iow_program);
     pio_sm_claim(pio0, IOW_PIO_SM);
     DBG_PRINTF("iow sm: %u\n", IOW_PIO_SM);
 
+#ifdef SOUND_ULTRAGS
+    hard_assert(pio_can_add_program(pio0,&ior_program));
+#endif
     uint ior_offset = pio_add_program(pio0, &ior_program);
     pio_sm_claim(pio0, IOR_PIO_SM);
     DBG_PRINTF("ior sm: %u\n", IOR_PIO_SM);
@@ -1588,10 +1655,17 @@ extern void PIC_DeActivateIRQ(void);
     ug_posted_init(iow_offset);
 #endif
     ior_program_init(pio0, IOR_PIO_SM, ior_offset);
+#ifdef UG_ISA_EARLY_READ
+    ug_handshake_init(ior_offset,settings.UltraGS.basePort,settings.UltraGS.bulkAlias);
+#endif
 #ifdef SOUND_ULTRAGS
     ug_hw_note_program(pio0,iow_offset,iow_program.length,"iow");
     ug_hw_note_program(pio0,ior_offset,ior_program.length,"ior");
     multicore_launch_core1(&play_ultrags);
+#ifdef UG_ISA_EARLY_READ
+    while (!ug_handshake_guard_ready()) tight_loop_contents();
+    pio_sm_set_enabled(pio0,IOR_PIO_SM,true);
+#endif
 #endif
 
 #ifdef USE_IRQ
@@ -1625,13 +1699,18 @@ extern void PIC_DeActivateIRQ(void);
         ug_posted_check(ug_minimal_transport_fault);
         if(ior_has_data()) handle_ior();
         else if(iow_has_data()) handle_iow();
+#elif defined(SOUND_ULTRAGS)
+        // Preserve a captured write before the following read. Native read
+        // stretching starts in PIO and no longer depends on ARM priority.
+        if (iow_has_data()) handle_iow();
+        if (ior_has_data()) handle_ior();
 #else
         if (iow_has_data()) handle_iow();
         if (ior_has_data()) handle_ior();
 #endif
 #endif
 #ifdef SOUND_ULTRAGS
-        ug_minimal_poll(time_us_32());
+        ug_minimal_poll_now();
 #endif
         if (queueReboot && !ug_config_busy(&ug_cfg) && gpio_get(IOW_PIN) &&
 #ifdef UG_ISA_POSTED

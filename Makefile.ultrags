@@ -63,6 +63,13 @@ firmware: prepare-tools
 		-DPROJECT_TYPE=NE2K -DPICO_BOARD=picow_fast -DPGDEBUG=OFF
 	cmake --build $(BUILD)/ne2k-release --parallel
 
+# Keep a generated-code record of the real optimized polling paths; unlike
+# the C host fixtures, this inspects ARM object disassembly and pioasm opcodes.
+.PHONY: ultrags-path-report
+ultrags-path-report: firmware
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/compare-firmware-paths.py \
+		--build $(BUILD)/multifw-release --out $(BUILD)/host/firmware-paths
+
 diagnostic: diagnostic-release diagnostic-debug
 
 diagnostic-release: prepare-tools
@@ -312,3 +319,22 @@ isa-dss-check: test-dss fixtures
 		--fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/package
 	$(NODE) $(ROOT)/tools/ultrags/test-package.mjs --stage ISA --exe-dir $(UGBUILD)/dss \
 		--fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/package
+
+# Configuration correction: same bytes in actual-EXE harness and DSS packages.
+.PHONY: cfg-check cfg-package
+cfg-check: ultrags-path-report test-dss fixtures
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/pio-isa-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/pio-isa.json
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/psram-id-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/psram-id.json
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/handshake-guard-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/guard
+	$(NODE) $(ROOT)/tests/ultrags/dss/ug-card-test.mjs
+	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_cfg_bundle.py --build $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/config-exchange.py --build $(BUILD)/host --catalog $(BUILD)/multifw-release/generated/multifw/catalog.bin
+	UG_S2_CATALOG="$(abspath $(BUILD))/multifw-release/generated/multifw/catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-s2.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tests/ultrags/dss/config-regression.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tests/ultrags/dss/turbo-contract.mjs $(ROOT) $(BUILD)
+
+cfg-package: cfg-check
+	$(NODE) $(ROOT)/tools/ultrags/package-s0b.mjs --stage CFG --exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures --out $(UGBUILD)/cfg-package
+	$(NODE) $(ROOT)/tools/ultrags/verify-package.mjs --stage CFG --exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/cfg-package
+	$(NODE) $(ROOT)/tools/ultrags/test-package.mjs --stage CFG --exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/cfg-package
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/package-cfg.py --build $(BUILD) $(if $(CFG_COMPARE_EXE_DIR),--compare-exe-dir "$(CFG_COMPARE_EXE_DIR)")

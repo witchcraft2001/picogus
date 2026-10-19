@@ -1,0 +1,20 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; READ ID 9F has no dummy clock after its 24 address bits. The upstream
+; FAST READ engine clocks once before its first IN; do not use that entry
+; for 9F. Keep the same DMA byte-count protocol and 9-word allocation.
+.program ug_psram_id
+.side_set 2
+.wrap_target
+begin:
+    out x, 8            side 1
+    out y, 8            side 1
+    jmp x--, write      side 1
+write:
+    out pins, 1         side 0
+    jmp x--, write      side 2
+    jmp !y, begin       side 0
+    jmp y--, read       side 0 ; predecrement without another SCK edge
+read:
+    in pins, 1          side 2
+    jmp y--, read       side 0
+.wrap

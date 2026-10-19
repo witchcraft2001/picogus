@@ -315,8 +315,15 @@ void ug_storage_tick(uint32_t now) {
             release_transfer();
         }
     }
-    if(phase()==T_GRANT && (uint32_t)(now-__atomic_load_n(&transfer.last,__ATOMIC_ACQUIRE))>=5000000) {
-        release_transfer(); ug_stat_add(8,1); ug_minimal_error(UG_ERR_TIMEOUT);
+    /* core1 sampled now before core0 may acknowledge BEGIN or move data.
+     * A newer last must not wrap this subtraction into a multi-minute idle
+     * interval and revoke a live grant. Both the 5s deadline and dispatcher
+     * service intervals are below half the 32-bit timer period. */
+    if(phase()==T_GRANT) {
+        uint32_t idle=now-__atomic_load_n(&transfer.last,__ATOMIC_ACQUIRE);
+        if(idle>=5000000 && idle<UINT32_C(0x80000000)) {
+            release_transfer(); ug_stat_add(8,1); ug_minimal_error(UG_ERR_TIMEOUT);
+        }
     }
     if(gs_job) {
         ug_memory_step(&job,now);

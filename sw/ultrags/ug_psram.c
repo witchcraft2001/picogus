@@ -9,6 +9,8 @@
 #include "pico/stdlib.h"
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
+#include "hardware/clocks.h"
+#include "ug_psram_id.pio.h"
 #include "ug_hwmap.h"
 #include <string.h>
 
@@ -184,11 +186,46 @@ int ug_psram_probe(ug_psram_t *ps) {
     return 0;
 }
 
-int ug_psram_read_id(ug_psram_t *ps,uint8_t id[8]) {
-    if(!ps || !ps->up || completion(ps)) return -1;
-    const uint8_t command[]={32,64,0x9f,0,0,0};
-    pio_spi_write_read_dma_blocking(&ps->spi,command,sizeof(command),id,8);
-    return completion(ps);
+/* READ ID (9F) is limited to 33 MHz, unlike FAST READ (0B). Use 25 MHz
+ * and a zero-dummy-clock engine even when data transfers need fudge.
+ * Core1 exclusively owns PSRAM. Switch only at the verified idle/CS-high
+ * boundary; release the old program before installing its replacement at
+ * the same offset, so the shared PIO1 instruction budget never grows. */
+static void id_profile(ug_psram_t *ps, bool enter, bool enable) {
+    PIO pio=ps->pio; uint sm=ps->sm, off=ps->spi.offset;
+    pio_sm_set_enabled(pio,sm,false);
+    {
+        const struct pio_program *data=ps->fudge?&spi_psram_fudge_program:&spi_psram_program;
+        const struct pio_program *old=enter?data:&ug_psram_id_program;
+        const struct pio_program *next=enter?&ug_psram_id_program:data;
+        ug_hw_forget_program(pio,off);
+        pio_remove_program(pio,old,off);
+        pio_add_program_at_offset(pio,next,off);
+        ug_hw_note_program(pio,off,next->length,"psram");
+        pio_sm_set_wrap(pio,sm,off,off+next->length-1);
+    }
+    /* Round UP the divider: truncation must never exceed the ID clock. */
+    uint32_t div=enter?(uint32_t)(((uint64_t)clock_get_hz(clk_sys)*256+
+                                  50000000u-1)/50000000u):ps->divider256;
+    pio_sm_set_clkdiv_int_frac(pio,sm,div>>8,div&255);
+    /* completion() left the SM at the common first OUT; after a timeout
+     * restore that PC too, while keeping the failed SM disabled. */
+    pio_sm_exec(pio,sm,pio_encode_jmp(off));
+    pio_sm_set_enabled(pio,sm,enable);
+}
+
+int ug_psram_read_id(ug_psram_t *ps,uint8_t id[3]) {
+    if(!ps || !id || !ps->up || completion(ps)) return -1;
+    id_profile(ps,true,true);
+    /* MFID, KGD and the first EID byte contain all identification used
+     * by the probe. 56 clocks at <=25 MHz also fit the 3 us CE-low limit
+     * of extended-temperature parts; three RX bytes cannot fill the
+     * four-word FIFO even if an IRQ delays arming the receive DMA. */
+    const uint8_t command[]={32,24,0x9f,0,0,0};
+    pio_spi_write_read_dma_blocking(&ps->spi,command,sizeof(command),id,3);
+    int result=completion(ps);
+    id_profile(ps,false,result==0);
+    return result;
 }
 
 int ug_psram_recover(ug_psram_t *ps) {

@@ -646,34 +646,41 @@ CLOSE:
     pop bc
     pop af
     ret
-SELECT:
-    push af
-    ld a,0xCC
-    ld (0xC1D0),a
-    pop af
-    ld (0xC1D0),a
-    ret
 READ8:
-    call OPEN
-    call SELECT
-    ld a,(0xC1D2)
-    jp CLOSE
-READ16:
-    call OPEN
-    call SELECT
-    ld hl,(0xC1D1)
-    jp CLOSE
+    push af
+    ld a,(SLOT)
+    ld (UGCTX.SLOT),a
+    ld hl,(BASE)
+    ld (UGCTX.BASE),hl
+    pop af
+    call UG_CFG_READ8
+    ret nc
+    cp UG_ERR_CANCELLED
+    ld a,10
+    scf
+    ret z
+    ld a,(UGCFG.OBS)
+    cp 0xFF
+    ld a,2
+    scf
+    ret z
+    ld a,8
+    scf
+    ret
 DISCOVER:
     xor a
     call READ8
+    ret c
     cp 0xDD
     jr nz,.absent
     ld a,1
     call READ8
+    ret c
     cp 4
     jr nz,.protocol
     ld a,0xE4
     call READ8
+    ret c
     cp 8
     jr nz,.absent
     or a
@@ -761,7 +768,10 @@ TEST:
     call RPC
     jr nc,.result
     cp UG_ERR_PSRAM
+    jr z,.memory_result
+    cp UG_ERR_UNSUPPORTED_MEMORY
     jp nz,RPC_ERROR
+.memory_result:
     ld a,(UG_LAST_SOURCE)
     cp 2
     jp nz,RPC_ERROR
@@ -882,6 +892,31 @@ LIST:
     jp SYNTAX
     ENDIF
 RPC_ERROR:
+    ; Preserve the numeric wire/host error before mapping it to a DSS exit
+    ; code. In particular, PSRAM and UNSUPPORTED_MEMORY both map to 4.
+    ; These diagnostics only inspect the already received frame.
+    push af
+    push bc
+    ld c,a
+    ld hl,rpc_source_text
+    call SHOW
+    ld a,(UG_LAST_SOURCE)
+    call HEX8
+    ld hl,rpc_status_text
+    call SHOW
+    ld a,c
+    call HEX8
+    ld a,(UG_LAST_SOURCE)
+    cp 2
+    jr nz,.diagnosed
+    ld hl,rpc_length_text
+    call SHOW
+    ld a,(UGREQ.LEN)
+    call HEX8
+.diagnosed:
+    call NL
+    pop bc
+    pop af
     ld b,a
     ld a,(UG_LAST_SOURCE)
     cp 1
@@ -1175,6 +1210,9 @@ no_voice_text: DB "NO_VOICE",0
 warning_text: DB "WARNING RESET destroys all loaded objects",13,10,0
 unavailable_text: DB "ROUNDTRIP_UNAVAILABLE_UNTIL_S4",0
 generic_reason: DB "MEMORY_OR_PROTOCOL",0
+rpc_source_text: DB "rpc_source=0x",0
+rpc_status_text: DB " status=0x",0
+rpc_length_text: DB " response_bytes=0x",0
 busy_text: DB "BUSY",0
 session_text: DB "session=0x",0
 boot_text: DB "boot_state=",0

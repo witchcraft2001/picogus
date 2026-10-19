@@ -14,6 +14,9 @@ static uint32_t used[2], now, pc;
 static unsigned checks, tail, cs_delay, dma_remaining[12], reset_commands, aborts;
 static int stuck_channel=-1;
 static bool stuck_cs, frozen_clock;
+static unsigned divider256, installed_length, installed_offset, wrap_top;
+static bool installed_id;
+static uint32_t sys_hz=370000000, reserved_programs;
 static uint8_t memory[8u<<20];
 static uint8_t command[33];
 static unsigned command_size, write_left;
@@ -32,10 +35,19 @@ uint pio_add_program(PIO p,const struct pio_program *g) {
     unsigned bank=p==pio1;
     for(unsigned i=0;i+g->length<=32;i++) {
         uint32_t mask=((1u<<g->length)-1)<<i;
-        if(!(used[bank]&mask)) { used[bank]|=mask; return i; }
+        if(!(used[bank]&mask)) { used[bank]|=mask; installed_length=g->length;installed_offset=i;installed_id=g->id;return i; }
     }
     assert(false); return 0;
 }
+void pio_add_program_at_offset(PIO p,const struct pio_program *g,uint off) {
+    uint32_t mask=((1u<<g->length)-1)<<off;
+    assert(!p->enabled[1] && !(used[p==pio1]&mask));
+    used[p==pio1]|=mask;installed_length=g->length;installed_offset=off;installed_id=g->id;
+}
+void pio_sm_set_wrap(PIO p,uint sm,uint bottom,uint top) { assert(!p->enabled[sm] && bottom==installed_offset);wrap_top=top; }
+void pio_sm_exec(PIO p,uint sm,uint instr) { assert(!p->enabled[sm] && instr==installed_offset);pc=instr; }
+void pio_sm_set_clkdiv_int_frac(PIO p,uint sm,uint i,uint8_t f) { assert(!p->enabled[sm]);divider256=i*256+f; }
+void backend_clock_init(float div) { divider256=(unsigned)(div*256);wrap_top=installed_offset+installed_length-1; }
 void pio_remove_program(PIO p,const struct pio_program *g,uint off) {
     uint32_t mask=((1u<<g->length)-1)<<off; assert((used[p==pio1]&mask)==mask);
     used[p==pio1]&=~mask;
@@ -103,25 +115,40 @@ void dma_channel_transfer_to_buffer_now(uint ch,void *dst,uint n) {
     if((int)ch==stuck_channel || !n)return;
     if(!read_pending) { assert(stuck_channel>=0);dma_remaining[ch]=0;return; }
     assert(command_size>=6 && command[1]==n*8);
-    if(command[2]==0x9f) { const uint8_t id[8]={13,93,64};assert(n==8);memcpy(dst,id,8); }
+    if(command[2]==0x9f) {
+        /* Old production code violates both checks: 100 MHz, and the
+         * fallback can use the extra-clock high-speed sampling phase. */
+        assert((uint64_t)sys_hz*128<=25000000ull*divider256 &&
+               installed_length==9 && wrap_top==installed_offset+8 && installed_id);
+        const uint8_t id[3]={13,93,64};assert(n==3);memcpy(dst,id,3);
+    }
     else { assert(n<=31 && n<=1024-(address&1023) && address+n<=sizeof(memory));memcpy(dst,memory+address,n); }
     read_pending=false;spi_end();
 }
 /* Reset commands in the real init use fixed busy_wait delays; emulate PIO
  * progress there too, independently from the adapter's completion polling. */
-uint32_t clock_get_hz(uint clk) { (void)clk;return 370000000; }
+uint32_t clock_get_hz(uint clk) { (void)clk;return sys_hz; }
 static void release(ug_psram_t *ps) {
     ug_psram_uninit(ps);CHECK(!ps->up && !pio_sm_is_claimed(pio1,1));
-    CHECK(!claimed[2] && !claimed[3] && !claimed[4]);CHECK(!used[1] && !ug_hw_pio_used(pio1));
+    CHECK(!claimed[2] && !claimed[3] && !claimed[4]);CHECK(used[1]==reserved_programs && !ug_hw_pio_used(pio1));
 }
 int main(int argc,char **argv) {
     ug_psram_t ps={0};dma_channel_claim(0);dma_channel_claim(1);
-    for(unsigned fudge=0;fudge<2;fudge++) {
+    for(unsigned profile=0;profile<4;profile++)for(unsigned fudge=0;fudge<2;fudge++) {
+        sys_hz=profile&1?264000000:370000000;
+        reserved_programs=profile&2?0xfe00001fu:0;
+        used[1]=reserved_programs;
+        float data_div=(float)sys_hz/(profile&2?100000000.0f:200000000.0f);
         unsigned resets_before=reset_commands;
-        pio_sm_claim(pio1,1);CHECK(!ug_psram_init(&ps,pio1,1,1.85f,8u<<20,fudge));
+        pio_sm_claim(pio1,1);CHECK(!ug_psram_init(&ps,pio1,1,data_div,8u<<20,fudge));
         CHECK(reset_commands==resets_before+2);CHECK(!ug_hw_psram_dma_check(ps.dma_tx,ps.dma_rx,ps.dma_async));
         uint8_t id[8],src[256],dst[256];for(unsigned i=0;i<256;i++)src[i]=(uint8_t)(i^0xa5);
         CHECK(!ug_psram_read_id(&ps,id) && id[0]==13 && id[1]==93 && id[2]==64);
+        CHECK(divider256==ps.divider256 && installed_length==(fudge?10:9) && !installed_id);
+        CHECK(wrap_top==installed_offset+installed_length-1 && pio1->enabled[1]);
+        CHECK((used[1]&reserved_programs)==reserved_programs);
+        CHECK(reset_commands==resets_before+2); /* ID never resets data. */
+        CHECK(ug_psram_read_id(&ps,NULL));
         const unsigned sizes[]={1,7,27,28,31,32,255,256};
         for(unsigned k=0;k<sizeof(sizes)/sizeof(sizes[0]);k++) {
             unsigned n=sizes[k];
@@ -133,7 +160,8 @@ int main(int argc,char **argv) {
         }
         unsigned count=reset_commands;CHECK(ug_psram_read(&ps,8u<<20,dst,1));CHECK(ug_psram_write(&ps,UINT32_MAX,src,2));CHECK(reset_commands==count);
         /* Final SPI bits and CS outlive DMA; independently stuck CS fails. */
-        stuck_cs=true;uint32_t start=now;CHECK(ug_psram_write(&ps,0,src,1));CHECK(now-start<3000 && ug_psram_dma_fault && !pio1->enabled[1]);
+        stuck_cs=true;uint32_t start=now;CHECK(ug_psram_read_id(&ps,id));CHECK(now-start<3000 && ug_psram_dma_fault && !pio1->enabled[1]);
+        CHECK(divider256==ps.divider256 && installed_length==(fudge?10:9) && !installed_id);
         stuck_cs=false;CHECK(!ug_psram_recover(&ps) && ps.fudge==(bool)fudge);
         for(int channel=2;channel<=4;channel++) {
             stuck_channel=channel;start=now;
@@ -146,6 +174,7 @@ int main(int argc,char **argv) {
         frozen_clock=false;stuck_channel=-1;CHECK(!ug_psram_recover(&ps));
         release(&ps);
     }
+    used[1]=reserved_programs=0;sys_hz=370000000;
     /* The real driver's reset commands also use the bounded DMA wrapper. */
     dma_channel_unclaim(5); /* Both startup inits can fail before CRC reserve. */
     pio_sm_claim(pio1,1);stuck_channel=2;uint32_t start=now;
