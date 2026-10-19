@@ -52,6 +52,9 @@ OLD_SESSION EQU V+136
 OLD_BOOT EQU V+132
 INFOQUERIES EQU V+144
 PORTREAD EQU V+146
+SAVEFFCOUNT EQU V+147 ; u16, missed non-consuming SAVE result samples
+    ASSERT PORTREAD+1 <= SAVEFFCOUNT
+    ASSERT SAVEFFCOUNT+2 <= V+160
 RETRIES EQU V+44
 PTR EQU V+30
 SEL EQU V+32
@@ -1605,6 +1608,8 @@ SAVE:
     xor a
     ld (EXPECT),a
     ld (SAVESEEN),a
+    ld (SAVEFFCOUNT),a
+    ld (SAVEFFCOUNT+1),a
     ; A previous maintenance operation must not supply BUSY->OK for our
     ; request. Refuse before issuing SAVE unless the config result is idle.
     ld a,0x78
@@ -1635,7 +1640,21 @@ SAVE:
     or a
     jr z,.complete
     cp 5
+    jr z,.busy
+    cp 0xFF
     jr nz,.bad
+    ; Only CFG_RESULT is polled again. It is not a consuming stream:
+    ; transient undriven samples must not replay SAVE, INFO or catalogue.
+    ld hl,(SAVEFFCOUNT)
+    inc hl
+    ld (SAVEFFCOUNT),hl
+    call CHECK_WAIT
+    jr nc,.loop
+    cp 10
+    jr nz,.bad ; preserve SAVE_UNCONFIRMED/code9 for an unreadable result
+    scf
+    jr .uncertain
+.busy:
     ld a,1
     ld (SAVESEEN),a
     call CHECK_WAIT
@@ -2281,6 +2300,10 @@ DIAGNOSTICS:
     ld hl,STAGE
     ld b,3 ; stage, SAVE busy observed, startup verified
     call DUMP
+    ld hl,diag_save_ff
+    call PRINT
+    ld hl,(SAVEFFCOUNT)
+    call HEX16
     ld hl,diag_select
     call PRINT
     ld hl,UGCFG.SEL
@@ -2441,6 +2464,7 @@ reboot_text: DB "Rebooting card once...",13,10,0
 waiting_text: DB "Waiting for active mode and readiness...",13,10,0
 started_text: DB "Startup verified: requested mode is active.",13,10,0
 saving_text: DB "Saving startup settings...",13,10,0
+diag_save_ff: DB " save_result_ff_reads=",0
 saved_text: DB "Save confirmed: settings written and verified.",13,10,0
 save_not_started_text: DB "SAVE_NOT_STARTED: previous configuration is busy/failed; inspect INFO /DIAG",0
 save_uncertain_text: DB "SAVE_UNCONFIRMED: acceptance/completion not proven; Flash may have changed",0

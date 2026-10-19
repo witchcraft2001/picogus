@@ -22,9 +22,10 @@ def verify_isa_reports(build):
     """Require current linked-code, generated-PIO and independent fuse gates."""
     build = Path(build)
     reports = [build / 'host/firmware-paths/paths.json', build / 'host/pio-isa.json',
-               build / 'host/guard/guard.json', build / 'host/psram-id.json']
+               build / 'host/guard/guard.json', build / 'host/psram-id.json',build / 'host/save-clock.json']
     statuses = ['LINKED_ARM_PIO_PASS / REAL_PENDING', 'HOST_PIO_INSTRUCTION_PASS / REAL_PENDING',
-                'HOST_GUARD_PASS / REAL_PENDING', 'HOST_PSRAM_ID_INSTRUCTION_PASS / REAL_PENDING']
+                'HOST_GUARD_PASS / REAL_PENDING', 'HOST_PSRAM_ID_INSTRUCTION_PASS / REAL_PENDING',
+                'LINKED_SAVE_CLOCK_PASS / REAL_PENDING']
     for path, status in zip(reports, statuses):
         evidence = json.loads(path.read_text())
         require(evidence['status'] == status and evidence['inputs'], 'incomplete ISA gate: ' + str(path))
@@ -40,6 +41,10 @@ def verify_isa_reports(build):
             (768, 9, 97, 56, 3), 'incomplete READ ID PIO gate')
     require(psram['old_same_length_sck_edges'] == 57 and psram['cs_active_steps'] <= 125, 'READ ID clocks/CS boundary')
     require(psram['corrected_id'].startswith('0d5d40'), 'READ ID byte alignment failure')
+    save=json.loads(reports[4].read_text())
+    require((save['core_clock_hz'],save['boot2_divider'],save['rom_command_divider'])==(370000000,4,6),'SAVE clock/divider audit')
+    require(len(save['host_cases'])==6 and all(x['ok'] for x in save['host_cases']),'SAVE clock host mutations')
+    require(not save['closures']['ultrags']['clock_calls'] and save['closures']['gus']['clock_calls'],'SAVE linked clock closure')
     return reports
 
 

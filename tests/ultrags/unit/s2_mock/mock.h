@@ -10,6 +10,7 @@ extern "C" {
 extern unsigned mock_prepares,mock_restores;
 extern uint8_t mock_flash[0x200000];
 extern unsigned mock_erases,mock_programs,mock_clock;
+extern unsigned mock_clock_changes;
 #define XIP_BASE ((uintptr_t)mock_flash)
 #define PICO_FLASH_SIZE_BYTES 0x200000
 #define FLASH_SECTOR_SIZE 4096
@@ -29,9 +30,9 @@ extern unsigned mock_erases,mock_programs,mock_clock;
 static inline int vreg_get_voltage(void){return 1;}
 static inline void vreg_set_voltage(int v){(void)v;}
 static inline void busy_wait_us_32(unsigned v){(void)v;}
-static inline void clock_configure_undivided(int c,int a,int b,unsigned hz){(void)a;(void)b;if(c==clk_sys)mock_clock=hz;}
+static inline void clock_configure_undivided(int c,int a,int b,unsigned hz){(void)a;(void)b;if(c==clk_sys){mock_clock_changes++;mock_clock=hz;}}
 static inline void pll_init(int a,int b,unsigned c,int d,int e){(void)a;(void)b;(void)c;(void)d;(void)e;}
-static inline void set_sys_clock_khz(unsigned c,bool b){(void)b;mock_clock=c*1000;}
+static inline void set_sys_clock_khz(unsigned c,bool b){(void)b;mock_clock_changes++;mock_clock=c*1000;}
 static inline unsigned save_and_disable_interrupts(void){return 0;}
 static inline void restore_interrupts(unsigned v){(void)v;}
 static inline void stdio_flush(void){}

@@ -43,7 +43,7 @@ mock_watchdog_t mock_watchdog;
 mock_xip_t mock_xip;
 mock_chip_reset_t mock_chip_reset;
 void saveSettings(const Settings *s){(void)s;assert(!"unexpected Flash write");}
-unsigned mock_clock=370000000,mock_prepares,mock_restores;
+unsigned mock_clock=370000000,mock_prepares,mock_restores,mock_clock_changes;
 static Settings settings;
 static const unsigned BOARD_TYPE=PICOGUS_2;
 static unsigned cur_read, sel_reg, control_active, read_value;

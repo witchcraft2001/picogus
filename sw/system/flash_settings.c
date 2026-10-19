@@ -209,10 +209,20 @@ void saveSettings(const Settings* settings)
     static_assert(sizeof(Settings) < FLASH_PAGE_SIZE, "Settings struct doesn't fit inside one flash page");
     memcpy(data, settings, sizeof(Settings));
     DBG_PRINTF("doing settings save: ");
-    // No need for flash_safe_execute or stop second core, since it will not touch flash
-    // If the 2nd core will ever touch flash, reconsider this approach!
-    // Clock down the RP2040 so the flash at its default 1/2 clock divider is within spec (<=133MHz)
+    // Both cores execute from SRAM. ULTRAGS must also retain the ISA/PIO
+    // clock while core1 writes Flash: configuration reads have no early wait.
+    // RP2040 ROM flash_exit_xip uses SSI /6 (61.7MHz at 370MHz); boot2 on
+    // picogus2 restores /4 (92.5MHz). Neither needs a clk_sys/PLL change.
+#if defined(SOUND_ULTRAGS) && PICO_RP2040
+    _Static_assert(PICO_FLASH_SPI_CLKDIV >= 4 && !(PICO_FLASH_SPI_CLKDIV & 1),
+                   "ULTRAGS SAVE requires the supported Flash divider");
+    _Static_assert(RP2_CLOCK_SPEED * 1000u / PICO_FLASH_SPI_CLKDIV <= 133000000u &&
+                   RP2_CLOCK_SPEED * 1000u / 6u <= 133000000u,
+                   "ULTRAGS SAVE Flash clock exceeds the supported limit");
+#else
+    // Preserve the existing save path in all other modes/MCUs.
     set_sys_clock_khz(240000, true);
+#endif
 
     DBG_PUTCHAR('/');
     uint32_t ints = save_and_disable_interrupts();
@@ -220,7 +230,9 @@ void saveSettings(const Settings* settings)
     DBG_PUTCHAR('/');
     flash_range_program(SETTINGS_SECTOR, data, FLASH_PAGE_SIZE);
     restore_interrupts(ints);
+#if !(defined(SOUND_ULTRAGS) && PICO_RP2040)
     overclock_370mhz();
+#endif
     DBG_PRINTF("settings saved");
 }
 

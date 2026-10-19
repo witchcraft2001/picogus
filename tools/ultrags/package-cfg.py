@@ -31,7 +31,7 @@ add(r/'host/sprinter/ultrags/docs/CFG-FIX.md','TESTER.TXT')
 add(r/'host/sprinter/ultrags/docs/CFG-REVIEW.md','REVIEW.TXT')
 add(r/'host/sprinter/ultrags/docs/CFG-REAL-FAIL.md','REALFAIL.TXT')
 add(r/'ultra-gs-docs/ultra-gs.md','SPEC.TXT')
-for src,name in [(isa_reports[0],'ISAPATH.JSN'),(isa_reports[1],'PIOISA.JSN'),(isa_reports[2],'GUARD.JSN'),(isa_reports[3],'PSRAMID.JSN'),
+for src,name in [(isa_reports[0],'ISAPATH.JSN'),(isa_reports[1],'PIOISA.JSN'),(isa_reports[2],'GUARD.JSN'),(isa_reports[3],'PSRAMID.JSN'),(isa_reports[4],'SAVECLK.JSN'),
                  (b/'host/firmware-paths/REPORT.md','ISAPATH.TXT'),
                  (b/'host/firmware-paths/gus-paths.dis','GUSARM.TXT'),
                  (b/'host/firmware-paths/ultrags-paths.dis','ULTRARM.TXT')]:

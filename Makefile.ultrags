@@ -326,6 +326,7 @@ cfg-check: ultrags-path-report test-dss fixtures
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/pio-isa-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/pio-isa.json
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/psram-id-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/psram-id.json
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/handshake-guard-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/guard
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/save-clock-check.py --build $(BUILD) --cc "$(CC)"
 	$(NODE) $(ROOT)/tests/ultrags/dss/ug-card-test.mjs
 	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_cfg_bundle.py --build $(BUILD)
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/config-exchange.py --build $(BUILD)/host --catalog $(BUILD)/multifw-release/generated/multifw/catalog.bin
@@ -338,3 +339,10 @@ cfg-package: cfg-check
 	$(NODE) $(ROOT)/tools/ultrags/verify-package.mjs --stage CFG --exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/cfg-package
 	$(NODE) $(ROOT)/tools/ultrags/test-package.mjs --stage CFG --exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures --package $(UGBUILD)/cfg-package
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/package-cfg.py --build $(BUILD) $(if $(CFG_COMPARE_EXE_DIR),--compare-exe-dir "$(CFG_COMPARE_EXE_DIR)")
+
+# Separate host-only experiments; never replaces the default cap8/off profile.
+# Build the independent directory first, then pass FAST_COMPARE_BUILD to
+# require byte-identical executed EXEs and ZIP/IMG in both directories.
+.PHONY: throughput-package
+throughput-package: cfg-package
+	$(NODE) $(ROOT)/tools/ultrags/package-throughput.mjs $(BUILD) $(FAST_COMPARE_BUILD)

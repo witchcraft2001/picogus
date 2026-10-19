@@ -74,6 +74,14 @@
       "license": "MIT for upstream library; original headers of existing PicoGUS adapters govern",
       "notice": "tests/ultrags/reference/M62429-LICENSE",
       "use": "Notice for the pre-existing library adapted in sw/M62429/ at the PicoGUS baseline"
+    },
+    {
+      "name": "RP2040 ROM Flash setup",
+      "url": "https://github.com/raspberrypi/pico-bootrom-rp2040",
+      "revision": "ef22cd8ede5bc007f81d7f2416b48db90f313434",
+      "license": "BSD-3-Clause",
+      "notice": "tests/ultrags/reference/rp2040-rom/LICENSE.TXT",
+      "use": "Unmodified program_flash_generic.c retained only as evidence for ROM SSI divider6, not compiled or linked into firmware"
     }
   ]
 }

@@ -74,23 +74,23 @@ damaged('overlapping slot map', 'generated/multifw/flash-map.json', overlap)
 print(f'CFG complete firmware provenance: {passed} PASS')
 
 reports = verify_isa_reports(args.build)
-for mutation in ('missing', 'failed', 'stale-input', 'stale-disassembly', 'missing-psram', 'failed-psram', 'stale-psram'):
+for mutation in ('missing', 'failed', 'stale-input', 'stale-disassembly', 'missing-psram', 'failed-psram', 'stale-psram', 'missing-save', 'failed-save', 'stale-save'):
     with tempfile.TemporaryDirectory(prefix='ug-cfg-isa-') as temp:
         directory = Path(temp)
         for report in reports:
             dest = directory / report.relative_to(args.build)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(report.read_bytes())
-        path = directory / reports[3 if 'psram' in mutation else 0].relative_to(args.build)
+        path = directory / reports[4 if 'save' in mutation else 3 if 'psram' in mutation else 0].relative_to(args.build)
         data = json.loads(path.read_text())
         if mutation.startswith('missing'): path.unlink()
         else:
             if mutation.startswith('failed'): data['status'] = 'FAIL'
             else:
-                group = data['inputs' if mutation in ('stale-input', 'stale-psram') else 'artifacts']
+                group = data['inputs' if mutation in ('stale-input', 'stale-psram', 'stale-save') else 'artifacts']
                 group[next(iter(group))] = '0' * 64
             path.write_text(json.dumps(data))
         try: verify_isa_reports(directory)
         except (ValueError, FileNotFoundError): print('PASS ISA gate ' + mutation)
         else: raise AssertionError('accepted ISA gate ' + mutation)
-print('CFG mandatory linked ARM/PIO/PSRAM/fuse gates: 8 PASS')
+print('CFG mandatory linked ARM/PIO/PSRAM/fuse/SAVE clock gates: 11 PASS')

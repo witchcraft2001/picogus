@@ -36,6 +36,9 @@ SAVEDSOURCE EQU V+158
 FILEOUTPUT EQU V+159
 SLOW EQU V+160
 DATATRANS EQU V+161
+    IFDEF UGMEM_PROGRESS
+ROUND_PHASE EQU V+162
+    ENDIF
 
 ; Parse decimal or 0x with overflow detected on every multiply/add.
 NUMBER32:
@@ -239,6 +242,23 @@ BLOB_SETUP:
 .showtransport:
     call SHOW
     call NL
+    IFDEF UG_EXPERIMENT_WINDOW
+    ld hl,experiment_text
+    call SHOW
+    ld hl,UG_EXPERIMENT_WINDOW
+    call DEC16
+    ld hl,experiment_turbo_text
+    call SHOW
+    IFDEF UG_EXPERIMENT_TURBO_WRITE
+    ld a,'1'
+    ELSE
+    ld a,'0'
+    ENDIF
+    call OUTCHAR
+    ld hl,experiment_read_text
+    call SHOW
+    call NL
+    ENDIF
     ; Setup must not silently adopt a rebooted card after ENTRY printed the
     ; original session. Check before opening a file or allocating an object.
     call SESSION_CHECK
@@ -765,6 +785,12 @@ ROUNDTRIP:
     call BLOB_SETUP
     call RESERVE
     call START_BLOCKS
+    IFDEF UGMEM_PROGRESS
+    call APP_TIME_INIT
+    xor a
+    ld (ROUND_PHASE),a
+    call ROUND_REPORT
+    ENDIF
 .write:
     call NEXT_BLOCK
     jr z,.seal
@@ -772,10 +798,23 @@ ROUNDTRIP:
     call FOLD_FILE
     call WRITE_BLOCK
     call ADVANCE
+    IFDEF UGMEM_PROGRESS
+    call ROUND_PROGRESS
+    ENDIF
     jr .write
 .seal:
+    IFDEF UGMEM_PROGRESS
+    ld a,2
+    ld (ROUND_PHASE),a
+    call ROUND_REPORT
+    ENDIF
     call SEAL_BLOB
     call START_BLOCKS
+    IFDEF UGMEM_PROGRESS
+    ld a,1
+    ld (ROUND_PHASE),a
+    call ROUND_REPORT
+    ENDIF
 .read:
     call NEXT_BLOCK
     jp z,PASS
@@ -783,7 +822,56 @@ ROUNDTRIP:
     call READ_BLOCK
     call COMPARE_BLOCK
     call ADVANCE
+    IFDEF UGMEM_PROGRESS
+    call ROUND_PROGRESS
+    ENDIF
     jr .read
+    IFDEF UGMEM_PROGRESS
+; Only after END and comparison, with ISA closed and no active grant.
+; Report every 64 KiB plus the final tail, without extra card accesses.
+ROUND_PROGRESS:
+    ld hl,(LEFT32)
+    ld de,(LEFT32+2)
+    ld a,h
+    or l
+    or d
+    or e
+    jr z,ROUND_REPORT
+    ld hl,(POS32)
+    ld a,h
+    or l
+    ret nz
+ROUND_REPORT:
+    ld a,(QUIET)
+    or a
+    ret nz
+    call APP_TIME_NEXT
+    ld hl,round_write_text
+    ld a,(ROUND_PHASE)
+    or a
+    jr z,.show
+    ld hl,round_read_text
+    cp 1
+    jr z,.show
+    ld hl,round_seal_text
+.show:
+    call SHOW
+    ld hl,POS32
+    call DEC32
+    ld a,'/'
+    call OUTCHAR
+    ld hl,SIZE32
+    call DEC32
+    ld hl,round_time_text
+    call SHOW
+    ld hl,TIMEELAPSED
+    call DEC32
+    jp NL
+round_write_text: DB "roundtrip WRITE completed=",0
+round_read_text: DB "roundtrip READ completed=",0
+round_seal_text: DB "roundtrip SEAL completed=",0
+round_time_text: DB " elapsed_s=",0
+    ENDIF
     ELSE
 ROUNDTRIP:
     jp SYNTAX
@@ -1253,6 +1341,11 @@ transfer_stage_text: DB "transfer_stage=0x",0
 transfer_moved_text: DB " moved=",0
 transfer_offset_text: DB " offset=0x",0
 recovery_text: DB "Transfer recovery: INFO/OBJECT_INFO; operation not retried",0
+    IFDEF UG_EXPERIMENT_WINDOW
+experiment_text: DB "EXPERIMENTAL window_bytes=",0
+experiment_turbo_text: DB " requested_write_turbo=",0
+experiment_read_text: DB " read_turbo=0 REAL_PENDING",0
+    ENDIF
 crc_text: DB " crc=0x",0
 host_crc_text: DB "host_crc=0x",0
 host_crc_fast: DB "host_crc=NOT_COMPUTED",0

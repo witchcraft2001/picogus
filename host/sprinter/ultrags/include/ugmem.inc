@@ -63,6 +63,7 @@ UGREQ.OP	EQU UGMEM_BASE+47	; u8, opcode stash during RPC
 UGXFER.ID	EQU UGMEM_BASE+48	; u32 LE active transfer token
 UGXFER.N	EQU UGMEM_BASE+52	; u16 grant length
 UGXFER.DIR	EQU UGMEM_BASE+54	; u8 0=none 1=write 2=read
+UGXFER.KEYHI EQU UGMEM_BASE+55 ; last high byte of SENT polled for ESC
 UGXFER.CRC	EQU UGMEM_BASE+56	; u32 LE crc for VERIFIED
 UGXFER.TRANS	EQU UGMEM_BASE+60	; u8 transport value
 UGXFER.OFF	EQU UGMEM_BASE+61	; u32 LE block object offset
@@ -107,6 +108,8 @@ UGMEM_END	EQU UGMEM_BASE+400	; reserved workspace end (< 0xC000)
 	ASSERT UGREQ.TOKEN + 4 <= UGREQ.ST	; token(4) precedes status
 	ASSERT UGREQ.ST + 3 <= UGXFER.ID	; st/nmi/method/op before xfer
 	ASSERT UGXFER.ID + 4 <= UGXFER.N	; id(4) precedes n
+    ASSERT UGXFER.DIR + 1 <= UGXFER.KEYHI
+    ASSERT UGXFER.KEYHI + 1 <= UGXFER.CRC
 	ASSERT UGXFER.OFF + 4 <= UGXFER.BUF	; off(4) precedes buf
 	ASSERT UGXFER.SENT + 2 <= UGXFER.STAGE
     ASSERT UGXFER.STAGE + 1 <= UGTM.LO

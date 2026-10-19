@@ -94,6 +94,21 @@ for(const slot of [0,1])for(const cpuHz of [21000000,3500000])for(const iff of [
  }
 }
 test('65536 FAST','UGMEM','ROUNDTRIP 65536 /SLOW',0,{budget:500000000,check:c=>!c.objects.size});
+for(const slot of [0,1]) {
+ test(`roundtrip progress tail midnight slot${slot}`,'UGMEM',`ROUNDTRIP 65537 /VERIFY /SLOT:${slot}`,0,{
+  slot,cpuHz:3500000,clockStart:86399,budget:150000000,check:(c,m)=>{
+   const lines=m.text.split('\r\n').filter(s=>s.startsWith('roundtrip '));
+   const expected=['WRITE completed=0','WRITE completed=65536','WRITE completed=65537',
+    'SEAL completed=65537','READ completed=0','READ completed=65536','READ completed=65537'];
+   const times=lines.map(s=>Number(s.match(/elapsed_s=(\d+)$/)?.[1]));
+   return !c.objects.size&&lines.length===expected.length&&expected.every((s,i)=>lines[i].startsWith('roundtrip '+s+'/65537 elapsed_s='))
+    &&times.every((t,i)=>Number.isFinite(t)&&t>=0&&(!i||t>=times[i-1]))&&times.at(-1)>0;
+  }
+ });
+}
+test('roundtrip quiet suppresses progress','UGMEM','ROUNDTRIP 1025 /VERIFY /QUIET',0,{
+ check:(c,m)=>!c.objects.size&&!m.text.includes('roundtrip ')&&!m.text.includes('session=')&&m.text==='RESULT PASS code=0\r\n'
+});
 const input=pattern(70001),crc=crc32(input).toString(16).padStart(8,'0');
 const {card}=test('file >64K short read 120s disk pauses manifest FAST','UGLOAD',`TEST.BIN /TYPE:BLOB /CRC:${crc}`,0,{files:{'TEST.BIN':input},disk:{shortRead:509,delayUs:120000000},budget:600000000,check:c=>c.objects.get(1)?.data.equals(input)&&!c.resets});
 test('range dump short writes','UGDUMP','1 BACK.BIN /OFFSET:65535 /LENGTH:4096',0,{card,disk:{shortWrite:13,delayUs:120000000},check:(c,m)=>m.files.get('BACK.BIN')?.equals(input.subarray(65535,65535+4096))});

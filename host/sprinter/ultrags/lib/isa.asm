@@ -218,6 +218,19 @@ UG_BULK_WRITE:
     ld de,(UGCTX.BASE)
     set 6,d
     set 7,d
+    ld a,b
+    or a
+    jr nz,.general
+    ld a,c
+    cp 8
+    jr nz,.general
+    DUP 8
+    ld a,(hl)
+    ld (de),a
+    inc hl
+    EDUP
+    ret
+.general:
     ld a,c
     and 7
     ld (UGTM.LO),a
@@ -255,6 +268,19 @@ UG_BULK_READ:
     ld de,(UGCTX.BASE)
     set 6,d
     set 7,d
+    ld a,b
+    or a
+    jr nz,.general
+    ld a,c
+    cp 8
+    jr nz,.general
+    DUP 8
+    ld a,(de)
+    ld (hl),a
+    inc hl
+    EDUP
+    ret
+.general:
     ld a,c
     and 7
     ld (UGTM.LO),a

@@ -547,6 +547,9 @@ try {
     for(const e of s6.executed)executed.set(e.name,e);
     for(const r of s6.results)r.ok?ok(`S6 ${r.name}`):bad(`S6 ${r.name}`,r.errors.join(';'));
   }
+  execFileSync(process.execPath,[join(REPO,'tests/ultrags/dss/throughput.mjs'),REPO,parentBuild],{stdio:'inherit'});
+  const throughput=JSON.parse(readFileSync(join(parentBuild,'ultrags/throughput/throughput.json')));
+  for(const r of throughput.results)r.ok?ok(`throughput ${r.name}`):bad(`throughput ${r.name}`,'failed');
   for (const r of s3.results) r.ok ? ok(`S3 ${r.name}`) : bad(`S3 ${r.name}`,r.errors.join(';'));
 
   for (const r of s2.results) r.ok ? ok(`S2 ${r.name}`) : bad(`S2 ${r.name}`,r.errors.join(';'));

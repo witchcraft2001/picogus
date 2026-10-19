@@ -1,6 +1,18 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; S3 memory tools. Real DSS/Z80, conservative eight-byte frame windows.
     DEFINE UG_DSS_TIMED
+    ; Progress belongs to the standalone memory tool, not apps embedding it.
+    IFNDEF APP_LOAD
+    IFNDEF APP_DUMP
+    IFNDEF APP_BENCH
+    IFNDEF APP_AUDIO
+    IFNDEF APP_PROTO
+    DEFINE UGMEM_PROGRESS
+    ENDIF
+    ENDIF
+    ENDIF
+    ENDIF
+    ENDIF
     IFNDEF APP_PROTO
     ORG 0x8000
 HEADER:

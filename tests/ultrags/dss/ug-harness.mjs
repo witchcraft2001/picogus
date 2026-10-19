@@ -90,7 +90,7 @@ export function parseExe(file) {
 
 // ------------------------------ machine --------------------------------
 export class SprinterMachine {
-  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x01, page3Init = 0x03, cpuHz = CPU_HZ, commandLine = null, movingClock = false, clockStart = 86390, escAfter = Infinity, logLimit = Infinity, files = {}, disk = {}, turboInit = cpuHz === CPU_HZ, turboHardware = true, rejectTurboIsa = true, mapperRead = 0xA7, configDe = 0xA5 }) {
+  constructor({ card, cardSlot = 0, seed = 0xC0FFEE, systemInit = 0x01, page3Init = 0x03, cpuHz = CPU_HZ, commandLine = null, movingClock = false, clockStart = 86390, escAfter = Infinity, logLimit = Infinity, files = {}, disk = {}, turboInit = cpuHz === CPU_HZ, turboHardware = true, rejectTurboIsa = true, allowTurboBulkWrites = false, mapperRead = 0xA7, configDe = 0xA5 }) {
     if (![3_500_000, 21_000_000].includes(cpuHz)) throw new Error('unsupported CPU frequency');
     this.files=new Map(Object.entries(files).map(([p,b])=>[p.toUpperCase(),Buffer.from(b)]));
     this.disk=disk; this.fileHandles=new Map(); this.nextFileHandle=1; this.fileCalls=0;
@@ -98,6 +98,7 @@ export class SprinterMachine {
     this.turboHardware = turboHardware;
     this.cpuHz = this.turbo && turboHardware ? CPU_HZ : 3_500_000;
     this.rejectTurboIsa = rejectTurboIsa;
+    this.allowTurboBulkWrites = allowTurboBulkWrites;
     this.mapperRead = mapperRead;
     this.turboWrites = 0;
     this.elapsedTicks = 0; // units of 1/21 MHz, exact at both CPU speeds
@@ -154,13 +155,18 @@ export class SprinterMachine {
   }
   isaAddr(a) { return (a - WIN3_BASE) | ((this.portIsa & 0x3F) << 14); }
   get isaSlot() { return (this.page3 >> 1) & 1; }
+  turboWriteGranted(isa = this.card?.base) {
+    const t=this.card?.transfer;
+    return this.allowTurboBulkWrites && this.isaSlot===this.cardSlot && t?.granted && t.bulk && !t.rd
+      && (isa===this.card.base || (this.card.alias!==0xffff && isa>=this.card.alias && isa<this.card.alias+32));
+  }
 
   memRead = (a) => {
     a &= 0xFFFF;
     if (a >= WIN3_BASE && this.isaOpen) {
+      const isa = this.isaAddr(a);
       if (this.rejectTurboIsa && this.turbo && this.turboHardware)
         throw new Error('ISA access with Turbo enabled');
-      const isa = this.isaAddr(a);
       const v = this.card && this.isaSlot === this.cardSlot ? this.card.readPort(isa) : 0xFF;
       if (this.isaLog.length < this.logLimit) this.isaLog.push({ t: this.cycles, dir: 'r', slot: this.isaSlot, isa, val: v });
       return v;
@@ -171,9 +177,9 @@ export class SprinterMachine {
   memWrite = (a, v) => {
     a &= 0xFFFF; v &= 0xFF;
     if (a >= WIN3_BASE && this.isaOpen) {
-      if (this.rejectTurboIsa && this.turbo && this.turboHardware)
-        throw new Error('ISA access with Turbo enabled');
       const isa = this.isaAddr(a);
+      if (this.rejectTurboIsa && this.turbo && this.turboHardware && !this.turboWriteGranted(isa))
+        throw new Error('ISA access with Turbo enabled');
       if (this.isaLog.length < this.logLimit) this.isaLog.push({ t: this.cycles, dir: 'w', slot: this.isaSlot, isa, val: v });
       // NMI trigger: arms when the bus write hits the configured ISA
       // address (used to land an NMI inside a switched-SP burst)
@@ -197,7 +203,7 @@ export class SprinterMachine {
     p &= 0xFFFF; v &= 0xFF;
     if (this.ioLog.length < this.logLimit) this.ioLog.push({ t: this.cycles, dir: 'out', port: p, val: v });
     if ((p & 255) === PORT_SYS_RAM) {
-      if (this.isaOpen) throw new Error('Turbo command with ISA mapped');
+      if (this.isaOpen && !(v===3 && this.turboWriteGranted())) throw new Error('Turbo command with ISA mapped');
       if (v !== 2 && v !== 3) throw new Error('unexpected SYS_PORT command');
       this.turbo = !!(v & 1);
       this.cpuHz = this.turbo && this.turboHardware ? CPU_HZ : 3_500_000;

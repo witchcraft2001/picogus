@@ -13,12 +13,12 @@
 #include <string.h>
 #include <pthread.h>
 uint8_t mock_flash[0x200000];
-unsigned mock_erases,mock_programs,mock_clock=370000000,mock_prepares,mock_restores;
+unsigned mock_erases,mock_programs,mock_clock=370000000,mock_prepares,mock_restores,mock_clock_changes;
 mock_watchdog_t mock_watchdog;
 mock_xip_t mock_xip;
 mock_chip_reset_t mock_chip_reset;
-void flash_range_erase(uint32_t o,size_t n){assert(mock_clock==240000000);assert(o==UG_SETTINGS_OFFSET&&n==4096);memset(mock_flash+o,255,n);mock_erases++;}
-void flash_range_program(uint32_t o,const uint8_t *d,size_t n){assert(mock_clock==240000000&&n==256);memcpy(mock_flash+o,d,n);mock_programs++;}
+void flash_range_erase(uint32_t o,size_t n){assert(mock_clock==370000000&&!mock_clock_changes);assert(o==UG_SETTINGS_OFFSET&&n==4096);memset(mock_flash+o,255,n);mock_erases++;}
+void flash_range_program(uint32_t o,const uint8_t *d,size_t n){assert(mock_clock==370000000&&!mock_clock_changes&&n==256);memcpy(mock_flash+o,d,n);mock_programs++;}
 static void seal(uint8_t *c){ug_put32(c+144,ug_crc32(c,144));}
 static void image(uint8_t *c,unsigned mode,unsigned offset){
  uint8_t *r=c+16+(mode-1)*16; r[0]=mode;r[1]=1;ug_put32(r+4,offset);ug_put32(r+8,1024);
@@ -93,7 +93,7 @@ int main(int argc,char **argv){
  ug_config_write(&ug_cfg,true,255,true);assert(ug_config_busy(&ug_cfg));Settings snapshot=ug_cfg.save_snapshot;
  cfgwrite(&ug_cfg,0x76,0x2c0,true);assert(!memcmp(&snapshot,&ug_cfg.save_snapshot,sizeof(snapshot))&&s.UltraGS.basePort==0x300);
  ug_minimal_init();ug_minimal_ready(0,1);
- ug_maintenance_poll();assert(mock_erases==1&&mock_programs==1&&mock_clock==370000000&&mock_prepares==1&&mock_restores==1);assert(!ug_cfg.result&&!ug_config_busy(&ug_cfg));
+ ug_maintenance_poll();assert(mock_erases==1&&mock_programs==1&&mock_clock==370000000&&!mock_clock_changes&&mock_prepares==1&&mock_restores==1);assert(!ug_cfg.result&&!ug_config_busy(&ug_cfg));
  ug_config_select(&ug_cfg,0x79);ug_config_write(&ug_cfg,true,1,true);assert(ug_cfg.aliases);
  loadSettings(&s,true);ug_config_init(&ug_cfg,&s,8,cat,UG_HANDOFF_MAGIC,0x01000801,256);assert(!ug_cfg.aliases&&s.startupMode==1);
  ug_minimal_init();ug_minimal_ready(0,123);assert(ug_minimal_idle());

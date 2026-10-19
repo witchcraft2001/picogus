@@ -30,7 +30,9 @@ function test(name,cli,expected=0,opts={}) {
  const card=opts.card??new ConfigCard(opts.catalog??catalog,opts);
  const m=new SprinterMachine({card:opts.absent?null:card,page3Init:opts.page3??3,turboInit:opts.turboInit,cardSlot:opts.slot??0,cpuHz:opts.cpuHz??21000000,turboHardware:opts.turboHardware??(opts.cpuHz!==3500000),commandLine:cli,movingClock:!opts.stopped,escAfter:opts.escAfter??Infinity,logLimit:1000});
  const dss=m.dssCall.bind(m);
- m.dssCall=s=>{const fn=s.c;const result=dss(s);if(result!=='exit'){
+ m.dssCall=s=>{const fn=s.c;
+  if(opts.escInSave&&card.saveSamples?.some(x=>x.value===255))m.escAfter=0;
+  const result=dss(s);if(result!=='exit'){
    s.ix=0xdead;s.iy=0xbeef;
    if(opts.clobberDss){s.d=0xa1;s.e=0xb2;s.c=0xc3;
     if(fn!==0x21){s.h=0xd4;s.l=0xe5;s.b=0xf6;}if(fn!==0x31)s.a=0x97;}
@@ -48,7 +50,7 @@ function test(name,cli,expected=0,opts={}) {
  results.push({name,ok,exit:run.exitCode,expected,text:m.text,errors,variantSha256:opts.exe?createHash('sha256').update(opts.exe).digest('hex'):undefined,steps:run.steps,maxWindowUs:m.maxWindowUs,maxDiUs:m.maxDiUs});return card;
 }
 const listing=readFileSync(join(build,'ultrags/dss/ugcfg.lst'),'utf8');
-function label(name){const line=listing.split('\n').find(l=>l.split(';')[0].trimEnd().endsWith(name+':'));const m=line?.match(/\+*([0-9A-F]{4})\s+.*$/);if(!m)throw Error('missing '+name);return parseInt(m[1],16)-h.loadAddr;}
+function label(name){const m=listing.replace(/;.*$/gm,'').match(new RegExp('^\\s*\\d+\\+*\\s*([0-9A-F]{4})\\s+'+name+':\\s*$','m'));if(!m)throw Error('missing '+name);return parseInt(m[1],16)-h.loadAddr;}
 const badPort=Buffer.from(bytes),data8=label('UG_CFG_DATA8');
 // Data8: CALL open / LD A,(C1D2). Old UG_OPEN read CONTROL as magic.
 if(badPort[data8+3]!==0x3a||badPort[data8+4]!==0xd2)throw Error('unexpected DATA8 instruction');badPort[data8+4]=0xd0;
@@ -89,6 +91,58 @@ test('previous-save-not-our-acceptance','SAVE',8,{card:previousSave,check:c=>c.s
 test('delayed-ready','ULTRAGS /SAVE',0,{readyAtUs:1800000,check:c=>c.saves===1&&c.flash.mode===8});
 for(const [name,o,code] of [['lost-save',{dropSave:true},9],['lost-answer',{lostSaveResult:true},9],['fast-unobserved',{saveDelayUs:1},9],['save-failed',{saveFail:true},9],['save-timeout',{saveTimeout:true},8]])
  test(name,'ULTRAGS /SAVE /DIAG',code,{...o,check:(c,m)=>c.mode===8&&c.reboots===1&&c.saveRequests===1&&m.text.includes('already active')&&m.text.includes('SAVE_UNCONFIRMED')});
+// Transient FF on CFG_RESULT is a missed non-consuming sample, not a
+// reason to replay SAVE. In particular a whole lost BUSY phase must still
+// remain unconfirmed even if Flash really changed. No stream reads repeat.
+function saveResultFault(mask,opts={}) {
+ const c=new ConfigCard(catalog,{mode:8,saveDelayUs:50000,...opts});
+ c.flash.mode=1;
+ const rd=c.readPort.bind(c);let count=0;
+ c.saveSamples=[];
+ c.readPort=p=>{
+  const v=rd(p);
+  if(p!==0x1d2||c.sel!==0x78||!c.saveRequests)return v;
+  const sample={index:++count,result:v,done:!!c.saves};
+  const value=mask(sample,c)?255:v;
+  c.saveSamples.push({...sample,value});return value;
+ };
+ return c;
+}
+for(const [name,mask] of [
+ ['initial',s=>s.index<=2],['middle',s=>s.index===3||s.index===5],
+ ['first-completion',(s,c)=>s.done&&!c.maskedCompletion&&(c.maskedCompletion=true)],
+])for(const slot of [0,1])for(const iff of [0,1]) {
+ const c=saveResultFault(mask);
+ test(`SAVE transient FF ${name} slot${slot} iff${iff}`,'SAVE /DIAG /SLOT:'+slot,0,
+  {card:c,slot,iff,clobberDss:true,check:(c,m)=>c.saveRequests===1&&c.saves===1&&c.flash.mode===8&&
+   c.saveSamples.some(s=>s.value===255)&&c.saveSamples.some(s=>s.value===5)&&
+   c.responseReads===42&&!c.overreads&&m.text.includes('save_result_ff_reads=000')});
+}
+const allBusyLost=saveResultFault(s=>s.result===5);
+test('SAVE FF throughout BUSY remains unconfirmed','SAVE /DIAG',9,{card:allBusyLost,
+ check:(c,m)=>c.saveRequests===1&&c.saves===1&&c.flash.mode===8&&
+ !c.saveSamples.some(s=>s.value===5)&&m.text.includes('SAVE_UNCONFIRMED')});
+const corruptedSave=saveResultFault(s=>s.index>=2&&s.index<=9),corruptedRead=corruptedSave.readPort.bind(corruptedSave);
+corruptedSave.readPort=p=>{
+ const v=corruptedRead(p),s=corruptedSave.saveSamples.at(-1);
+ if(p===0x1d2&&corruptedSave.sel===0x78&&corruptedSave.saveRequests&&s?.index===10){s.value=0x9f;return 0x9f;}
+ return v;
+};
+test('SAVE BUSY eight FF then corrupted 9F remains failure','SAVE /DIAG',9,{card:corruptedSave,
+ check:(c,m)=>c.saveRequests===1&&c.saveSamples.filter(s=>s.value===255).length===8&&
+ m.text.includes('save_result_ff_reads=0008')&&m.text.includes('received=9F')});
+const ffCancel=saveResultFault(()=>true);
+test('SAVE FF ESC does not replay','SAVE /DIAG',10,{card:ffCancel,escInSave:true,
+ check:c=>c.saveRequests===1&&c.saveSamples.length===1});
+test('SAVE FF stopped clock bounded','SAVE /DIAG',9,{mode:8,lostSaveResult:true,stopped:true,budget:60000000,
+ check:c=>c.saveRequests===1&&c.now<40000000});
+const oldSave=Buffer.from(bytes),saveStart=label('SAVE'),saveEnd=label('START_WAIT');
+const sites=[];
+for(let i=saveStart;i<saveEnd-8;i++)if(oldSave[i]===0xfe&&oldSave[i+1]===5&&oldSave[i+2]===0x28&&oldSave[i+4]===0xfe&&oldSave[i+5]===255&&oldSave[i+6]===0x20)sites.push(i);
+if(sites.length!==1)throw Error('SAVE sample mutation instruction mismatch');
+oldSave[sites[0]+6]=0x18; // reproduce the previous immediate failure on FF
+test('regression SAVE immediate FF failure','SAVE /DIAG',9,{exe:oldSave,card:saveResultFault(s=>s.index<=2),
+ check:(c,m)=>c.saveRequests===1&&c.saveSamples.length===1&&m.text.includes('SAVE_UNCONFIRMED')});
 test('info-visible-before-api-failure','INFO /DIAG',3,{mode:8,api:2,check:(c,m)=>m.text.includes('active=08 ULTRAGS')&&m.text.includes('firmware=PicoGUS model')&&m.text.includes('API_VERSION')});
 for(const n of [0,1,35,37,128])test('INFO announced length '+n,'VERIFY /DIAG',9,{mode:8,infoLength:n,check:c=>c.responseReads===n+6&&!c.overreads&&!c.response.length&&!c.resets});
 test('INFO short error response','VERIFY /DIAG',9,{mode:8,infoLength:0,infoStatus:5,check:c=>c.responseReads===6&&!c.overreads&&!c.response.length&&!c.resets});

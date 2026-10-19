@@ -88,10 +88,16 @@ UG_LIB_INIT:
 	ld	(UG_METHOD),a		; 0 = FIXED
 	ld	(UG_ALIASCFG),a
 	ld	(UG_ALIASCFG+1),a
+    IFDEF UG_EXPERIMENT_WINDOW
+    ASSERT UG_EXPERIMENT_WINDOW == 8 || UG_EXPERIMENT_WINDOW == 64 || UG_EXPERIMENT_WINDOW == 256
+    ld hl,UG_EXPERIMENT_WINDOW
+    ld (UG_CHUNK),hl
+    ELSE
 	ld	a,UG_CHUNK_SLOW
 	ld	(UG_CHUNK),a
 	xor	a
 	ld	(UG_CHUNK+1),a
+    ENDIF
 	ret
 
 ; A=1: 21MHz, A=2: 3.5MHz, anything else: unknown/conservative.
@@ -124,6 +130,21 @@ UG_CPU_PROFILE:
 ; Always cap the actual window, including caller-supplied profiles.
 ; out BC=1..8; clobbers AF. Zero/oversized chunks use the safe default.
 UG_SAFE_CHUNK:
+    IFDEF UG_EXPERIMENT_WINDOW
+    ld bc,(UG_CHUNK)
+    ld a,b
+    or c
+    jr z,.cap
+    push hl
+    ld hl,UG_EXPERIMENT_WINDOW
+    or a
+    sbc hl,bc
+    pop hl
+    ret nc
+.cap:
+    ld bc,UG_EXPERIMENT_WINDOW
+    ret
+    ELSE
 	ld bc,(UG_CHUNK)
 	ld a,b
 	or a
@@ -135,6 +156,7 @@ UG_SAFE_CHUNK:
 .cap:
 	ld bc,8
 	ret
+    ENDIF
 
 ; ------------------------------------------------- internal window helper
 ; UG_WIN_OPEN: open the ISA window on the SESSION slot/base.
@@ -680,6 +702,8 @@ UG_XFER_SAVE:
 	ld	(UGXFER.SENT+1),a
 	ld	(UGXFER.DIR),a
     ld (UGXFER.STAGE),a
+    ld a,255
+    ld (UGXFER.KEYHI),a
 	ret
 
 ; ------------------------------------------- UG_XFER_VALIDATE (int.)
@@ -904,6 +928,13 @@ UG_WRITE:
 	push	bc
 	call	UG_WIN_OPEN
 	jp	c,.w_failpop
+    IFDEF UG_EXPERIMENT_TURBO_WRITE
+    ; Explicit experimental binary only. Request/config/GS/read windows
+    ; retain Turbo off. No ISA reads occur before this window is closed.
+    ld bc,UG_PORT_SYS_RAM
+    ld a,3
+    out (c),a
+    ENDIF
 	ld	hl,(UGXFER.BUF)
 	ld	de,(UGXFER.SENT)
 	add	hl,de			; src = buf + sent
@@ -1253,8 +1284,21 @@ UG_READ:
 	ret
 
     IFDEF UG_DSS_TIMED
-; Keyboard/deadline opportunity between payload chunks, with context restored.
+; Check ESC on entering each 256-byte region, with ISA already closed.
+; IRQ/MMU/Turbo are still restored after EVERY chunk (release cap remains 8).
+; For arbitrary caller chunk sizes <=8 the poll gap is at most 263 bytes.
 UG_BULK_YIELD:
+    ld a,(UGXFER.SENT+1)
+    push hl
+    ld hl,UGXFER.KEYHI
+    cp (hl)
+    jr nz,.poll
+    pop hl
+    or a
+    ret
+.poll:
+    ld (hl),a
+    pop hl
     push bc
     push de
     push hl
