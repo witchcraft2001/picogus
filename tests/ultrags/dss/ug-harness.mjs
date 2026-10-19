@@ -288,7 +288,11 @@ export class SprinterMachine {
         let bytes=this.files.get(file.path);
         if(st.c===0x13){n=Math.min(n,Math.max(0,bytes.length-file.pos));this.mem.set(bytes.subarray(file.pos,file.pos+n),ptr);}
         else {if(file.pos+n>bytes.length){const grow=Buffer.alloc(file.pos+n);bytes.copy(grow);bytes=grow;this.files.set(file.path,bytes);}bytes.set(this.mem.subarray(ptr,ptr+n),file.pos);}
-        file.pos+=n;st.d=n>>8;st.e=n&255;success();
+        file.pos+=n;
+        // WRITE's optional FAT flush does not preserve DE in real DSS.
+        // READ still returns its count. Position queries are authoritative.
+        const returned=st.c===0x14?(this.disk.writeReturnDE??n):n;
+        st.d=returned>>8;st.e=returned&255;success();
       }
       if(this.disk.delayUs)this.tick(this.disk.delayUs*this.cpuHz/1e6);
       st.pc=ret;st.sp=sp+2;return null;

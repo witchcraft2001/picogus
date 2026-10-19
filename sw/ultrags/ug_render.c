@@ -20,6 +20,44 @@ static void peak_update(uint16_t *peak,int32_t sample) {
     if(n>*peak) *peak=(uint16_t)n;
 }
 
+/* All callers are bounded fixed-point audio values, never INT64_MIN.
+ * Avoid signed division helpers in the per-sample Cortex-M0+ path while
+ * retaining nearest/half-away-from-zero rounding exactly. */
+static inline int32_t round_shift(int64_t value,unsigned bits) {
+    uint64_t magnitude=(uint64_t)(value<0?-value:value);
+    int32_t rounded=(int32_t)((magnitude+(1ull<<(bits-1)))>>bits);
+    return value<0?-rounded:rounded;
+}
+
+/* Exact floor division for the bounded pan numerators (sample <=32768).
+ * The shifted quotient underestimates by at most 2/3; the small remainder
+ * correction is exact. No 64-bit multiply or divide is needed. */
+static inline uint32_t div255(uint32_t n) {
+    uint32_t q=(n>>8)+(n>>16);
+    uint32_t r=n-((q<<8)-q)+1;
+    return q+((r+(r>>8))>>8);
+}
+static inline uint32_t div127(uint32_t n) {
+    uint32_t q=(n>>7)+(n>>14)+(n>>21);
+    uint32_t r=n-((q<<7)-q)+1;
+    return q+((r+(r>>7))>>7);
+}
+static inline int32_t pan255(int32_t sample,unsigned weight) {
+    uint32_t n=(uint32_t)(sample<0?-sample:sample)*weight+127;
+    int32_t q=(int32_t)div255(n);
+    return sample<0?-q:q;
+}
+static inline int32_t balance127(int32_t sample,unsigned weight) {
+    uint32_t n=(uint32_t)(sample<0?-sample:sample)*weight+63;
+    int32_t q=(int32_t)div127(n);
+    return sample<0?-q:q;
+}
+static inline int32_t balance128(int32_t sample,unsigned weight) {
+    uint32_t n=(uint32_t)(sample<0?-sample:sample)*weight+64;
+    int32_t q=(int32_t)(n>>7);
+    return sample<0?-q:q;
+}
+
 static int ug_fetch_byte(ug_mixer *m, ug_lane *l, uint32_t byte_off,
                          uint8_t *out) {
     if (byte_off >= m->mem.size || !m->mem.read) {
@@ -79,12 +117,49 @@ static int32_t ug_fetch_sample(ug_mixer *m, ug_lane *l, uint32_t idx) {
     return (int32_t)(int16_t)(b0 | ((uint16_t)b1 << 8));
 }
 
+static inline int32_t cached_sample(const uint8_t *p,uint8_t fmt) {
+    if(fmt==UG_FMT_S16LE) return (int16_t)(p[0]|((uint16_t)p[1]<<8));
+    return fmt==UG_FMT_S8?(int32_t)(int8_t)*p*256:((int32_t)*p-128)*256;
+}
+
+/* Both interpolation taps normally live in the same cached line. Resolve it
+ * once per lane/frame instead of looking up each byte of both S16 taps. Misses,
+ * loop edges, unaligned S16 and bounds faults keep the normal checked path. */
+static inline bool cached_pair(ug_mixer *m,ug_lane *l,uint32_t pos,uint32_t next,
+                               bool interpolate,int32_t *s0,int32_t *s1) {
+    if(pos>=l->len_samples || next>=l->len_samples || !m->mem.read) return false;
+    unsigned bytes=l->fmt==UG_FMT_S16LE?2u:1u;
+    unsigned channels=l->mode==UG_LANE_MONO?1u:2u;
+    uint32_t a=l->src_offset+(pos*channels+l->ch_off)*bytes;
+    uint32_t b=interpolate?l->src_offset+(next*channels+l->ch_off)*bytes:a;
+    if(a>=m->mem.size || bytes>m->mem.size-a || b>=m->mem.size || bytes>m->mem.size-b) return false;
+    uint32_t tag=a&~(UG_CACHE_LINE-1u),ao=a-tag,bo=b-tag;
+    /* b can precede tag at a loop wrap. Compare before adding bytes so a
+     * wrapped unsigned offset cannot turn into a small in-line offset. */
+    if(ao>UG_CACHE_LINE-bytes || bo>UG_CACHE_LINE-bytes) return false;
+    for(unsigned i=0;i<UG_CACHE_LINES;i++) if(l->cache_tag[i]==tag) {
+        *s0=cached_sample(l->cache[i]+ao,l->fmt);
+        *s1=interpolate?cached_sample(l->cache[i]+bo,l->fmt):*s0;
+        unsigned hits=bytes*(interpolate?2u:1u);
+        if(m->stats.cache_hits>UINT32_MAX-hits) m->stats.cache_hits=UINT32_MAX;
+        else m->stats.cache_hits+=hits;
+        l->cache_victim=(uint8_t)(i^1u);
+        return true;
+    }
+    return false;
+}
+
 static uint32_t ug_wrap(ug_lane *l, uint64_t pos_i) {
     /* The intro precedes loop_start; later wraps stay inside the loop. */
     if (pos_i < l->loop_end) return (uint32_t)pos_i;
     uint32_t llen = l->loop_end - l->loop_start;
     uint64_t rel = pos_i - l->loop_start;
-    if (llen && rel >= llen) rel %= llen;  /* handles multi-turn steps */
+    if (llen && rel >= llen) {
+        /* PSRAM positions fit u32; retain the wide fallback for arbitrary
+         * ug_mem_if users and still handle multi-turn short loops. */
+        if(rel<=UINT32_MAX) rel=(uint32_t)rel%llen;
+        else rel%=llen;
+    }
     return l->loop_start + (uint32_t)rel;
 }
 
@@ -121,8 +196,6 @@ static int32_t ug_lane_tick(ug_mixer *m, ug_lane *l) {
     uint32_t pos = (uint32_t)(l->phase >> 32);
     uint32_t frac = (uint32_t)(l->phase & 0xFFFFFFFFull);
 
-    int32_t s0 = ug_fetch_sample(m, l, pos);
-
     /* second tap position */
     uint32_t pos1;
     if (l->looped) {
@@ -133,17 +206,23 @@ static int32_t ug_lane_tick(ug_mixer *m, ug_lane *l) {
         pos1 = pos + 1;
         if(pos1>=l->len_samples) pos1=(l->repeats==0 || l->repeats>1)?0:l->len_samples-1;
     }
-    int32_t s1 = ug_fetch_sample(m, l, pos1);
+    int32_t s0,s1;
+    if(!cached_pair(m,l,pos,pos1,frac!=0,&s0,&s1)) {
+        s0=ug_fetch_sample(m,l,pos);
+        s1=frac?ug_fetch_sample(m,l,pos1):s0;
+    }
     if (l->failed) { l->active=0; return 0; }
 
     /* linear interpolation, rounding half away from zero */
-    int64_t weighted = (int64_t)s0 * (0x100000000ll - frac) +
-                       (int64_t)s1 * frac;
-    int32_t s = (int32_t)ug_rdiv(weighted, 1ll << 32);
+    int32_t s=s0;
+    if(frac) {
+        int64_t weighted=(int64_t)s0*0x100000000ll+(int64_t)(s1-s0)*frac;
+        s=round_shift(weighted,32);
+    }
 
     /* Multiply all three gains before rounding, preserving quiet samples. */
-    int64_t gv = (int64_t)s * l->gain * l->class_gain * l->class_master;
-    s = (int32_t)ug_rdiv(gv, 64ll*64*64);
+    uint32_t gain=(uint32_t)l->gain*l->class_gain*l->class_master;
+    if(gain!=64u*64*64) s=round_shift((int64_t)s*gain,18);
 
     ug_advance(l);
     return s;
@@ -225,18 +304,21 @@ int ug_mixer_render(ug_mixer *m, int16_t *out, uint32_t frames) {
             peak_update(&m->lane_peak_current[i],s);
             if (!s) continue;
             if (l->mode == UG_LANE_LEFT) {       /* stereo balance, left sample */
-                accL += l->pan<=128 ? s : (int32_t)ug_rdiv((int64_t)s*(255-l->pan),127);
+                accL += l->pan<=128 ? s : balance127(s,255-l->pan);
             } else if (l->mode == UG_LANE_RIGHT) { /* stereo balance, right sample */
-                accR += l->pan>=128 ? s : (int32_t)ug_rdiv((int64_t)s*l->pan,128);
+                accR += l->pan>=128 ? s : balance128(s,l->pan);
             } else {
                 /* mono pan: L = s*(255-pan)/255, R = s*pan/255 */
-                accL += (int32_t)ug_rdiv((int64_t)s * (255 - l->pan), 255);
-                accR += (int32_t)ug_rdiv((int64_t)s * l->pan, 255);
+                if(l->pan==0) accL+=s;
+                else if(l->pan==255) accR+=s;
+                else { accL+=pan255(s,255-l->pan);accR+=pan255(s,l->pan); }
             }
         }
         /* master volume scale, then saturate to S16 without overflow */
-        accL = (int32_t)ug_rdiv((int64_t)accL * m->vol_q15, 32768);
-        accR = (int32_t)ug_rdiv((int64_t)accR * m->vol_q15, 32768);
+        if(m->vol_q15!=32768) {
+            accL=round_shift((int64_t)accL*m->vol_q15,15);
+            accR=round_shift((int64_t)accR*m->vol_q15,15);
+        }
         peak_update(&m->peak_current[0],accL); peak_update(&m->peak_current[1],accR);
         if(++m->peak_frames==960) {
             memcpy(m->peaks,m->peak_current,sizeof(m->peaks));

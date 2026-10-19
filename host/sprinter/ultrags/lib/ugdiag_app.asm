@@ -80,34 +80,113 @@ PHASECOUNT EQU V+140
 	INCLUDE "ugmem.inc"
 ENTRY:
     IFDEF UGTEST_S4
-    ld a,(ix+1)
-    and 0xDF
-    cp 'F'
-    jp z,S4TEST.ENTRY
-    ld a,(ix+2)
-    and 0xDF
-    cp 'C'
-    jp z,S4TEST.ENTRY
-    ld a,(ix+1)
+    ; Inspect complete tokens within the DSS length, leaving IX unchanged for
+    ; the selected parser. DSS may retain leading whitespace; options may also
+    ; precede the suite. Fixed offsets silently sent these calls to BUS syntax.
+    ld b,(ix+0)
+    ld a,b
+    cp 160
+    jp nc,.diag
+    push ix
+    pop hl
+    inc hl
+.suite_scan:
+    ld a,b
+    or a
+    jp z,.diag
+    ld a,(hl)
+    cp ' '
+    jp z,.suite_skip
+    cp 9
+    jp z,.suite_skip
+    ld d,h
+    ld e,l
+    ld c,0
+.suite_token:
+    ld a,b
+    or a
+    jr z,.suite_end
+    ld a,(hl)
+    cp ' '
+    jr z,.suite_end
+    cp 9
+    jr z,.suite_end
+    inc hl
+    dec b
+    inc c
+    jr .suite_token
+.suite_end:
+    push hl
+    ld h,d
+    ld l,e
+    ld a,c
+    cp 2
+    jr z,.suite_fx
+    cp 3
+    jr z,.suite_pcm
+    cp 5
+    jr nz,.suite_other
+    ld a,(hl)
     and 0xDF
     cp 'P'
-    jr nz,.diag
-    ld a,(ix+2)
+    jr nz,.suite_other
+    inc hl
+    ld a,(hl)
     and 0xDF
     cp 'R'
-    jr nz,.diag
-    ld a,(ix+3)
+    jr nz,.suite_other
+    inc hl
+    ld a,(hl)
     and 0xDF
     cp 'O'
-    jr nz,.diag
-    ld a,(ix+4)
+    jr nz,.suite_other
+    inc hl
+    ld a,(hl)
     and 0xDF
     cp 'T'
-    jr nz,.diag
-    ld a,(ix+5)
+    jr nz,.suite_other
+    inc hl
+    ld a,(hl)
     and 0xDF
     cp 'O'
-    jp z,S4TEST.ENTRY
+    jr z,.suite_native
+    jr .suite_other
+.suite_pcm:
+    ld a,(hl)
+    and 0xDF
+    cp 'P'
+    jr nz,.suite_other
+    inc hl
+    ld a,(hl)
+    and 0xDF
+    cp 'C'
+    jr nz,.suite_other
+    inc hl
+    ld a,(hl)
+    and 0xDF
+    cp 'M'
+    jr z,.suite_native
+    jr .suite_other
+.suite_fx:
+    ld a,(hl)
+    and 0xDF
+    cp 'F'
+    jr nz,.suite_other
+    inc hl
+    ld a,(hl)
+    and 0xDF
+    cp 'X'
+    jr nz,.suite_other
+.suite_native:
+    pop hl
+    jp S4TEST.ENTRY
+.suite_other:
+    pop hl
+    jp .suite_scan
+.suite_skip:
+    inc hl
+    dec b
+    jp .suite_scan
 .diag:
     ENDIF
 	; Copy CLI before any DSS call may clobber IX.

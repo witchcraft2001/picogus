@@ -1,0 +1,2 @@
+# Optional environment used by the required linked-ARM audio instruction gate.
+unicorn==2.1.4

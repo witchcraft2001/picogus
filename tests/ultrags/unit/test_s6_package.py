@@ -13,7 +13,7 @@ def verify(package, expected):
 verify(original,True)
 with tempfile.TemporaryDirectory(prefix='ultrags-s6-package-') as directory:
     temp=Path(directory)
-    for name in ('PGULTRA.UF2','s6-storage-host','s6-pcm-host','s6-render-host','s6-device-host',
+    for name in ('PGULTRA.UF2','s6-storage-host','s6-pcm-host','s6-render-host','s6-math-host','s6-device-host',
                  's6-host-evidence.json','firmware-evidence.json','REPORT-S6.txt','s6-storage.log',
                  'fixtures/raw-u8-mono-11025.raw','UGPLAY.EXE','UGMON.EXE','ug-s6.zip','ug-s6.img',
                  's6-run.json','s6-commands.jsonl','s6-audio.s16le','s6-audio-index.jsonl'):

@@ -39,6 +39,15 @@ for(const line of readFileSync(join(build,'host/s6/s6-commands.jsonl'),'utf8').t
 console.log('PASS S6 shared production C/model vectors '+sharedCount);
 test('UGTEST rejects memory verb before hardware','UGTEST','FREE 1',1);
 test('UGTEST PCM help','UGTEST','PCM /?');
+// The outer BUS/native dispatcher must obey the same whitespace and option
+// placement contract as the native parser, before touching any hardware.
+for(const suite of ['PCM','FX'])for(const cli of [` ${suite}`,`\t${suite}`,`  ${suite.toLowerCase()} \t`,`/SLOT:0 ${suite}`,` /REAL\t${suite} /SLOT:1`])
+ test('UGTEST native dispatch '+JSON.stringify(cli),'UGTEST',cli,0,{slot:cli.includes('/SLOT:1')?1:0,
+  check:c=>!c.objects.size&&!c.foreground&&!c.fx.length});
+for(const cli of [' PROTO /?','\tproto /?','/SLOT:1 PROTO /?',' /? PCM',' /? FX'])
+ test('UGTEST native help dispatch '+JSON.stringify(cli),'UGTEST',cli,0,{check:(c,m)=>!c.calls.length&&!m.turboWrites&&m.text.includes('UGTEST PROTO|PCM|FX')});
+for(const cli of ['', ' ', '\t', 'P', 'PC', 'PCMX', 'FXTAIL', 'PROTOX', '/SLOT:0 PCMX', 'BUS PCM', 'PCM FX'])
+ test('UGTEST invalid dispatch '+JSON.stringify(cli),'UGTEST',cli,1);
 const raw=Buffer.alloc(257,192),opts='/RATE:11025 /BITS:8 /CH:1 /FMT:U8';
 function wav(n=48000,ch=1,bits=8,rate=48000) {const b=Buffer.alloc(44+n+(n&1));b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(ch,22);b.writeUInt32LE(rate,24);b.writeUInt32LE(rate*ch*bits/8,28);b.writeUInt16LE(ch*bits/8,32);b.writeUInt16LE(bits,34);b.write('data',36);b.writeUInt32LE(n,40);b.fill(192,44);return b;}
 function mod4(){const b=Buffer.alloc(1084+1024);b.write('M.K.',1080);b[950]=1;return b;}
@@ -136,6 +145,18 @@ let switched=false;test('WAIT specific replaced instance','UGPLAY','HANDLE 1 /LO
 card=new PcmCard(catalog);asset(card,2);test('stereo first','UGPLAY','FXHANDLE 1 /LOOP /VOICE:8',0,{card,check:c=>c.fx[0].mask===0x300});
 test('stereo second','UGPLAY','FXHANDLE 1 /LOOP /VOICE:10',0,{card,check:c=>c.fx[1].mask===0xc00});
 test('stereo NO_VOICE atomic','UGPLAY','FXHANDLE 1',7,{card,check:c=>c.fx.length===2&&c.objects.get(1).pins===2});
+// Real report: MOD plus the same stereo WAV twice at /GAIN:16. Two stereo
+// instances fill all four FX lanes; a third is an expected capacity error.
+{
+ const concurrent=new PcmCard(catalog);asset(concurrent,2);
+ test('MOD stereo workload upload','UGLOAD','FOUR.MOD /TYPE:MOD /VERIFY',0,{card:concurrent,files:{'FOUR.MOD':mod4()}});
+ test('MOD stereo workload start','UGPLAY','HANDLE 2 /LOOP',0,{card:concurrent});
+ for(let n=1;n<=2;n++)test('MOD stereo FX gain16 '+n,'UGPLAY','FXHANDLE 1 /LOOP /GAIN:16',0,{card:concurrent,
+  check:c=>!!c.foreground&&c.fx.length===n&&c.fx.every(x=>x.gain===16&&x.pan===128)&&c.fx[n-1].mask===(n===1?0x300:0xc00)});
+ test('MOD third stereo expected NO_VOICE','UGPLAY','FXHANDLE 1 /LOOP /GAIN:16',7,{card:concurrent,check:c=>!!c.foreground&&c.fx.length===2});
+ test('MOD stereo workload pause','UGPLAY','PAUSE',0,{card:concurrent,check:c=>c.foreground.paused&&c.fx.every(x=>!x.paused)});
+ test('MOD stereo workload monitor','UGMON','/COUNT:2 /HZ:1',0,{card:concurrent,check:c=>c.foreground.paused&&c.fx.length===2});
+}
 test('stereo higher priority steal','UGPLAY','FXHANDLE 1 /VOICE:8 /STEAL /PRIORITY:200 /LOOP',0,{card,check:c=>c.fx.length===2&&c.fx.some(x=>x.id===3&&x.mask===0x300)&&c.objects.get(1).pins===2});
 test('stereo odd voice rejected','UGPLAY','FXHANDLE 1 /VOICE:9',6,{card,check:c=>c.fx.length===2});
 for(const handle of [1,255,256,32767,32768,65535]){const c=new PcmCard(catalog);c.next=handle;asset(c);test('u16 handle '+handle,'UGPLAY',`HANDLE ${handle} /WAIT`,0,{card:c,check:c=>c.objects.has(handle)});}

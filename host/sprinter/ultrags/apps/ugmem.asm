@@ -1,6 +1,18 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; S3 memory tools. Real DSS/Z80, conservative eight-byte frame windows.
     DEFINE UG_DSS_TIMED
+    ; File payloads use bounded 256-byte windows. Control frames keep their
+    ; eight-byte windows, and all ISA accesses retain Turbo off. UGMEM and
+    ; the public library default remain unchanged.
+    IFNDEF UG_FILE_WINDOW ; reference builds can compare the previous cap8
+    IFDEF APP_LOAD
+    DEFINE UG_FILE_WINDOW 256
+    ELSE
+    IFDEF APP_DUMP
+    DEFINE UG_FILE_WINDOW 256
+    ENDIF
+    ENDIF
+    ENDIF
     ; Progress belongs to the standalone memory tool, not apps embedding it.
     IFNDEF APP_LOAD
     IFNDEF APP_DUMP
@@ -9,6 +21,21 @@
     IFNDEF APP_PROTO
     DEFINE UGMEM_PROGRESS
     ENDIF
+    ENDIF
+    ENDIF
+    ENDIF
+    ENDIF
+    ; File upload/readback needs the same CRC acceleration as ROUNDTRIP.
+    ; Keep the table out of the combined BUS/PROTO/PCM/FX executable.
+    IFNDEF UG_CRC_BITWISE ; reference-only profile for instruction comparisons
+    IFDEF UGMEM_PROGRESS
+    DEFINE UG_FAST_CRC
+    ELSE
+    IFDEF APP_LOAD
+    DEFINE UG_FAST_CRC
+    ELSE
+    IFDEF APP_DUMP
+    DEFINE UG_FAST_CRC
     ENDIF
     ENDIF
     ENDIF

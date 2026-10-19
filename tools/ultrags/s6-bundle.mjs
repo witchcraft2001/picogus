@@ -26,7 +26,7 @@ export function expectedFiles(root,build) {
   ...['ug-s6.zip','ug-s6.img','package-manifest.json'].map(n=>['ultrags/s6-containers/'+n,n]),
  ])map.set(name,join(build,path));
  for(const name of ['ultra-gs-docs/ultra-gs.md','host/sprinter/ultrags/docs/S6-README.md','host/sprinter/ultrags/docs/S6-REVIEW.md'])map.set(name.split('/').at(-1),join(root,name));
- for(const name of ['s6-storage','s6-pcm','s6-render','s6-device']){map.set(name+'-host',join(build,'host/s6',name));map.set(name+'.log',join(build,'host/s6',name+'.log'));}
+ for(const name of ['s6-storage','s6-pcm','s6-render','s6-math','s6-device']){map.set(name+'-host',join(build,'host/s6',name));map.set(name+'.log',join(build,'host/s6',name+'.log'));}
  for(const name of readdirSync(join(build,'ultrags/dss')).filter(n=>n.endsWith('.EXE')))map.set(name,join(build,'ultrags/dss',name));
  const regression=JSON.parse(readFileSync(join(build,'ultrags/logs/s2-firmware.json')));
  const provenance=new Set(regression.provenance.map(x=>x.path));

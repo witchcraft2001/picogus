@@ -69,8 +69,8 @@ UG_CRC32_FOLD:
 	inc	hl
 	xor	e
 	ld	e,a
-	IFDEF UGMEM_PROGRESS
-    ; The standalone memory tool has room for a byte table. Four aligned
+	IFDEF UG_FAST_CRC
+    ; Memory/file tools have room for a byte table. Four aligned
     ; planes implement (acc >> 8) XOR table[index], without changing ABI.
     push hl
     ld l,e
@@ -160,7 +160,7 @@ UG_CRC32:
 	call	UG_CRC32_END
 	ret
 
-    IFDEF UGMEM_PROGRESS
+    IFDEF UG_FAST_CRC
     ALIGN 256,0
 UG_CRC32_TABLE:
     ; Byte plane 0, reflected polynomial EDB88320h.

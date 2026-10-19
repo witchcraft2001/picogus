@@ -36,6 +36,11 @@ SAVEDSOURCE EQU V+158
 FILEOUTPUT EQU V+159
 SLOW EQU V+160
 DATATRANS EQU V+161
+    IFDEF APP_DUMP
+WRITEPOS EQU V+162 ; before WRITE, independent of DSS-returned DE
+FILEFN EQU V+166
+FILEAF EQU V+167 ; F,A from the last file call (before cleanup)
+    ENDIF
     IFDEF UGMEM_PROGRESS
 ROUND_PHASE EQU V+162
     ENDIF
@@ -266,11 +271,25 @@ BLOB_SETUP:
     ret
 ; Keep DSS-returned AF/DE, preserve IX/IY for all file calls except seek.
 FILECALL:
+    IFDEF APP_DUMP
+    push af
+    ld a,c
+    ld (FILEFN),a
+    pop af
+    ENDIF
     push ix
     push iy
     rst 0x10
     pop iy
     pop ix
+    IFDEF APP_DUMP
+FILE_RECORD:
+    push hl
+    push af
+    pop hl
+    ld (FILEAF),hl
+    pop hl
+    ENDIF
     ret
 CLOSE_FILE:
     ; Track the handle even for UGDUMP's existence probe. Retry a failed
@@ -295,11 +314,30 @@ CLOSE_FILE:
     ld (FILEOPEN),a
     ret
 FILE_ERROR:
+    IFDEF APP_DUMP
+    ld hl,file_diag_text
+    call SHOW
+    ld a,(FILEFN)
+    call HEX8
+    ld hl,file_a_text
+    call SHOW
+    ld a,(FILEAF+1)
+    call HEX8
+    ld hl,file_f_text
+    call SHOW
+    ld a,(FILEAF)
+    call HEX8
+    call NL
+    ENDIF
     ld hl,file_reason
     ld (REASON),hl
     ld a,5
     jp EXIT
 SEEK:
+    IFDEF APP_DUMP
+    ld a,0x15
+    ld (FILEFN),a
+    ENDIF
     push ix
     push iy
     ld a,(FILEHANDLE)
@@ -311,6 +349,9 @@ SEEK:
     ld (NUM32+2),hl
     pop iy
     pop ix
+    IFDEF APP_DUMP
+    jp FILE_RECORD
+    ENDIF
     ret
 OPEN_INPUT:
     ld hl,(ARGS)
@@ -705,6 +746,10 @@ FOLD_BUFFER:
     ret
 IO_BLOCK:
     ; A=13h read BUF or 14h write BACK. Complete short operations.
+    IFDEF APP_DUMP
+    cp 0x14
+    jp z,DISK_WRITE_BLOCK
+    ENDIF
     ld (IOSIZE),a
     ld hl,BUF
     cp 0x13
@@ -740,6 +785,65 @@ IO_BLOCK:
     or l
     jr nz,.loop
     ret
+    IFDEF APP_DUMP
+DISK_WRITE_BLOCK:
+    ; DSS WRITE may flush FAT after its data path. That flush clobbers DE
+    ; even on success (DSS/API/Write.asm -> WRITE_FAT_TABLE). Measure the
+    ; committed position delta instead; never repeat an already written byte.
+    ld hl,BACK
+    ld (IOPTR),hl
+    ld hl,(BLOCK)
+    ld (IOLEFT),hl
+.loop:
+    ld b,1 ; query current position, signed offset = 0
+    call SEEK
+    jp c,FILE_ERROR
+    ld hl,NUM32
+    ld de,WRITEPOS
+    ld bc,4
+    ldir
+    ld hl,(IOPTR)
+    ld de,(IOLEFT)
+    ld a,(FILEHANDLE)
+    ld c,0x14
+    call FILECALL
+    jp c,FILE_ERROR
+    ld b,1
+    call SEEK
+    jp c,FILE_ERROR
+    ; Full 32-bit subtraction, including a 64 KiB crossing. Reject a
+    ; backwards position, a zero advance, or more than requested.
+    ld hl,(NUM32)
+    ld de,(WRITEPOS)
+    or a
+    sbc hl,de
+    push hl
+    ld hl,(NUM32+2)
+    ld de,(WRITEPOS+2)
+    sbc hl,de
+    pop de
+    jp c,FILE_ERROR
+    ld a,h
+    or l
+    jp nz,FILE_ERROR
+    ld a,d
+    or e
+    jp z,FILE_ERROR
+    ld hl,(IOLEFT)
+    or a
+    sbc hl,de
+    jp c,FILE_ERROR
+    ld (IOLEFT),hl
+    push hl
+    ld hl,(IOPTR)
+    add hl,de
+    ld (IOPTR),hl
+    pop hl
+    ld a,h
+    or l
+    jr nz,.loop
+    ret
+    ENDIF
 COMPARE_BLOCK:
     ld hl,BUF
     ld de,BACK
@@ -1334,6 +1438,11 @@ length_prefix: DB "/LENGTH:",0
 bulk_text: DB "transport=BULK",0
 path_text: DB "transport=GS_DATA",0
 file_reason: DB "FILE_IO",0
+    IFDEF APP_DUMP
+file_diag_text: DB "dss_fn=0x",0
+file_a_text: DB " a=0x",0
+file_f_text: DB " flags=0x",0
+    ENDIF
 verify_reason: DB "DATA_MISMATCH",0
 partial_text: DB "INCOMPLETE output file retained",13,10,0
 alloc_unknown: DB "ALLOC_RESULT_UNKNOWN",0

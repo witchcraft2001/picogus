@@ -50,7 +50,7 @@ function test(name,app,cli,expected=0,opts={}) {
  for(const line of listing.split('\n'))if(/UG_CRC32(?:_FOLD)?:\s*$/.test(line)) {
    const match=line.match(/\+*([0-9A-F]{4})\s+UG_CRC32/);if(match)m.crcEntries.add(parseInt(match[1],16));
  }
- const dss=m.dssCall.bind(m);m.dssCall=st=>{if(st.c===0x31&&opts.escInGrant&&card.transfer?.granted)m.escAfter=0;const fn=st.c,v=dss(st);if(v!=='exit'){if(fn!==0x15)st.ix=0xdead;st.iy=0xbeef;}return v;};
+ const dss=m.dssCall.bind(m);m.dssCall=st=>{if(st.c===0x31&&card.transfer?.granted&&(opts.escInGrant||card.transfer.done>=opts.escProgress))m.escAfter=0;const fn=st.c,v=dss(st);opts.onDss?.(fn,st,m,v);if(v!=='exit'){if(fn!==0x15)st.ix=0xdead;st.iy=0xbeef;}return v;};
  m.mem.set(bytes,h.loadAddr);
  const run=runImage(Z80,m,{entry:h.entry,stack:h.stack,iff:opts.iff??1,budget:opts.budget??100000000});
  card.readPort=rawRead;card.writePort=rawWrite;
@@ -81,6 +81,15 @@ function test(name,app,cli,expected=0,opts={}) {
  return {card,m};
 }
 const pattern=n=>Buffer.from(Array.from({length:n},(_,i)=>i^(i>>>8)^(i>>>16)^0xa5));
+for(const slot of [0,1])for(const n of [1,7,8,9,63,64,65,255,256,257,1023,1024,1025]) {
+ const data=pattern(n),o={slot,cpuHz:3500000,iff:n&1,files:{'TAIL.BIN':data}};
+ const {card}=test(`file cap256 load tail ${n} slot${slot}`,'UGLOAD',`TAIL.BIN /TYPE:BLOB /VERIFY /SLOT:${slot}`,0,{
+  ...o,check:c=>c.objects.get(1)?.data.equals(data)
+ });
+ test(`file cap256 dump tail ${n} slot${slot}`,'UGDUMP',`1 TAIL.BIN /VERIFY /SLOT:${slot}`,0,{
+  ...o,files:{},card,disk:{writeReturnDE:0},check:(c,m)=>m.files.get('TAIL.BIN')?.equals(data)
+ });
+}
 test('non-DSS sticky error delayed reply','ST-RESPBUF','',0,{selftest:true,stickyError:1,simpleDelayUs:1000,check:c=>!c.objects.size});
 for(const slot of [0,1])for(const cpuHz of [21000000,3500000])for(const iff of [0,1]) {
  test(`proto-${slot}-${cpuHz}-${iff}`,'UGTEST',`PROTO /SLOT:${slot}`,0,{slot,cpuHz,iff,check:c=>!c.objects.size});
@@ -113,6 +122,16 @@ const input=pattern(70001),crc=crc32(input).toString(16).padStart(8,'0');
 const {card}=test('file >64K short read 120s disk pauses manifest FAST','UGLOAD',`TEST.BIN /TYPE:BLOB /CRC:${crc}`,0,{files:{'TEST.BIN':input},disk:{shortRead:509,delayUs:120000000},budget:600000000,check:c=>c.objects.get(1)?.data.equals(input)&&!c.resets});
 test('range dump short writes','UGDUMP','1 BACK.BIN /OFFSET:65535 /LENGTH:4096',0,{card,disk:{shortWrite:13,delayUs:120000000},check:(c,m)=>m.files.get('BACK.BIN')?.equals(input.subarray(65535,65535+4096))});
 test('verified range CRC short writes','UGDUMP','1 BACK.BIN /OFFSET:65535 /LENGTH:257 /VERIFY',0,{card,disk:{shortWrite:13},check:(c,m)=>m.files.get('BACK.BIN')?.equals(input.subarray(65535,65792))&&m.text.includes('host_crc=0x'+crc32(input.subarray(65535,65792)).toString(16).padStart(8,'0').toUpperCase())});
+for(const slot of [0,1])for(const iff of [0,1])for(const writeReturnDE of [0,0xffff]) {
+ test(`DSS FAT flush DE=${writeReturnDE} slot${slot} iff${iff}`,'UGDUMP',`1 BACK.BIN /VERIFY /SLOT:${slot}`,0,{
+  card,slot,iff,budget:600000000,disk:{writeReturnDE},
+  check:(c,m)=>m.files.get('BACK.BIN')?.equals(input)&&m.text.includes('host_crc=0x'+crc.toUpperCase())
+ });
+}
+test('short write with clobbered DE and 64KiB position crossing','UGDUMP','1 BACK.BIN /VERIFY',0,{
+ card,budget:600000000,disk:{shortWrite:509,writeReturnDE:0xdead},
+ check:(c,m)=>m.files.get('BACK.BIN')?.equals(input)&&m.text.includes('host_crc=0x'+crc.toUpperCase())
+});
 test('empty verified dump CRC','UGDUMP','1 EMPTY.BIN /LENGTH:0 /VERIFY',0,{card,check:(c,m)=>m.files.get('EMPTY.BIN')?.length===0&&m.text.includes('host_crc=0x00000000')});
 for(const cli of ['ROUNDTRIP 4294967296','ROUNDTRIP 0x100000000','ROUNDTRIP -1','ROUNDTRIP X','ROUNDTRIP 0'])test('bad '+cli,'UGMEM',cli,cli.endsWith(' 0')?4:1);
 test('bad READ_BEGIN CRC field','UGMEM','ROUNDTRIP 32 /VERIFY',9,{badReadCrc:true,check:c=>!c.objects.size});
@@ -129,7 +148,23 @@ test('write error incomplete output','UGDUMP','1 FAIL.BIN',5,{card,disk:{failFn:
 test('zero-length disk write incomplete','UGDUMP','1 FAIL.BIN',5,{card,disk:{shortWrite:0},check:(c,m)=>m.text.includes('INCOMPLETE')&&c.objects.get(1)?.data.equals(input)});
 test('delete error preserves existing file','UGDUMP','1 BACK.BIN /OVERWRITE',5,{card,files:{'BACK.BIN':Buffer.from('keep')},disk:{failFn:0x0e},check:(c,m)=>m.files.get('BACK.BIN').toString()==='keep'});
 test('input close error retries and releases own object','UGLOAD','TEST.BIN /TYPE:BLOB',5,{files:{'TEST.BIN':pattern(32)},disk:{failAt:5},check:c=>!c.objects.size});
-test('output close error marks incomplete','UGDUMP','1 BACK.BIN /LENGTH:17',5,{card,disk:{failAt:4},check:(c,m)=>m.text.includes('INCOMPLETE')&&m.files.get('BACK.BIN')?.equals(input.subarray(0,17))});
+test('output close error marks incomplete','UGDUMP','1 BACK.BIN /LENGTH:17',5,{card,disk:{failAt:6},check:(c,m)=>m.text.includes('INCOMPLETE')&&m.files.get('BACK.BIN')?.equals(input.subarray(0,17))});
+for(const failAt of [3,5])test('write position query error '+failAt,'UGDUMP','1 BACK.BIN /LENGTH:17',5,{
+ card,disk:{failAt},check:(c,m)=>m.text.includes('INCOMPLETE')&&m.text.includes('dss_fn=0x15 a=0x06')&&m.files.get('BACK.BIN')?.length===(failAt===3?0:17)
+});
+for(const delta of [-1,0,18]) {
+ let writes=0;
+ test('invalid write position delta '+delta,'UGDUMP','1 BACK.BIN /LENGTH:17',5,{
+  card,onDss(fn,st,m){if(fn===0x14){writes++;for(const f of m.fileHandles.values())f.pos=delta;}},
+  check:(c,m)=>writes===1&&m.text.includes('INCOMPLETE')&&m.files.get('BACK.BIN')?.equals(input.subarray(0,17))
+ });
+}
+test('cap256 file upload ESC releases object','UGLOAD','TEST.BIN /TYPE:BLOB',10,{
+ files:{'TEST.BIN':pattern(4097)},escProgress:256,check:c=>!c.objects.size&&!c.transfer
+});
+test('cap256 file dump ESC keeps partial output','UGDUMP','1 BACK.BIN',10,{
+ card,escProgress:256,check:(c,m)=>m.text.includes('INCOMPLETE')&&!c.transfer&&m.files.get('BACK.BIN')?.length===0
+});
 test('existence probe close error preserves complete file','UGDUMP','1 BACK.BIN /OVERWRITE',5,{card,files:{'BACK.BIN':Buffer.from('keep')},disk:{failAt:2},check:(c,m)=>!m.text.includes('INCOMPLETE')&&m.files.get('BACK.BIN').toString()==='keep'});
 test('ESC cleanup','UGMEM','ROUNDTRIP 65536',10,{escAfter:3,check:c=>!c.objects.size});
 test('held ESC during grant with delayed cleanup replies','UGMEM','ROUNDTRIP 1025',10,{escInGrant:true,simpleDelayUs:1000,check:c=>!c.objects.size&&c.trace.some(t=>t.op===32)});

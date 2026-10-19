@@ -233,7 +233,11 @@ const help = stage === 'CFG' ? [
   '',
 ].join('\r\n');
 add('HELP.TXT', Buffer.from(help, 'ascii'), 'generated');
-if (stage==='CFG') add('CFG.TXT',readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/CFG-FIX.md')),'host/sprinter/ultrags/docs/CFG-FIX.md');
+if (stage==='CFG') {
+ add('CFG.TXT',readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/CFG-FIX.md')),'host/sprinter/ultrags/docs/CFG-FIX.md');
+ add('AUDIO.TXT',readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/AUDIO-LOAD-TEST.md')),'host/sprinter/ultrags/docs/AUDIO-LOAD-TEST.md');
+ add('FILEIO.TXT',readFileSync(join(repoRoot,'host/sprinter/ultrags/docs/FILE-IO-TEST.md')),'host/sprinter/ultrags/docs/FILE-IO-TEST.md');
+}
 if (stage==='ISA') {
   for (const [name,src] of [['ISA.TXT','host/sprinter/ultrags/docs/ISA-TURBO.md'],
     ['ISASRC.JSN','tests/ultrags/reference/sprinter-isa-sources.json']])

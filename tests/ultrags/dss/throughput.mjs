@@ -102,6 +102,80 @@ function crcCall(p,data,split=false) {
 assert.equal(crc32(Buffer.from('123456789')),0xcbf43926);
 for(const n of [0,1,2,13,16,31,255,256,257,1023,1024])for(const split of [false,true])crcCall(mem,Buffer.from(Array.from({length:n},(_,i)=>(i*73+(i>>>3)*19)&255)),split);
 results.push({name:'compiled CRC table 1024 bytes, vectors, streaming and register ABI',ok:true});
+for(const name of ['UGLOAD','UGDUMP','UGPLAY']) {
+ const bytes=readFileSync(join(dir,name+'.EXE')),p={name,bytes,header:parseExe(bytes),list:readFileSync(join(dir,name.toLowerCase()+'.lst'),'utf8')};
+ const table=label(p.list,'UG_CRC32_TABLE'),data=bytes.subarray(table-p.header.loadAddr,table-p.header.loadAddr+1024);
+ assert.equal(table&255,0);assert.deepEqual(data,tableBytes);
+ for(const n of [0,1,13,255,256,257,1023,1024])for(const split of [false,true])crcCall(p,Buffer.from(Array.from({length:n},(_,i)=>(i*73+(i>>>3)*19)&255)),split);
+ results.push({name:name+' compiled fast CRC vectors/streaming/register ABI',ok:true,sha256:sha256(bytes),crcCycles1024:crcCall(p,Buffer.alloc(1024,0x5a))});
+}
+
+// Complete file operations against the same card/file model. Assemble an
+// otherwise identical bitwise-CRC reference, so the measured difference is
+// actual Z80 work rather than a C mock or a disabled verification path.
+for(const name of ['UGLOAD','UGDUMP']) {
+ const src=join(out,name+'-bitwise.asm'),ref=join(out,name+'-bitwise.EXE');
+ writeFileSync(src,`; SPDX-License-Identifier: GPL-2.0-or-later\n    DEFINE UG_CRC_BITWISE\n    INCLUDE "${name.toLowerCase()}.asm"\n`);
+ execFileSync(process.env.SJASMPLUS||'sjasmplus',[...['host/sprinter/ultrags/apps','host/sprinter/ultrags/include','host/sprinter/ultrags/lib'].map(p=>'--inc='+join(root,p)),
+  '--inc='+join(build,'ultrags/gen'),'--raw='+ref,src],{stdio:'pipe'});
+ const input=Buffer.from(Array.from({length:65537},(_,i)=>(i*73+(i>>>8)*19)&255));
+ function fileRun(bytes,cli,card,files) {
+  const h=parseExe(bytes),m=new SprinterMachine({card,commandLine:cli,movingClock:true,files,logLimit:0});
+  let payload=0;const windows=[],wr=m.memWrite,rd=m.memRead,io=m.ioWrite;
+  m.memWrite=(a,v)=>{if(m.isaOpen&&m.isaAddr(a)===card.base)payload++;return wr(a,v);};
+  m.memRead=a=>{if(m.isaOpen&&m.isaAddr(a)===card.base)payload++;return rd(a);};
+  m.ioWrite=(p,v)=>{if(p===PORT_SYSTEM&&v===1&&m.isaOpen&&payload){windows.push(payload);payload=0;}return io(p,v);};
+  m.mem.set(bytes,h.loadAddr);const r=runImage(Z80,m,{entry:h.entry,stack:h.stack,iff:1,budget:1500000000});
+  assert.equal(r.exitCode,0,m.text);assert.deepEqual(m.violations,[]);assert(m.maxDiUs<10000&&m.maxWindowUs<10000);
+  assert.equal(m.page3,m.page3Init);assert.equal(m.system,m.systemInit);assert.equal(r.end.iff1,1);assert.equal(m.fileHandles.size,0);
+  assert(windows.every(n=>n<=256));
+  return {m,steps:r.steps,cycles:r.cycles,simulatedSeconds:m.elapsedTicks/21000000,dataWindows:windows.length,maxPayloadWindow:Math.max(...windows)};
+ }
+ for(const verify of [false,true]) {
+  const rows=[];
+  for(const [profile,bytes] of [['bitwise-reference',readFileSync(ref)],['table',readFileSync(join(dir,name+'.EXE'))]]) {
+   const card=new SlowCard(catalog);let run;
+   if(name==='UGLOAD') {
+    run=fileRun(bytes,'DATA.BIN /TYPE:BLOB'+(verify?' /VERIFY':''),card,{'DATA.BIN':input});
+    assert.equal(card.objects.size,1);assert.deepEqual(card.objects.get(1).data,input);
+   } else {
+    fileRun(readFileSync(join(dir,'UGLOAD.EXE')),'DATA.BIN /TYPE:BLOB',card,{'DATA.BIN':input});
+    run=fileRun(bytes,'1 BACK.BIN'+(verify?' /VERIFY':''),card,{});
+    assert.deepEqual(run.m.files.get('BACK.BIN'),input);
+   }
+   rows.push({profile,sha256:sha256(bytes),steps:run.steps,cycles:run.cycles,simulatedSeconds:run.simulatedSeconds});
+  }
+  assert(rows[1].cycles<=rows[0].cycles);
+  if(verify)assert(rows[1].cycles<rows[0].cycles*.9,'file CRC optimization has no measurable benefit');
+  results.push({name:name+' full 65537-byte '+(verify?'VERIFIED':'FAST')+' file comparison',ok:true,bytes:input.length,verify,profiles:rows,
+   instructionCycleRatio:rows[0].cycles/rows[1].cycles,limits:'zero-wait card/disk model; physical bytes/second pending'});
+ }
+ // Isolate payload grouping: same table CRC, position fix and Turbo policy.
+ const smallSrc=join(out,name+'-cap8.asm'),smallExe=join(out,name+'-cap8.EXE');
+ writeFileSync(smallSrc,`; SPDX-License-Identifier: GPL-2.0-or-later\n    DEFINE UG_FILE_WINDOW 8\n    INCLUDE "${name.toLowerCase()}.asm"\n`);
+ execFileSync(process.env.SJASMPLUS||'sjasmplus',[...['host/sprinter/ultrags/apps','host/sprinter/ultrags/include','host/sprinter/ultrags/lib'].map(p=>'--inc='+join(root,p)),
+  '--inc='+join(build,'ultrags/gen'),'--raw='+smallExe,smallSrc],{stdio:'pipe'});
+ for(const verify of [false,true]) {
+  const rows=[];
+  for(const [window,bytes] of [[8,readFileSync(smallExe)],[256,readFileSync(join(dir,name+'.EXE'))]]) {
+   const card=new SlowCard(catalog);let run;
+   if(name==='UGLOAD') {
+    run=fileRun(bytes,'DATA.BIN /TYPE:BLOB'+(verify?' /VERIFY':''),card,{'DATA.BIN':input});
+    assert.deepEqual(card.objects.get(1).data,input);
+   } else {
+    fileRun(readFileSync(join(dir,'UGLOAD.EXE')),'DATA.BIN /TYPE:BLOB',card,{'DATA.BIN':input});
+    run=fileRun(bytes,'1 BACK.BIN'+(verify?' /VERIFY':''),card,{});assert.deepEqual(run.m.files.get('BACK.BIN'),input);
+   }
+   rows.push({window,sha256:sha256(bytes),cycles:run.cycles,simulatedSeconds:run.simulatedSeconds,
+    dataWindows:run.dataWindows,maxPayloadWindow:run.maxPayloadWindow,maxDiUs:run.m.maxDiUs,maxWindowUs:run.m.maxWindowUs});
+  }
+  assert(rows[0].dataWindows>rows[1].dataWindows*30);assert.equal(rows[1].maxPayloadWindow,256);
+  assert(rows[1].simulatedSeconds<rows[0].simulatedSeconds*.75,'file window improvement below 1.33x '+JSON.stringify({name,verify,rows}));
+  console.log('PASS file payload windows '+JSON.stringify({name,verify,rows}));
+  results.push({name:name+' cap8 versus cap256 '+(verify?'VERIFIED':'FAST'),ok:true,bytes:input.length,verify,profiles:rows,
+   simulatedRatio:rows[0].simulatedSeconds/rows[1].simulatedSeconds,limits:'zero-wait peripheral model; physical rate pending'});
+ }
+}
 
 // The opt-in policy must never permit Turbo reads or config/request writes.
 {
@@ -139,6 +213,6 @@ results.push({name:'CRC helper instruction cycles improve by at least 2x',ok:tru
 }
 assert.deepEqual(executionInputs(root),inputs);verifyBuild(root,dir);
 const report={status:'HOST_THROUGHPUT_PASS / REAL_PENDING',inputs,buildInputs:assembly.inputs,scriptSha256:sha256(readFileSync(new URL(import.meta.url))),
- executed,results,limitations:['Zero-wait ISA/card model, not electrical service margins','64/256 windows and Turbo writes require physical functional/timing checks','Default release remains cap8, Turbo off on all ISA accesses']};
+ executed,results,limitations:['Zero-wait ISA/card model, not electrical service margins','64/256 UGMEM variants and Turbo writes require physical functional/timing checks','File apps use cap256; UGMEM/public library and control frames retain cap8; all release ISA accesses keep Turbo off']};
 writeFileSync(join(out,'throughput.json'),JSON.stringify(report,null,2)+'\n');
 console.log('Throughput actual-EXE checks: '+results.length+' PASS; experimental profiles REAL_PENDING');

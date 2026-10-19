@@ -124,6 +124,14 @@ static void faults_and_peaks(void) {
     fail=1; m.lanes[0].phase=512ull<<32; ug_mixer_render(&m,out,1); fail=0;
     assert(out[0]==0 && out[1]==0 && m.lanes[0].failed && !m.lanes[0].active);
     assert(m.lanes[0].cache_tag[0]==UG_CACHE_TAG_INVALID && m.stats.fetch_errors);
+    /* Loop tap lies one byte before the current line: unsigned subtraction
+     * must not wrap into an apparently valid same-line pair. Both lines are
+     * hot on the second render, so this also exercises the cache fast path. */
+    ug_mixer_init(&m,mem);memory[255]=129;memory[256]=130;memory[257]=131;
+    assert(!ug_lane_set(&m,0,255,3,0,3,0,64,0,UG_FMT_U8,UG_LANE_MONO,1,0));
+    m.lanes[0].phase=(2ull<<32)|(1ull<<31);
+    assert(!ug_mixer_render(&m,out,2));
+    assert(out[0]==512 && !out[1] && out[2]==512 && !out[3] && !m.stats.fetch_errors);
     puts("S6 clipping/20 ms peaks/saturating counters/partial cache read fault PASS");
 }
 static void long_boundaries(void) {

@@ -88,9 +88,16 @@ UG_LIB_INIT:
 	ld	(UG_METHOD),a		; 0 = FIXED
 	ld	(UG_ALIASCFG),a
 	ld	(UG_ALIASCFG+1),a
+    IFDEF UG_FILE_WINDOW
+    DEFINE UG_PAYLOAD_CAP UG_FILE_WINDOW
+    ELSE
     IFDEF UG_EXPERIMENT_WINDOW
-    ASSERT UG_EXPERIMENT_WINDOW == 8 || UG_EXPERIMENT_WINDOW == 64 || UG_EXPERIMENT_WINDOW == 256
-    ld hl,UG_EXPERIMENT_WINDOW
+    DEFINE UG_PAYLOAD_CAP UG_EXPERIMENT_WINDOW
+    ENDIF
+    ENDIF
+    IFDEF UG_PAYLOAD_CAP
+    ASSERT UG_PAYLOAD_CAP == 8 || UG_PAYLOAD_CAP == 64 || UG_PAYLOAD_CAP == 256
+    ld hl,UG_PAYLOAD_CAP
     ld (UG_CHUNK),hl
     ELSE
 	ld	a,UG_CHUNK_SLOW
@@ -128,21 +135,22 @@ UG_CPU_PROFILE:
 	ret
 
 ; Always cap the actual window, including caller-supplied profiles.
-; out BC=1..8; clobbers AF. Zero/oversized chunks use the safe default.
+; out BC=1..cap; clobbers AF. Zero/oversized chunks use the compiled cap.
+; Public default is eight; file apps use 256 (same clocks and data loops).
 UG_SAFE_CHUNK:
-    IFDEF UG_EXPERIMENT_WINDOW
+    IFDEF UG_PAYLOAD_CAP
     ld bc,(UG_CHUNK)
     ld a,b
     or c
     jr z,.cap
     push hl
-    ld hl,UG_EXPERIMENT_WINDOW
+    ld hl,UG_PAYLOAD_CAP
     or a
     sbc hl,bc
     pop hl
     ret nc
 .cap:
-    ld bc,UG_EXPERIMENT_WINDOW
+    ld bc,UG_PAYLOAD_CAP
     ret
     ELSE
 	ld bc,(UG_CHUNK)
@@ -1285,8 +1293,9 @@ UG_READ:
 
     IFDEF UG_DSS_TIMED
 ; Check ESC on entering each 256-byte region, with ISA already closed.
-; IRQ/MMU/Turbo are still restored after EVERY chunk (release cap remains 8).
-; For arbitrary caller chunk sizes <=8 the poll gap is at most 263 bytes.
+; IRQ/MMU/Turbo are still restored after EVERY chunk. Public cap is eight;
+; file payload cap is 256. For arbitrary chunk sizes <=cap the poll gap is
+; at most 255+cap bytes; standard file chunks poll every 256 bytes.
 UG_BULK_YIELD:
     ld a,(UGXFER.SENT+1)
     push hl

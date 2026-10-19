@@ -25,6 +25,8 @@ SW := $(ROOT)/sw
 PICO_SDK_PATH ?=
 PICO_EXTRAS_PATH ?=
 UG_PYTHON ?= python3
+UG_AUDIO_PYTHON ?= $(UG_PYTHON)
+UG_AUDIO_BASELINE ?=
 CC ?= cc
 UG_PICOTOOL_SEED ?=
 PICOTOOL_ROOT := $(abspath $(BUILD))/tools/picotool
@@ -327,6 +329,7 @@ cfg-check: ultrags-path-report test-dss fixtures
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/psram-id-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/psram-id.json
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/handshake-guard-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/guard
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/save-clock-check.py --build $(BUILD) --cc "$(CC)"
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/audio-render-check.py --build $(BUILD) $(if $(UG_AUDIO_BASELINE),--baseline "$(UG_AUDIO_BASELINE)")
 	$(NODE) $(ROOT)/tests/ultrags/dss/ug-card-test.mjs
 	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_cfg_bundle.py --build $(BUILD)
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/config-exchange.py --build $(BUILD)/host --catalog $(BUILD)/multifw-release/generated/multifw/catalog.bin

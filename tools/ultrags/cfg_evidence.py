@@ -22,10 +22,10 @@ def verify_isa_reports(build):
     """Require current linked-code, generated-PIO and independent fuse gates."""
     build = Path(build)
     reports = [build / 'host/firmware-paths/paths.json', build / 'host/pio-isa.json',
-               build / 'host/guard/guard.json', build / 'host/psram-id.json',build / 'host/save-clock.json']
+               build / 'host/guard/guard.json', build / 'host/psram-id.json',build / 'host/save-clock.json',build/'host/audio-render.json']
     statuses = ['LINKED_ARM_PIO_PASS / REAL_PENDING', 'HOST_PIO_INSTRUCTION_PASS / REAL_PENDING',
                 'HOST_GUARD_PASS / REAL_PENDING', 'HOST_PSRAM_ID_INSTRUCTION_PASS / REAL_PENDING',
-                'LINKED_SAVE_CLOCK_PASS / REAL_PENDING']
+                'LINKED_SAVE_CLOCK_PASS / REAL_PENDING','LINKED_AUDIO_INSTRUCTION_PASS / REAL_PENDING']
     for path, status in zip(reports, statuses):
         evidence = json.loads(path.read_text())
         require(evidence['status'] == status and evidence['inputs'], 'incomplete ISA gate: ' + str(path))
@@ -45,6 +45,10 @@ def verify_isa_reports(build):
     require((save['core_clock_hz'],save['boot2_divider'],save['rom_command_divider'])==(370000000,4,6),'SAVE clock/divider audit')
     require(len(save['host_cases'])==6 and all(x['ok'] for x in save['host_cases']),'SAVE clock host mutations')
     require(not save['closures']['ultrags']['clock_calls'] and save['closures']['gus']['clock_calls'],'SAVE linked clock closure')
+    audio=json.loads(reports[5].read_text())
+    require(audio['cpu']=='Cortex-M0' and audio['unicorn']=='2.1.4','audio linked-code CPU/runtime')
+    require({x['profile'] for x in audio['cases']}=={'mod4','mod4-one-stereo','mod4-two-stereo','paused-mod-two-stereo','stereo-balance','twelve-lane'},'audio profile coverage')
+    require(len(audio['cases'])==6 and all(x['frames']==1024 and x['instructions']>0 and x['cacheReads']>0 and not x['division64Calls'] and x['independentOracle']=='PASS' for x in audio['cases']),'audio exact samples / hot division gate')
     return reports
 
 
