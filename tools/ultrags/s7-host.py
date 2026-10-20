@@ -24,6 +24,7 @@ def inputs():
         files.update((ROOT / folder).rglob('*.h'))
     files.update(ROOT / ('tools/ultrags/' + f) for f in (
         's7-host.py', 's6_inputs.py', 'gen-wire.mjs', 'wire-schema.json', 'gen-diag.py', 'diag-schema.json'))
+    files.update((ROOT/'sw/ultrags').glob('*.inc'))
     files.update((a.build / 'gen').glob('*.h'))
     return {str(f.resolve()): digest(f) for f in sorted(files)}
 

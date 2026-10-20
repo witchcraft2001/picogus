@@ -22,10 +22,10 @@ def verify_isa_reports(build):
     """Require current linked-code, generated-PIO and independent fuse gates."""
     build = Path(build)
     reports = [build / 'host/firmware-paths/paths.json', build / 'host/pio-isa.json',
-               build / 'host/guard/guard.json', build / 'host/psram-id.json',build / 'host/save-clock.json',build/'host/audio-render.json']
+               build / 'host/guard/guard.json', build / 'host/psram-id.json',build / 'host/save-clock.json',build/'host/audio-render.json',build/'host/config-read-arm.json',build/'host/write-window/write-window.json',build/'host/config-read-deadline.json']
     statuses = ['LINKED_ARM_PIO_PASS / REAL_PENDING', 'HOST_PIO_INSTRUCTION_PASS / REAL_PENDING',
                 'HOST_GUARD_PASS / REAL_PENDING', 'HOST_PSRAM_ID_INSTRUCTION_PASS / REAL_PENDING',
-                'LINKED_SAVE_CLOCK_PASS / REAL_PENDING','LINKED_AUDIO_INSTRUCTION_PASS / REAL_PENDING']
+                'LINKED_SAVE_CLOCK_PASS / REAL_PENDING','LINKED_AUDIO_INSTRUCTION_PASS / REAL_PENDING','LINKED_CONFIG_READ_PASS / REAL_PENDING','GENERATED_PIO_TO_PRODUCTION_C_PASS / REAL_PENDING','LINKED_CONFIG_WAIT_LATCH_PASS / REAL_PENDING']
     for path, status in zip(reports, statuses):
         evidence = json.loads(path.read_text())
         require(evidence['status'] == status and evidence['inputs'], 'incomplete ISA gate: ' + str(path))
@@ -34,8 +34,13 @@ def verify_isa_reports(build):
                 require(digest(source) == expected, 'stale ISA gate: ' + source)
     pio = json.loads(reports[1].read_text())
     require((pio['maps'], pio['addresses'], pio['pio0_words'], pio['delayed_info_frames']) ==
-            (256, 262144, 32, 96), 'incomplete generated PIO matrix')
+            (512, 1048576, 32, 288), 'incomplete generated PIO matrix')
     require(pio['autopull_barrier'] == pio['simultaneous_iow_ior'] == 'PASS', 'incomplete shared PIO semantics')
+    require(pio['write_clock_phases']==12 and pio['writes']==524288,'incomplete IOW/IOR passivity matrix')
+    require(json.loads(reports[2].read_text())['addressOnlyInit']=='PASS','untested IOR/IOW SM initialization')
+    edge=pio.get('read_rearm',{})
+    require(edge.get('cases')==4096 and edge.get('candidate_duplicates')==0 and edge.get('r5_duplicates')=='REPRODUCED' and edge.get('ownership_cases')==4,'missing IOR rearm/ownership-feedback regression')
+    require(pio['mux_settle']==dict(patterns=256,gus_pio_clocks=8,r2_pio_clocks=4,fixed_pio_clocks=16,r2_wrong_bytes=255,iow_clock_multiple_of_gus=2,mux_setup_not_shorter_than_gus=True,divider256_gus=517,divider256_candidate=259),'incomplete ADS settling regression')
     psram = json.loads(reports[3].read_text())
     require((psram['cases'], psram['pio_words'], psram['old_sck_edges'], psram['new_sck_edges'], psram['compiled_programs']) ==
             (768, 9, 97, 56, 3), 'incomplete READ ID PIO gate')
@@ -47,8 +52,18 @@ def verify_isa_reports(build):
     require(not save['closures']['ultrags']['clock_calls'] and save['closures']['gus']['clock_calls'],'SAVE linked clock closure')
     audio=json.loads(reports[5].read_text())
     require(audio['cpu']=='Cortex-M0' and audio['unicorn']=='2.1.4','audio linked-code CPU/runtime')
-    require({x['profile'] for x in audio['cases']}=={'mod4','mod4-one-stereo','mod4-two-stereo','paused-mod-two-stereo','stereo-balance','twelve-lane'},'audio profile coverage')
-    require(len(audio['cases'])==6 and all(x['frames']==1024 and x['instructions']>0 and x['cacheReads']>0 and not x['division64Calls'] and x['independentOracle']=='PASS' for x in audio['cases']),'audio exact samples / hot division gate')
+    require({x['profile'] for x in audio['cases']}=={'mod4','mod4-one-stereo','mod4-two-stereo','paused-mod-two-stereo','stereo-balance','twelve-lane','32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx'},'audio profile coverage')
+    require(len(audio['cases'])==10 and all(x['frames']==1024 and x['instructions']>0 and x['cacheReads']>0 and not x['division64Calls'] and x['independentOracle']=='PASS' for x in audio['cases']),'audio exact samples / hot division gate')
+    config=json.loads(reports[6].read_text())
+    require(config['cpu']=='Cortex-M0' and len(config['cases'])==12,'incomplete CONFIG capture regression')
+    require(all(c['fixed']['sampled']==(255 if c['fixed']['expired'] else 36) and
+                c['fixed']['consumed']==(0 if c['fixed']['expired'] else 1) and
+                c['baseline']['sampled']==255 for c in config['cases']),'CONFIG delayed reply/stale eligibility regression')
+    window=json.loads(reports[7].read_text())
+    require(window['cases']==3072 and window['r3_wrong_bytes']==3060 and window['baselineRejected'] and window['candidateUnlocked'],'incomplete CONFIG write-window regression')
+    deadline=json.loads(reports[8].read_text())
+    require(len(deadline['cases'])==12,'incomplete CONFIG WAIT latch coverage')
+    require(all(c['forced_end']['consumed']==0 and not c['forced_end']['late_drive'] if 'forced_end' in c else c['baseline']['sample']==255 and not c['baseline']['wait_accepted'] and c['candidate']['sample']==36 and c['candidate']['wait_accepted'] and not c['candidate']['late_drive'] for c in deadline['cases']),'CONFIG WAIT latch/stale response regression')
     return reports
 
 

@@ -6,6 +6,8 @@ import hashlib
 import json
 import shlex
 import struct
+import subprocess
+import datetime
 from pathlib import Path
 
 
@@ -67,6 +69,49 @@ def verify_uf2(data, binary, origin=0x10000000):
         payload.extend(data[offset + 32:offset + 32 + size])
     if count != (len(binary) + 255) // 256 or payload[:len(binary)] != binary or any(payload[len(binary):]):
         raise ValueError('UF2 payload differs from linked BIN')
+
+
+def compare_image_except_sdk_date(baseline, image, elf, nm):
+    """Allow only the SDK's declared BI build-date string to vary.
+
+    Resolve its pointer through the actual linked ELF/BI table. No instruction,
+    other string, padding, address or header byte is normalized.
+    """
+    baseline,image=bytes(baseline),bytes(image)
+    if baseline==image:return {'comparison':'BYTE_IDENTICAL'}
+    data=Path(elf).read_bytes();assert data[:6]==b'\x7fELF\x01\x01'
+    phoff=struct.unpack_from('<I',data,28)[0];stride,count=struct.unpack_from('<HH',data,42)
+    segments=[]
+    for i in range(count):
+        kind,off,va,pa,n,_,_,_=struct.unpack_from('<8I',data,phoff+i*stride)
+        if kind==1 and n:segments.append((off,va,pa,n))
+    def locate(address,n):
+        matches=[(off+address-va,pa+address-va) for off,va,pa,size in segments if va<=address and address+n<=va+size]
+        assert len(matches)==1,(hex(address),n)
+        return matches[0]
+    names={}
+    for line in subprocess.check_output([nm,'--defined-only',str(elf)],text=True).splitlines():
+        parts=line.split()
+        if len(parts)==3:names[parts[2]]=int(parts[0],16)
+    dates=[]
+    for address in range(names['__binary_info_start'],names['__binary_info_end'],4):
+        off,_=locate(address,4);record=struct.unpack_from('<I',data,off)[0]
+        off,_=locate(record,12);kind,tag,identifier,pointer=struct.unpack_from('<HHII',data,off)
+        if (kind,tag,identifier)==(6,0x5052,0x9da22254):dates.append(pointer)
+    assert len(dates)==1,'missing/duplicate declared SDK build date'
+    off,physical=locate(dates[0],12);new_date=data[off:off+12]
+    # PT_LOAD includes page-alignment padding before non-4KiB slot starts.
+    # objcopy's BIN begins at the actual boot2/FLASH symbol, not that page.
+    origin=names['__flash_binary_start'];assert origin==names['__boot2_start__']
+    index=physical-origin;assert image[index:index+12]==new_date and len(baseline)==len(image)
+    old_date=baseline[index:index+12]
+    for value in (old_date,new_date):
+        assert value[-1]==0
+        datetime.datetime.strptime(value[:-1].decode('ascii'),'%b %d %Y')
+    adjusted=bytearray(image);adjusted[index:index+12]=old_date
+    assert adjusted==baseline,'non-date working-mode bytes changed'
+    return {'comparison':'IDENTICAL_EXCEPT_DECLARED_SDK_DATE','offset':index,
+            'old_date':old_date[:-1].decode(),'new_date':new_date[:-1].decode()}
 
 
 if __name__ == '__main__':

@@ -2,6 +2,9 @@
 ; Optional DSS timed RPC profile. All DSS calls with ISA window closed.
 ; Seconds are accumulated modulo 60, so minute/day rollover and >60s jobs
 ; work identically. Polling also has a finite stagnant-clock bound.
+; DSS reports whole seconds: the first tick can occur immediately after
+; START. Expire only when elapsed ticks EXCEED the budget, so N seconds
+; cannot expire before N real seconds (quantization adds <1 second).
 UG_WAIT_START:
     push af
     push bc
@@ -86,7 +89,6 @@ UG_WAIT_NEXT:
     ld b,a
     ld a,(UGTM.LIMIT)
     cp b
-    jr z,.timeout
     jr c,.timeout
     xor a
     ld (UGTM.STAGNANT),a

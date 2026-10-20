@@ -17,6 +17,9 @@ void ug_minimal_write_decoded(int reg,uint8_t value,uint32_t now);
 uint8_t ug_minimal_read_decoded(int reg);
 uint8_t ug_minimal_read_status(void);
 uint8_t ug_minimal_read_response(void);
+/* Non-consuming live GS status, without statistics/locks. The bus caller
+ * accounts the read AFTER submitting the reply to its PIO FIFO. */
+uint8_t ug_minimal_peek_gs_status(void);
 void ug_minimal_write(uint16_t port,uint8_t value,uint32_t now);
 uint8_t ug_minimal_read(uint16_t port);
 void ug_minimal_dispatch(void);

@@ -224,7 +224,7 @@ BLOB_OPTION:
 BLOB_SETUP:
     ld a,1
     ld bc,0
-    ld e,32
+    ld e,44
     call RPC
     jp c,RPC_ERROR
     ld a,(RESP)
@@ -631,7 +631,7 @@ TRANSFER_ERROR:
 SESSION_CHECK:
     ld a,0
     ld bc,0
-    ld e,36
+    ld e,40
     call RPC
     ret c
     ld hl,RESP+12
@@ -731,11 +731,11 @@ FOLD_DUMP:
     ld a,(VERIFY)
     or a
     ret z
-    ld hl,FILECRC
-    ld de,UGCRC.ACC
-    ld bc,4
-    ldir
-    ld hl,BACK
+    IFDEF APP_DUMP
+    jp UG_CRC_COMBINE
+    ELSE
+    ret
+    ENDIF
 FOLD_BUFFER:
     ld bc,(BLOCK)
     call UG_CRC32_FOLD
@@ -1072,6 +1072,7 @@ LOAD_FILE:
     IFDEF APP_DUMP
 DUMP_FILE:
     call BLOB_SETUP
+    call APP_TIME_INIT
     ld hl,(HANDLE)
     ld (REQ),hl
     ld a,18
@@ -1146,6 +1147,11 @@ DUMP_FILE:
     ld (FILEOPEN),a
     ld (FILEOUTPUT),a
     call START_BLOCKS
+    xor a
+    ld (FILECRC),a
+    ld (FILECRC+1),a
+    ld (FILECRC+2),a
+    ld (FILECRC+3),a
     ld hl,DUMPOFF
     ld de,POS32
     ld bc,4
@@ -1160,16 +1166,16 @@ DUMP_FILE:
     call IO_BLOCK
     call FOLD_DUMP
     call ADVANCE
+    call APP_TIME_NEXT
     jr .loop
 .done:
     ld a,(VERIFY)
     or a
     jr z,.fast
     ld hl,FILECRC
-    ld de,UGCRC.ACC
+    ld de,UGCRC.OUT
     ld bc,4
     ldir
-    call UG_CRC32_END
     ld hl,host_crc_text
     call SHOW
     ld hl,UGCRC.OUT
@@ -1181,6 +1187,8 @@ DUMP_FILE:
     call SHOW
 .result:
     call NL
+    call APP_TIME_NEXT
+    call APP_SPEED
     jp PASS
     ELSE
 DUMP_FILE:
@@ -1462,3 +1470,7 @@ type_text: DB " type=BLOB",0
 time_text: DB "host_seconds=",0
 speed_text: DB " bytes_per_second=",0
 speed_short: DB " SPEED=INSUFFICIENT_INTERVAL resolution_seconds=1",0
+
+    IFDEF APP_DUMP
+    INCLUDE "ugcrc_combine.asm"
+    ENDIF

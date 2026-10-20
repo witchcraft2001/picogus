@@ -159,7 +159,7 @@ PCM_PREFLIGHT:
 .caps:
     ld a,1
     ld bc,0
-    ld e,32
+    ld e,44
     call RPC
     jp c,RPC_ERROR
     ld a,(PCM_KIND)

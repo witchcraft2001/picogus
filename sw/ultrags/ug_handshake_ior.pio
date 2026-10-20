@@ -1,61 +1,94 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * This program is free software under GPL version 2 or any later version.
- * ULTRAGS HANDSHAKE only. IN_BASE is A5 (GPIO11); core0 reconstructs A0..A9
- * from the rotated full pin snapshot. SET immediates are patched at idle.
+ * Shared IOR/IOW classifier, exactly32 words. A5 is IN_BASE. IOW captures
+ * address then muxed data; IOR wraps to park after the address word only.
+ * Owned address snapshots are complemented by the classifier itself.
+ * The captured active-low strobe tags that complement; GPIO26 is NOT a
+ * transaction tag (it is delayed pad feedback shared by both SMs).
+ * core0 resumes a parked SM only after processing its captured transaction.
  */
 .program ug_handshake_ior
 .side_set 2 opt
+/* The read tail precedes restart so an address-only read can use its
+ * hardware wrap to skip the write mux/data path without another JMP.
+ * Restart qualifies high then low in PIO, including passive ARM cleanup. */
+public arm_value:
+public value:
+public read_end:
+    wait 1 gpio 5 side 0b10
+public read_release:
+    out pindirs, 8 side 0b00
 public restart:
-    wait 1 gpio 5 side 0b00
-.wrap_target
+    wait 1 gpio 5              ; qualify the edge in this SM, not through SIO
 public idle:
     wait 0 gpio 5
-    in pins, 5                ; ISR is cleared by the preceding PUSH/restart
-    mov x, isr
+public decode:
+    mov isr, pins              ; capture address/strobe once, before classification
+    mov osr, isr               ; extract address bits without destroying snapshot
+    out x, 5
 public base_compare:
-    set y, 21                 ; default BASE 02A0h >> 5
+    set y, 21
     jmp x!=y alias_compare
     jmp owned
 public alias_compare:
-    set y, 21                 ; disabled ALIAS repeats BASE, no extra block
-    jmp x!=y foreign
+    set y, 21
+    jmp x!=y gs_compare
 public owned:
-    mov isr, ~pins side 0b01  ; /IOR was low: inverted bit26 tags native ownership
-public owned_submit:
-    push block side 0b01
-public owned_condition:
-    out null, 32 side 0b01    ; consume IO_WAIT; leave OSR exclusively for verdicts
-    jmp value side 0b01       ; SM1 overrides a pending SM0 write's side-set
-foreign:
-    mov isr, pins
+    mov isr, ~isr side 0b01    ; explicit tag: inverted /IOR or /IOW becomes 1
+public address_only:
 public submit:
-    push block                ; raw address snapshot; PUSH clears ISR
-public condition:
-    out x, 32                 ; IO_WAIT / IO_END, unchanged ARM protocol
-    jmp !x restart             ; retain early wait through the data load
-public value:
-    out pins, 8 side 0b01
-    out pindirs, 8 side 0b11
-    wait 1 gpio 5 side 0b10
-    out pindirs, 8 side 0b00
-    irq 0                     ; completed read, sampled by the core1 fuse
-.wrap
+    push block                 ; immutable tagged address; clears ISR for data
+    set pins, 1                ; ADS only; preserves the wait state
+settle:
+    jmp x-- settle             ; SET + (X+1) clocks; see minimum below
+    in pins, 32                 ; autopush: muxed data and ownership flag
+    set pins, 0                 ; restore address mux before another bus cycle
+public parked:
+    jmp parked
+public write_restart:
+    wait 1 gpio 4               ; no side-set: late foreign cleanup is passive
+    wait 0 gpio 4
+public dack:
+    jmp pin write_restart       ; high GPIO19 is the board's active DACK
+public gs_compare:
+    set y, 5                   ; patched to JMP submit while aliases are off
+    jmp x!=y submit
+    out null, 22               ; OSR already shifted five address bits above
+    out x, 5
+    set y, 19                  ; 00B3, exactly, not its surrounding block
+    jmp x!=y gs_second
+    jmp owned
+gs_second:
+    set y, 27                  ; 00BB
+    jmp x!=y submit
+    jmp owned
 % c-sdk {
-static inline void ug_handshake_ior_program_init(PIO pio, uint sm, uint offset) {
-    pio_sm_config c = ug_handshake_ior_program_get_default_config(offset);
-    sm_config_set_in_pins(&c, 11);
-    sm_config_set_in_shift(&c, false, false, 32);
-    sm_config_set_out_pins(&c, 6, 8);
-    sm_config_set_out_shift(&c, true, true, 24);
-    sm_config_set_sideset_pins(&c, 26);
-    pio_sm_set_consecutive_pindirs(pio, sm, 5, 1, false);
-    pio_sm_set_consecutive_pindirs(pio, sm, 6, 10, false);
-    for (unsigned pin = 6; pin <= 14; ++pin) pio_gpio_init(pio, pin);
-    pio_gpio_init(pio, 26);
-    pio_gpio_init(pio, 27);
-    pio_sm_set_pins_with_mask(pio, sm, 0, 3u << 26);
-    pio_sm_set_consecutive_pindirs(pio, sm, 26, 2, true);
-    pio_sm_init(pio, sm, offset, &c);
-    /* Core0 enables SM1 after the independent core1 fuse is ready. */
+static inline void ug_handshake_sm_init(PIO pio,uint sm,uint offset,bool read,float clkdiv) {
+    pio_sm_config c=ug_handshake_ior_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,11);
+    sm_config_set_in_shift(&c,false,true,32);
+    /* GS classification uses OUT for bit extraction. Threshold32 avoids an
+     * intervening pull; core0 restarts the OSR before every read verdict. */
+    sm_config_set_out_shift(&c,true,true,32);
+    sm_config_set_out_pins(&c,6,8);
+    sm_config_set_set_pins(&c,27,1);
+    sm_config_set_sideset_pins(&c,26);
+    sm_config_set_jmp_pin(&c,19);
+    /* Read: one address+ownership word, then park. No read-side ADS
+     * pulse or write-data settling before ARM can acquire CONFIG wait.
+     * Reply tail falls through to restart at the next read edge. */
+    sm_config_set_wrap(&c,offset+(read?ug_handshake_ior_offset_parked:ug_handshake_ior_offset_decode),
+        offset+(read?ug_handshake_ior_offset_address_only:ug_handshake_ior_offset_dack));
+    /* Both SMs use twice the GUS PIO clock (at most clk_sys).
+     * Write SET ADS + JMP X-- takes X+2 clocks: CONFIG X=14 =>16;
+     * native/alias X>=16 =>>=18; GS X=19/27 =>21/29.
+     * Thus every serviced write preserves at least the GUS eight-clock
+     * setup at 183MHz. Shorter settling on foreign writes is irrelevant:
+     * their data is discarded, with no WAIT and no data drive.
+     * Classification takes half the old time, before the data window ends.
+     * Core0 forces the two initial data/direction OUTs; the read tail below
+     * still releases directions autonomously after IOR. No sync bypass. */
+    sm_config_set_clkdiv(&c,clkdiv);
+    pio_sm_init(pio,sm,offset+(read?ug_handshake_ior_offset_restart:ug_handshake_ior_offset_write_restart),&c);
 }
 %}

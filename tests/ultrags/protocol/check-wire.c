@@ -106,7 +106,7 @@ int main(void) {
   CHECK(UG_MAX_BLOCK == 1024, "max_block");
   CHECK(UG_MAX_OBJECTS == 128, "max_objects");
   CHECK(UG_QUEUE_MAX == 32, "queue_max");
-  CHECK(UG_SNAPSHOT_SIZE == 128, "snapshot_size");
+  CHECK(UG_SNAPSHOT_SIZE == 64, "snapshot_size");
   CHECK(UG_DEFAULT_BASE == 0x02A0, "default_base");
   CHECK(UG_DEFAULT_ALIAS == 0xFFFF, "default_alias");
   CHECK(UG_INFO_MAGIC == 0x31534755u, "info_magic_UGS1");
@@ -176,15 +176,15 @@ int main(void) {
         UG_GS_GS_COLD_RESET == 0xF4 && UG_GS_GS_RELOOPER == 0x6B, "gs_commands");
 
   /* ===== struct layout checks vs vectors ===== */
-  CHECK(sizeof(ug_info_t) == UG_INFO_LEN && UG_INFO_LEN == 36, "info_size");
-  CHECK(sizeof(ug_caps_t) == 32, "caps_size");
+  CHECK(sizeof(ug_info_t) == UG_INFO_LEN && UG_INFO_LEN == 40, "info_size");
+  CHECK(sizeof(ug_caps_t) == 44, "caps_size");
   CHECK(sizeof(ug_mem_info_t) == 20, "mem_info_size");
   CHECK(sizeof(ug_stats_t) == 64, "stats_size");
   CHECK(sizeof(ug_object_info_t) == 38, "objinfo_size");
   CHECK(sizeof(ug_pcm_desc_t) == 24, "pcm_desc_size");
-  CHECK(sizeof(ug_snapshot_t) == 128, "snapshot_size128");
+  CHECK(sizeof(ug_snapshot_t) == 64, "snapshot_size128");
   CHECK(sizeof(ug_fxrec_t) == 16, "fxrec_size");
-  CHECK(sizeof(ug_chanrec_t) == 8, "chanrec_size");
+  CHECK(sizeof(ug_voicerec_t) == 20, "chanrec_size");
   CHECK(sizeof(ug_gs_desc_t) == 9, "gs_desc_size");
   CHECK(sizeof(ug_fw_catalog_t) == 148, "catalog_size");
   CHECK(sizeof(ug_write_begin_req_t) == 13, "write_begin_req_vsize");
@@ -202,7 +202,7 @@ int main(void) {
         "op_read_begin_lens");
   CHECK(UG_OP_WRITE_END_REQ_LEN == 4 && UG_OP_READ_END_REQ_LEN == 4 &&
         UG_OP_READ_END_REQ_VLEN == 8, "op_end_lens");
-  CHECK(UG_OP_INFO_REQ_LEN == 0 && UG_OP_INFO_RESP_LEN == 36, "op_info_lens");
+  CHECK(UG_OP_INFO_REQ_LEN == 0 && UG_OP_INFO_RESP_LEN == 40, "op_info_lens");
   CHECK(sizeof(ug_mem_test_resp_t) == 14, "mem_test_resp");
   CHECK(sizeof(ug_alloc_req_t) == 5 && sizeof(ug_alloc_resp_t) == 6, "alloc_sizes");
   CHECK(sizeof(ug_seal_req_t) == 7 && sizeof(ug_seal_resp_t) == 4, "seal_sizes");
@@ -217,15 +217,15 @@ int main(void) {
 
   /* field offsets (handwritten expectations) */
   CHECK(UG_INFO_SESSION_OFF == 12 && UG_INFO_BUILD_ID_OFF == 20, "info_offs");
-  CHECK(UG_CAPS_BASE_OFF == 24 && UG_CAPS_PCM_RATE_MAX_OFF == 30, "caps_offs");
+  CHECK(UG_CAPS_BASE_OFF == 28 && UG_CAPS_PCM_RATE_MAX_OFF == 36, "caps_offs");
   CHECK(UG_OBJECT_INFO_SIZE_OFF == 6 && UG_OBJECT_INFO_MOD_CHANNELS_OFF == 37, "objinfo_offs");
   CHECK(UG_PCM_DESC_DATA_OFFSET_OFF == 8 && UG_PCM_DESC_LOOP_END_OFF == 20, "pcm_desc_offs");
   CHECK(UG_SNAPSHOT_SESSION_OFF == 4 && UG_SNAPSHOT_STATE_OFF == 24 &&
-        UG_SNAPSHOT_CHAN_OFF == 56 && UG_SNAPSHOT_TRANSFER_ID_OFF == 120 &&
-        UG_SNAPSHOT_TRANSFER_LENGTH_OFF == 126, "snap_offs");
+        UG_SNAPSHOT_VOICE_COUNT_OFF == 52 && UG_SNAPSHOT_TRANSFER_ID_OFF == 56 &&
+        UG_SNAPSHOT_TRANSFER_LENGTH_OFF == 62, "snap_offs");
   CHECK(UG_GS_DESC_REPLY_PTR_OFF == 7, "gs_desc_offs");
   CHECK(UG_FXREC_SOURCE_FRAME_OFF == 8 && UG_FXREC_FLAGS_OFF == 15, "fxrec_offs");
-  CHECK(UG_CHANREC_PERIOD_OFF == 4, "chanrec_offs");
+  CHECK(UG_VOICEREC_PERIOD_OFF == 14, "chanrec_offs");
   CHECK(UG_FW_CATALOG_RECORDS_OFF == 16 && UG_FW_CATALOG_CATALOG_CRC32_OFF == 144, "catalog_offs");
   CHECK(UG_WRITE_BEGIN_REQ_TRANSPORT_OFF == 8 && UG_WRITE_BEGIN_REQ_CRC_OFF == 9, "xfer_offs");
 
@@ -406,9 +406,9 @@ int main(void) {
     rh[0] = UG_ERR_OK; rh[1] = UG_INFO_LEN;
     expect_bytes("info_resp_header", rh, 2, V_RH_INFO_FAST, V_RH_INFO_FAST_LEN);
     rh[1] = 20; expect_bytes("mem_info_resp_header", rh, 2, V_RH_MEM_INFO, 2);
-    rh[1] = 32; expect_bytes("caps_resp_header", rh, 2, V_RH_CAPS, 2);
+    rh[1] = 44; expect_bytes("caps_resp_header", rh, 2, V_RH_CAPS, 2);
     rh[1] = 64; expect_bytes("stats_resp_header", rh, 2, V_RH_STATS, 2);
-    rh[1] = 128; expect_bytes("snapshot_resp_header", rh, 2, V_RH_SNAPSHOT, 2);
+    rh[1] = 64; expect_bytes("snapshot_resp_header", rh, 2, V_RH_SNAPSHOT, 2);
     /* WRITE_BEGIN ok resp token=1 */
     {
       unsigned char r[6]; unsigned int n = 0;

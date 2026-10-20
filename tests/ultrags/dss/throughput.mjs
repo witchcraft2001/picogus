@@ -33,7 +33,16 @@ for(const p of profiles) {
  executed.push({name:p.name+'.EXE',size:p.bytes.length,sha256:sha256(p.bytes),window:p.window,writeTurbo:p.turbo,readTurbo:false});
 }
 function run(p,n,opts={}) {
- const card=new SlowCard(catalog,opts),h=p.header,cli=opts.cli??`ROUNDTRIP ${n}${opts.verify?' /VERIFY':''} /SLOT:${opts.slot??0}`;
+ const card=new SlowCard(catalog,{...opts,draftApi:!!opts.historicalDraft}),h=p.header,cli=opts.cli??`ROUNDTRIP ${n}${opts.verify?' /VERIFY':''} /SLOT:${opts.slot??0}`;
+ if(opts.historicalDraft){
+  // Archived client timing baseline uses its archived draft wire layout.
+  // Production VLS1 clients/cards deliberately reject that old layout.
+  const command=card.command.bind(card);
+  card.command=(op,...args)=>{const result=command(op,...args);if(op===1&&!result[0]){
+   const r=Buffer.alloc(32);result[1].copy(r,0,0,20);r.writeUInt32LE(1510,0);
+   r[20]=8;r[21]=4;r[22]=1;r.writeUInt16LE(card.base,24);r.writeUInt16LE(card.alias,26);result[1]=r;
+  }return result;};
+ }
  const m=new SprinterMachine({card,cardSlot:opts.slot??0,cpuHz:21000000,turboHardware:opts.hardware!==false,
   commandLine:cli,movingClock:true,clockStart:86399,logLimit:0,allowTurboBulkWrites:p.turbo});
  m.mem.set(p.bytes,h.loadAddr);
@@ -205,8 +214,8 @@ old.bytes=readFileSync(join(baselineDir,'UGMEM.EXE'));old.header=parseExe(old.by
 assert.equal(sha256(old.bytes),'db9840b8a005ea5599feaffb00b6b69490753fe9978f09df9153ff225cade72a');
 // The previous EXE intentionally polls after every 8 bytes; measure without
 // applying the new per-region polling assertions to that archived binary.
-run(old,65536,{name:'previous 64KiB FAST comparison',legacyPolls:true});
-run(old,65536,{verify:true,name:'previous 64KiB VERIFIED comparison',legacyPolls:true});
+run(old,65536,{name:'previous 64KiB FAST comparison',legacyPolls:true,historicalDraft:true});
+run(old,65536,{verify:true,name:'previous 64KiB VERIFIED comparison',legacyPolls:true,historicalDraft:true});
 const oldCrc=crcCall(old,Buffer.alloc(1024,0x5a)),newCrc=crcCall(mem,Buffer.alloc(1024,0x5a));
 assert(newCrc*2<oldCrc);
 results.push({name:'CRC helper instruction cycles improve by at least 2x',ok:true,oldCrc,newCrc,ratio:oldCrc/newCrc});

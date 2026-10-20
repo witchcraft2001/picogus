@@ -168,7 +168,7 @@ test('cap256 file dump ESC keeps partial output','UGDUMP','1 BACK.BIN',10,{
 test('existence probe close error preserves complete file','UGDUMP','1 BACK.BIN /OVERWRITE',5,{card,files:{'BACK.BIN':Buffer.from('keep')},disk:{failAt:2},check:(c,m)=>!m.text.includes('INCOMPLETE')&&m.files.get('BACK.BIN').toString()==='keep'});
 test('ESC cleanup','UGMEM','ROUNDTRIP 65536',10,{escAfter:3,check:c=>!c.objects.size});
 test('held ESC during grant with delayed cleanup replies','UGMEM','ROUNDTRIP 1025',10,{escInGrant:true,simpleDelayUs:1000,check:c=>!c.objects.size&&c.trace.some(t=>t.op===32)});
-test('BEGIN deadline 2s','UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1)},noReplyOp:32,clockStart:86399,check:c=>!c.objects.size&&c.now>=1000000&&c.now<3000000});
+test('BEGIN deadline 2s plus DSS quantization','UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1)},noReplyOp:32,clockStart:86399,check:c=>!c.objects.size&&c.now>=2000000&&c.now<4000000});
 test('SEAL deadline 30s','UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1)},noReplyOp:19,cpuHz:3500000,budget:120000000,check:c=>!c.objects.size&&c.now>=29000000&&c.now<32000000});
 test('stopped clock BEGIN finite','UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1)},noReplyOp:32,stopped:true,budget:200000000,check:c=>!c.objects.size});
 test('lost END ACK' ,'UGLOAD','TEST.BIN /TYPE:BLOB',8,{files:{'TEST.BIN':pattern(1024)},noReplyOp:33,check:(c,m)=>!c.objects.size&&m.text.includes('Transfer recovery')&&m.text.includes('transfer_stage=0x04 moved=1024/1024 offset=0x00000000')});

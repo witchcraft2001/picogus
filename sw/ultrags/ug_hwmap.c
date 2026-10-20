@@ -147,3 +147,11 @@ uint32_t ug_hw_pio_used(PIO pio) {
                      << progs[i].off);
     return used;
 }
+#ifdef UG_S4_TEST
+/* Test process may instantiate more than one independent SDK peripheral set. */
+void ug_hw_test_reset(void) {
+    n_progs=0;psram_tx_seen=psram_rx_seen=psram_async_seen=-1;
+    for(unsigned i=0;i<N_ROWS;i++)table[i].actual=0;
+    table[4].want=WANT_FREE;
+}
+#endif

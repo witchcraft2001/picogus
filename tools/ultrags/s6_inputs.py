@@ -7,7 +7,10 @@ ROOT = Path(__file__).resolve().parents[2]
 COMMON = ['tests/ultrags/unit/sdk_mock/sdk_mock.c', 'sw/multifw/ug_catalog.c',
           *['sw/ultrags/'+name+'.c' for name in ('ug_config', 'ug_minimal', 'ug_storage',
             'ug_store', 'ug_memory', 'ug_psram', 'ug_hwmap', 'ug_pcm', 'ug_render', 'ug_mod')]]
-PROGRAMS = {'s6-storage': ['tests/ultrags/unit/test_s6.c', *COMMON],
+PROGRAMS = {'s6-voices': ['tests/ultrags/unit/test_shared_voices.c', *COMMON],
+            's6-voices64': ['tests/ultrags/unit/test_shared_voices.c', *COMMON],
+            's6-legacy': ['tests/ultrags/unit/test_legacy.c', *COMMON],
+            's6-storage': ['tests/ultrags/unit/test_s6.c', *COMMON],
             's6-pcm': ['tests/ultrags/unit/test_s6_pcm.c', 'sw/ultrags/ug_pcm.c'],
             's6-render': ['tests/ultrags/unit/test_s6_render.c', 'sw/ultrags/ug_render.c'],
             's6-math': ['tests/ultrags/unit/test_render_math.c'],
@@ -19,6 +22,7 @@ def digest(path):
 
 def inputs(build):
     files = {ROOT / source for sources in PROGRAMS.values() for source in sources}
+    files.update((ROOT / "sw/ultrags").glob("*.inc"))
     for directory in ('sw/ultrags', 'tests/ultrags/unit/sdk_mock', 'common', 'sw/multifw', 'sw/system'):
         files.update((ROOT / directory).rglob('*.h'))
     files.update(ROOT / ('tools/ultrags/'+name) for name in

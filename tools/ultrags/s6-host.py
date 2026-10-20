@@ -16,7 +16,7 @@ assert all(inputs(a.build).get(f)==h for f,h in before.items()), 'S6 inputs chan
 before=inputs(a.build)
 commands={}
 for name,sources in PROGRAMS.items():
-    cmd=shlex.split(a.cc)+['-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-pthread',
+    cmd=shlex.split(a.cc)+(['-DUG_LANES=64'] if name=='s6-voices64' else [])+['-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-pthread',
         '-fsanitize=undefined','-fno-sanitize-recover=all','-DUG_S4_TEST=1','-DPSRAM_ASYNC=1','-DPSRAM_PIN_CS=1',
         *['-I'+str(ROOT / directory) for directory in ('tests/ultrags/unit/sdk_mock','sw','sw/ultrags','common')],
         '-I'+str(gen), *[str(ROOT/source) for source in sources], '-o',str(a.build/name)]

@@ -21,7 +21,12 @@
 extern "C" {
 #endif
 
-#define UG_LANES        12
+#ifndef UG_LANES
+#define UG_LANES        32
+#endif
+#if UG_LANES < 32 || UG_LANES > 256
+#error "UG_LANES must be in 32..256 (voice IDs are u16, no wire bit mask)"
+#endif
 #define UG_CACHE_LINES  2
 #define UG_CACHE_LINE   256     /* bytes per PSRAM cache line */
 #define UG_CACHE_TAG_INVALID 0xFFFFFFFFu
@@ -66,6 +71,7 @@ typedef struct {
     uint8_t  failed;        /* backend failure: silence until next PLAY */
     uint8_t  ch_off;        /* interleaved stereo channel (0=L,1=R); mono=0 */
     uint8_t  cache_victim;    /* next line to evict (0/1 round robin) */
+    uint16_t cache_peer;     /* FFFF=own cache; stereo right may share left */
     uint32_t cache_tag[UG_CACHE_LINES]; /* byte window base, tag INVALID = empty */
     uint8_t  cache[UG_CACHE_LINES][UG_CACHE_LINE];
 } ug_lane;
@@ -83,6 +89,8 @@ typedef struct {
 typedef struct {
     ug_mem_if mem;
     ug_lane lanes[UG_LANES];
+    int32_t voice_samples[128];
+    int32_t accumulation[128][2]; /* bounded block scratch, never core1 stack */
     int32_t vol_q15;         /* mainVol scale, 32768 == unity */
     ug_stats stats;
     uint16_t peak_frames, peak_current[2], peaks[2];
@@ -102,6 +110,15 @@ int ug_lane_set(ug_mixer *m, unsigned lane, uint32_t src_offset,
                 uint32_t len_samples, uint32_t loop_start, uint32_t loop_end,
                 uint64_t step_q32, uint8_t gain, uint8_t pan,
                 uint8_t fmt, uint8_t mode, uint8_t looped, uint8_t ch_off);
+/* Configure a detached hidden music voice under a legacy GS FX override. */
+int ug_lane_configure(ug_mixer *m,ug_lane *lane,uint32_t src_offset,
+                uint32_t len_samples,uint32_t loop_start,uint32_t loop_end,
+                uint64_t step_q32,uint8_t gain,uint8_t pan,
+                uint8_t fmt,uint8_t mode,uint8_t looped,uint8_t ch_off);
+void ug_lane_advance_silent(ug_lane *lane,uint32_t frames);
+
+int ug_lane_share_cache(ug_mixer *m,unsigned right,unsigned left);
+
 /* PCM phase advances by rate/output_rate exactly, retaining division residue. */
 void ug_lane_pcm_rate(ug_lane *lane, uint32_t rate, uint32_t output_rate,
                       uint16_t repeats);

@@ -6,6 +6,7 @@ p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.
 subprocess.run(['node',str(r/'tools/ultrags/gen-wire.mjs'),str(r/'tools/ultrags/wire-schema.json'),str(a.build/'gen')],check=True)
 src=['tests/ultrags/unit/test_s4.c','tests/ultrags/unit/sdk_mock/sdk_mock.c','sw/multifw/ug_catalog.c','sw/ultrags/ug_config.c','sw/ultrags/ug_minimal.c','sw/ultrags/ug_storage.c','sw/ultrags/ug_store.c','sw/ultrags/ug_memory.c','sw/ultrags/ug_psram.c','sw/ultrags/ug_hwmap.c','sw/ultrags/ug_pcm.c','sw/ultrags/ug_render.c','sw/ultrags/ug_mod.c']
 inputs={r/s for s in src} | set((r/'sw/ultrags').glob('*.h')) | set((r/'common').glob('*.h')) | set((r/'tests/ultrags/unit/sdk_mock').rglob('*.h')) | {r/'tools/ultrags/s4-host.py',r/'tools/ultrags/wire-schema.json',r/'tools/ultrags/gen-wire.mjs',r/'sw/system/flash_settings.h',r/'sw/multifw/ug_catalog.h'}
+inputs.update((r/'sw/ultrags').glob('*.inc'))
 inputs.add(a.build.resolve()/'gen/ug_wire.h')
 h=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 captured={str(p):h(p) for p in sorted(inputs)}

@@ -1058,6 +1058,16 @@ UG_XFER_END:
     djnz .checkcrc
     pop de
     pop bc
+    IFDEF APP_DUMP
+    push bc
+    push de
+    ld hl,UGCRC.OUT
+    ld de,UG_FILE_BLOCK_CRC
+    ld bc,4
+    ldir
+    pop de
+    pop bc
+    ENDIF
 	ld	hl,(UGCRC.OUT)
 	call	PUT_LE16
 	ld	hl,(UGCRC.OUT+2)
@@ -1336,7 +1346,10 @@ UG_SLOW_DATA:
     ld (UGXFER.SLOWCOUNT),hl
     IFDEF UG_DSS_TIMED
     call UG_WAIT_START
-    ld a,5
+    ; Leave the final fractional second for the card's 5s inactivity fuse.
+    ; UG_WAIT_NEXT accounts for DSS quantization: 4s budget expires in 4..5s,
+    ; whereas a 5s budget could outlive the grant and mistake idle for ACK.
+    ld a,4
     ld (UGTM.LIMIT),a
     ENDIF
 .loop:
@@ -1476,7 +1489,7 @@ UG_SNAPSHOT:
 	ld	a,UG_XC_SNAP_LATCH
 	call	UG_REG_W
 	pop	de			; DE = dest ptr: UG_REG_R clobbers HL!
-	ld	bc,128
+	ld	bc,64
 .sloop:
     call UG_FRAME_YIELD
 	ld	a,UG_REG_SNAP_DATA

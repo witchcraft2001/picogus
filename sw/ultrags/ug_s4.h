@@ -21,7 +21,7 @@ bool ug_storage_abort(uint32_t now);
 void ug_storage_request_cancel(void);
 void ug_storage_data_overflow(void);
 void ug_storage_gs_reset(bool cold,uint32_t now);
-void ug_storage_snapshot(uint8_t out[128]);
+void ug_storage_snapshot(uint8_t out[64]);
 void ug_storage_snap_init(void);
 void ug_storage_audio(uint32_t frames,uint32_t underruns);
 void ug_storage_latch(void);

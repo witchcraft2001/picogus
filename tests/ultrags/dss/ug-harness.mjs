@@ -194,7 +194,7 @@ export class SprinterMachine {
   ioRead = (p) => {
     p &= 0xFFFF;
     if (this.ioLog.length < this.logLimit) this.ioLog.push({ t: this.cycles, dir: 'in', port: p });
-    if (p === PORT_PAGE3) return this.page3;             // readable shadow
+    if ((p & 255) === PORT_PAGE3) return this.page3;             // readable shadow
     if (p === PORT_SYSTEM) return this.mapperRead;       // mapper, NOT SYSTEM
     if (p === PORT_ISA) return this.portIsa;
     return 0xFF;
@@ -210,9 +210,9 @@ export class SprinterMachine {
       this.turboWrites++;
       return;
     }
-    if (p === PORT_PAGE3 || p === PORT_SYSTEM) {
+    if ((p & 255) === PORT_PAGE3 || p === PORT_SYSTEM) {
       const before = this.isaOpen;
-      if (p === PORT_PAGE3) this.page3 = v;
+      if ((p & 255) === PORT_PAGE3) this.page3 = v;
       else this.system = v;
       if (!before && this.isaOpen) this.windowStart = this.elapsedTicks;
       if (before && !this.isaOpen && this.windowStart !== null) {
@@ -351,6 +351,7 @@ export function runImage(Z80, mach, { entry, stack, iff = 1, budget = 4_000_000 
     if (bytes.length > 255) throw new Error('CLI too long');
     mach.mem[0x6000] = bytes.length;
     mach.mem.set(bytes, 0x6001);
+    mach.mem[0x6001+bytes.length]=0; // DSS length-prefixed ASCIIZ command tail
     st0.ix = 0x6000;
   }
   st0.iff1 = !!iff; st0.iff2 = !!iff; st0.imode = 1;
@@ -363,6 +364,9 @@ export function runImage(Z80, mach, { entry, stack, iff = 1, budget = 4_000_000 
       if (mach.dssCall(st) === 'exit') break;
       z.setState(st);
       continue;                                        // call, not instruction
+    }
+    if(st.pc===0x0008 && mach.biosCall) {
+      mach.biosCall(st);z.setState(st);continue;
     }
     if (st.pc === 0x0008 || st.pc === 0x0000 || st.pc === 0x0038 ||
         (st.pc === 0x0066 && !mach.nmiArmed)) {

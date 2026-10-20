@@ -27,6 +27,8 @@ PICO_EXTRAS_PATH ?=
 UG_PYTHON ?= python3
 UG_AUDIO_PYTHON ?= $(UG_PYTHON)
 UG_AUDIO_BASELINE ?=
+UG_CONFIG_BASELINE ?=
+UG_CONFIG_WAIT_BASELINE ?=
 CC ?= cc
 UG_PICOTOOL_SEED ?=
 PICOTOOL_ROOT := $(abspath $(BUILD))/tools/picotool
@@ -330,9 +332,12 @@ cfg-check: ultrags-path-report test-dss fixtures
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/handshake-guard-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/guard
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/save-clock-check.py --build $(BUILD) --cc "$(CC)"
 	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/audio-render-check.py --build $(BUILD) $(if $(UG_AUDIO_BASELINE),--baseline "$(UG_AUDIO_BASELINE)")
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/config-read-arm.py --build $(BUILD) $(if $(UG_CONFIG_BASELINE),--baseline "$(UG_CONFIG_BASELINE)")
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/config-read-deadline.py --build $(BUILD) $(if $(UG_CONFIG_WAIT_BASELINE),--baseline "$(UG_CONFIG_WAIT_BASELINE)")
 	$(NODE) $(ROOT)/tests/ultrags/dss/ug-card-test.mjs
 	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_cfg_bundle.py --build $(BUILD)
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/config-exchange.py --build $(BUILD)/host --catalog $(BUILD)/multifw-release/generated/multifw/catalog.bin
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/config-write-window.py --build $(BUILD)/multifw-release --fixture $(BUILD)/host --out $(BUILD)/host/write-window
 	UG_S2_CATALOG="$(abspath $(BUILD))/multifw-release/generated/multifw/catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-s2.mjs $(ROOT) $(BUILD)
 	$(NODE) $(ROOT)/tests/ultrags/dss/config-regression.mjs $(ROOT) $(BUILD)
 	$(NODE) $(ROOT)/tests/ultrags/dss/turbo-contract.mjs $(ROOT) $(BUILD)
@@ -349,3 +354,17 @@ cfg-package: cfg-check
 .PHONY: throughput-package
 throughput-package: cfg-package
 	$(NODE) $(ROOT)/tools/ultrags/package-throughput.mjs $(BUILD) $(FAST_COMPARE_BUILD)
+
+# Initial API 1.0 VLS1. Private unchanged guest inputs are read, never packaged.
+# Set UG_PROPLAY and UG_PROPLAY_MOD, then run this independently for A and B.
+.PHONY: voices-host voices-firmware voices-package
+voices-host: test-dss fixtures
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/voices-host.py --build $(BUILD)
+
+voices-firmware:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/voices-firmware.py --build $(BUILD)
+
+VOICES_COMPARE_BUILD ?= $(ROOT)/build/voices-b
+VOICES_DELIVERY ?= $(ROOT)/build/voices-review
+voices-package:
+	$(NODE) $(ROOT)/tools/ultrags/package-voices.mjs $(BUILD) $(VOICES_COMPARE_BUILD) $(VOICES_DELIVERY)

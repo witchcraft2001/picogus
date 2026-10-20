@@ -4,6 +4,7 @@ void ug_save_prepare(void){assert(mock_clock==370000000);mock_prepares++;}
 void ug_save_restore(void){assert(mock_clock==370000000);mock_restores++;}
 
 extern "C" bool ug_storage_busy(void) { return false; }
+extern "C" bool ug_storage_audio_active(void) { return false; }
 extern "C" bool ug_storage_playback_busy(void) { return false; }
 extern "C" void ug_storage_cancel(uint32_t) {}
 extern "C" bool ug_storage_command(uint8_t,const uint8_t *,uint8_t,uint8_t *,uint8_t *n,uint8_t *s,uint32_t) { *n=0; *s=1; return true; }
@@ -29,3 +30,11 @@ extern "C" void ug_storage_touch(uint32_t) {}
 extern "C" void ug_storage_data_overflow(void) {}
 
 extern "C" bool ug_storage_bulk(void) { return false; }
+// S2 isolates configuration/framing; full musical GS executes in test_legacy.
+extern "C" bool ug_legacy_busy(void) { return false; }
+extern "C" bool ug_legacy_loading(void) { return false; }
+extern "C" bool ug_legacy_accepts_data(void) { return false; }
+extern "C" void ug_legacy_data(uint8_t,uint8_t *e) { *e=6; }
+extern "C" bool ug_legacy_reply(uint8_t *) { return false; }
+extern "C" void ug_legacy_reply_consumed(void) {}
+extern "C" bool ug_legacy_command(uint8_t c,bool,uint8_t,uint8_t *,bool *db,uint8_t *e) { *db=false;*e=c?1:0;return true; }

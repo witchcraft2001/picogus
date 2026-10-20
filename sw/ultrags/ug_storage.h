@@ -11,6 +11,7 @@ void ug_storage_publish(uint32_t physical,uint8_t error,uint8_t audio_error);
 bool ug_storage_busy(void);
 /* Atomic maintenance gate; includes paused and accepted pending instances. */
 bool ug_storage_playback_busy(void);
+bool ug_storage_audio_active(void);
 void ug_storage_cancel(uint32_t now);
 /* Returns false while the one asynchronous command is still executing. */
 bool ug_storage_command(uint8_t op,const uint8_t *request,uint8_t size,

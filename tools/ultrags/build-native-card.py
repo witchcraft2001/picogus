@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Build production-C adapter for the actual Z80 regression harness (N-API)."""
+import argparse, hashlib, json, os, platform, shlex, subprocess
+from pathlib import Path
+from s6_inputs import COMMON, ROOT, digest
+p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--cc',default='cc');p.add_argument('--node-include',type=Path);a=p.parse_args()
+a.build=a.build.resolve();a.build.mkdir(parents=True,exist_ok=True)
+version=subprocess.check_output(['node','--version'],text=True).strip().removeprefix('v')
+headers=a.node_include or Path.home()/'Library/Caches/node-gyp'/version/'include/node'
+if not (headers/'node_api.h').is_file(): raise SystemExit('Set --node-include to the installed Node N-API headers')
+gen=a.build/'gen';subprocess.run(['node',str(ROOT/'tools/ultrags/gen-wire.mjs'),str(ROOT/'tools/ultrags/wire-schema.json'),str(gen)],check=True)
+subprocess.run(['python3',str(ROOT/'tools/ultrags/gen-diag.py'),str(ROOT/'tools/ultrags/diag-schema.json'),str(gen)],check=True)
+cmd=shlex.split(a.cc)+['-std=c11','-O2','-g','-Wall','-Wextra','-Werror','-pthread','-DUG_S4_TEST=1','-DPSRAM_ASYNC=1','-DPSRAM_PIN_CS=1',
+    *['-I'+str(ROOT/d) for d in ('tests/ultrags/unit/sdk_mock','sw','sw/ultrags','common')],'-I'+str(gen),'-I'+str(headers),
+    *(['-bundle','-undefined','dynamic_lookup'] if platform.system()=='Darwin' else ['-shared','-fPIC']),
+    str(ROOT/'tests/ultrags/unit/native_card.c'),*[str(ROOT/f) for f in COMMON],'-o',str(a.build/'native-card.node')]
+files={ROOT/f for f in COMMON}|{ROOT/'tests/ultrags/unit/native_card.c',Path(__file__).resolve()}
+for folder in ('sw/ultrags','tests/ultrags/unit/sdk_mock','common','sw/system','sw/multifw'):
+    files.update((ROOT/folder).rglob('*.h'))
+files.update((ROOT/'sw/ultrags').glob('*.inc'));files.update(gen.glob('*'))
+before={str(f):digest(f) for f in sorted(files)}
+subprocess.run(cmd,check=True)
+assert before=={str(f):digest(f) for f in sorted(files)},'sources changed during adapter build'
+(a.build/'native-card-build.json').write_text(json.dumps(dict(command=cmd,inputs=before,artifact=digest(a.build/'native-card.node'),scope='Production C and functional SDK model; no peripheral timing proof'),indent=2)+'\n')

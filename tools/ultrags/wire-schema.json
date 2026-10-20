@@ -3,7 +3,7 @@
     "name": "ultrags-wire",
     "schemaVersion": "1.0",
     "spec": "ultra-gs.md",
-    "specVersion": "1.7",
+    "specVersion": "1.8",
     "endianness": "le",
     "note": "Derived, checked source for generated equates/layouts of the Ultra GS EXT wire protocol. ultra-gs.md remains the sole normative source; this schema must match it and is validated + cross-tested. Generator: tools/ultrags/gen-wire.mjs -> build/gen/{ug_wire.h,ug_wire.inc,ug_wire.norm.json}"
   },
@@ -27,10 +27,8 @@
     "MAX_OBJECTS": { "value": 128, "note": "live objects; handle counter limit 65535/session" },
     "MAX_HANDLE_ISSUES": { "value": 65535 },
     "QUEUE_MAX": { "value": 32 },
-    "SNAPSHOT_SIZE": { "value": 128 },
-    "SNAP_INDEX_MAX": { "value": 127 },
-    "FX_LANES": { "value": 16, "note": "0..7 music, 8..11 dedicated FX mandatory, 12..15 optional" },
-    "MUSIC_VOICES": { "value": 8 },
+    "SNAPSHOT_SIZE": { "value": 64 },
+    "SNAP_INDEX_MAX": { "value": 63 },
     "MOD_CHANNELS_4": { "value": 4 },
     "MOD_CHANNELS_8": { "value": 8 },
     "PCM_RATE_MIN": { "value": 8000 },
@@ -54,7 +52,9 @@
     "DEFAULT_ALIAS": { "value": "0xFFFF", "note": "alias off" },
     "GS_ALIAS_DATA": { "value": "0x00B3" },
     "GS_ALIAS_CMD": { "value": "0x00BB" },
-    "GS_STATUS_IDLE": { "value": "0x7E", "note": "STATUS & 7Eh == 7Eh when neither CB nor DB" }
+    "GS_STATUS_IDLE": { "value": "0x7E", "note": "STATUS & 7Eh == 7Eh when neither CB nor DB" },
+    "VOICE_AUTO": { "value": "0xFFFF" },
+    "INFO_LAYOUT": { "value": "0x31534C56", "note": "VLS1" }
   },
   "xStatus": {
     "READY": { "bit": 0 },
@@ -156,7 +156,7 @@
   },
   "structs": {
     "INFO": {
-      "size": 36,
+      "size": 40,
       "fields": [
         { "name": "magic", "type": "bytes:4", "const": "UGS1" },
         { "name": "api_major", "type": "u8", "const": 1 },
@@ -165,11 +165,12 @@
         { "name": "boot_state", "type": "u8" },
         { "name": "fw_version", "type": "u32" },
         { "name": "session", "type": "u64" },
-        { "name": "build_id", "type": "bytes:16" }
+        { "name": "build_id", "type": "bytes:16" },
+        { "name": "layout", "type": "bytes:4", "const": "VLS1" }
       ]
     },
     "CAPS": {
-      "size": 32,
+      "size": 44,
       "fields": [
         { "name": "features", "type": "u32" },
         { "name": "formats", "type": "u32" },
@@ -178,14 +179,18 @@
         { "name": "max_payload", "type": "u16", "const": 128 },
         { "name": "objects", "type": "u16", "const": 128 },
         { "name": "playlist_entries", "type": "u16", "const": 32 },
-        { "name": "music_voices", "type": "u8", "const": 8 },
-        { "name": "fx_voices", "type": "u8" },
-        { "name": "gs_profile", "type": "u8", "const": 1 },
-        { "name": "reserved", "type": "u8", "const": 0 },
+        { "name": "total_voices", "type": "u16" },
+        { "name": "music_limit", "type": "u16" },
+        { "name": "fx_limit", "type": "u16" },
+        { "name": "gs_profile", "type": "u8" },
+        { "name": "pool_kind", "type": "u8", "const": 1 },
         { "name": "base", "type": "u16" },
         { "name": "alias", "type": "u16" },
-        { "name": "pcm_rate_min", "type": "u16", "const": 8000 },
-        { "name": "pcm_rate_max", "type": "u16", "const": 48000 }
+        { "name": "pcm_rate_min", "type": "u32", "const": 8000 },
+        { "name": "pcm_rate_max", "type": "u32", "const": 48000 },
+        { "name": "voice_record_size", "type": "u8", "const": 20 },
+        { "name": "fx_record_size", "type": "u8", "const": 16 },
+        { "name": "snapshot_size", "type": "u16", "const": 64 }
       ]
     },
     "MEM_INFO": {
@@ -261,7 +266,9 @@
     },
     "SEAL_RESP": {
       "size": 4,
-      "fields": [ { "name": "actual_crc", "type": "u32" } ]
+      "fields": [
+        { "name": "actual_crc", "type": "u32" }
+      ]
     },
     "OBJECT_INFO": {
       "size": 38,
@@ -412,7 +419,7 @@
       "size": 8,
       "fields": [
         { "name": "handle", "type": "u16" },
-        { "name": "voice_mask", "type": "u16" },
+        { "name": "preferred_voice", "type": "u16" },
         { "name": "priority", "type": "u8" },
         { "name": "gain", "type": "u8" },
         { "name": "pan", "type": "u8" },
@@ -422,8 +429,8 @@
     "PLAY_FX_RESP": {
       "size": 4,
       "fields": [
-        { "name": "fx_id", "type": "u16" },
-        { "name": "voice_mask", "type": "u16" }
+        { "name": "instance_id", "type": "u16" },
+        { "name": "voice_count", "type": "u16" }
       ]
     },
     "QUEUE_ADD_REQ": {
@@ -437,7 +444,9 @@
     },
     "QUEUE_INFO_REQ": {
       "size": 1,
-      "fields": [ { "name": "index", "type": "u8" } ]
+      "fields": [
+        { "name": "index", "type": "u8" }
+      ]
     },
     "QUEUE_INFO_RESP": {
       "size": 8,
@@ -451,17 +460,19 @@
       ]
     },
     "FX_STATUS_REQ": {
-      "size": 2,
+      "size": 16,
       "fields": [
-        { "name": "first_lane", "type": "u8" },
-        { "name": "count", "type": "u8", "min": 1, "max": 7 }
+        { "name": "session", "type": "u64" },
+        { "name": "snapshot_seq", "type": "u32" },
+        { "name": "first", "type": "u16" },
+        { "name": "max_records", "type": "u16" }
       ]
     },
     "FXREC": {
       "size": 16,
       "fields": [
-        { "name": "fx_id", "type": "u16" },
-        { "name": "voice_mask", "type": "u16" },
+        { "name": "instance_id", "type": "u16" },
+        { "name": "voice_count", "type": "u16" },
         { "name": "handle", "type": "u16" },
         { "name": "state", "type": "u8", "note": "0=idle 1=playing 2=paused" },
         { "name": "channels", "type": "u8" },
@@ -469,22 +480,11 @@
         { "name": "gain", "type": "u8" },
         { "name": "pan", "type": "u8" },
         { "name": "priority", "type": "u8" },
-        { "name": "flags", "type": "u8", "note": "bit0=legacy override, bit1=right lane stereo" }
-      ]
-    },
-    "CHANREC": {
-      "size": 8,
-      "fields": [
-        { "name": "note", "type": "u8", "note": "0..95 or 127=none" },
-        { "name": "volume", "type": "u8", "note": "0..64" },
-        { "name": "pan", "type": "u8" },
-        { "name": "flags", "type": "u8", "note": "bit0=active bit1=fx override bit2=muted" },
-        { "name": "period", "type": "u16" },
-        { "name": "peak", "type": "u16" }
+        { "name": "flags", "type": "u8", "note": "bit0=legacy override, bit1=whole-object repeat" }
       ]
     },
     "SNAPSHOT": {
-      "size": 128,
+      "size": 64,
       "fields": [
         { "name": "snapshot_seq", "type": "u32", "off": 0 },
         { "name": "session", "type": "u64", "off": 4 },
@@ -493,8 +493,7 @@
         { "name": "reserved20", "type": "u16", "off": 22, "const": 0 },
         { "name": "state", "type": "u8", "off": 24 },
         { "name": "kind", "type": "u8", "off": 25 },
-        { "name": "channels", "type": "u8", "off": 26 },
-        { "name": "playlist_index", "type": "u8", "off": 27 },
+        { "name": "channels", "type": "u16", "off": 26 },
         { "name": "object", "type": "u16", "off": 28 },
         { "name": "reserved30", "type": "u16", "off": 30, "const": 0 },
         { "name": "source_frame", "type": "u32", "off": 32 },
@@ -508,12 +507,11 @@
         { "name": "audio_underruns", "type": "u32", "off": 46 },
         { "name": "last_audio_error", "type": "u8", "off": 50 },
         { "name": "reserved51", "type": "u8", "off": 51, "const": 0 },
-        { "name": "voice_mask", "type": "u16", "off": 52 },
-        { "name": "reserved54", "type": "bytes:2", "off": 54 },
-        { "name": "chan", "type": "array:8:CHANREC", "off": 56 },
-        { "name": "transfer_id", "type": "u32", "off": 120 },
-        { "name": "transfer_done", "type": "u16", "off": 124 },
-        { "name": "transfer_length", "type": "u16", "off": 126 }
+        { "name": "voice_count", "type": "u16", "off": 52 },
+        { "name": "fx_count", "type": "u16", "off": 54 },
+        { "name": "transfer_id", "type": "u32", "off": 56 },
+        { "name": "transfer_done", "type": "u16", "off": 60 },
+        { "name": "transfer_length", "type": "u16", "off": 62 }
       ]
     },
     "GS_DESC": {
@@ -554,44 +552,282 @@
         { "name": "records", "type": "array:8:CATALOG_REC", "off": 16 },
         { "name": "catalog_crc32", "type": "u32", "off": 144 }
       ]
+    },
+    "PAGE_REQ": {
+      "size": 16,
+      "fields": [
+        { "name": "session", "type": "u64" },
+        { "name": "snapshot_seq", "type": "u32" },
+        { "name": "first", "type": "u16" },
+        { "name": "max_records", "type": "u16" }
+      ]
+    },
+    "PAGE_HEADER": {
+      "size": 20,
+      "fields": [
+        { "name": "session", "type": "u64" },
+        { "name": "snapshot_seq", "type": "u32" },
+        { "name": "first", "type": "u16" },
+        { "name": "count", "type": "u16" },
+        { "name": "total", "type": "u16" },
+        { "name": "record_size", "type": "u16" }
+      ]
+    },
+    "VOICEREC": {
+      "size": 20,
+      "fields": [
+        { "name": "voice_id", "type": "u16" },
+        { "name": "instance_id", "type": "u16" },
+        { "name": "handle", "type": "u16" },
+        { "name": "logical_channel", "type": "u16" },
+        { "name": "source_frame", "type": "u32" },
+        { "name": "peak", "type": "u16" },
+        { "name": "period", "type": "u16" },
+        { "name": "note", "type": "u8" },
+        { "name": "volume", "type": "u8" },
+        { "name": "pan", "type": "u8" },
+        { "name": "flags", "type": "u8" }
+      ]
     }
   },
   "opcodes": [
-    { "hex": "0x00", "name": "INFO", "req": [], "respStruct": "INFO", "transferOk": true },
-    { "hex": "0x01", "name": "CAPS", "req": [], "respStruct": "CAPS" },
-    { "hex": "0x02", "name": "MEM_INFO", "req": [], "respStruct": "MEM_INFO", "transferOk": true },
-    { "hex": "0x03", "name": "STATS", "req": [], "respStruct": "STATS", "transferOk": true },
-    { "hex": "0x04", "name": "CLEAR_STATS", "req": [], "resp": [] },
-    { "hex": "0x05", "name": "MEM_TEST", "req": [ { "name": "mode", "type": "u8" } ], "respStruct": "MEM_TEST_RESP" },
-    { "hex": "0x06", "name": "RESET_STORE", "reqStruct": "RESET_STORE_REQ", "resp": [ { "name": "session_id", "type": "u64" } ] },
+    {
+      "hex": "0x00",
+      "name": "INFO",
+      "req": [],
+      "respStruct": "INFO",
+      "transferOk": true
+    },
+    {
+      "hex": "0x01",
+      "name": "CAPS",
+      "req": [],
+      "respStruct": "CAPS"
+    },
+    {
+      "hex": "0x02",
+      "name": "MEM_INFO",
+      "req": [],
+      "respStruct": "MEM_INFO",
+      "transferOk": true
+    },
+    {
+      "hex": "0x03",
+      "name": "STATS",
+      "req": [],
+      "respStruct": "STATS",
+      "transferOk": true
+    },
+    {
+      "hex": "0x04",
+      "name": "CLEAR_STATS",
+      "req": [],
+      "resp": []
+    },
+    {
+      "hex": "0x05",
+      "name": "MEM_TEST",
+      "req": [
+        { "name": "mode", "type": "u8" }
+      ],
+      "respStruct": "MEM_TEST_RESP"
+    },
+    {
+      "hex": "0x06",
+      "name": "RESET_STORE",
+      "reqStruct": "RESET_STORE_REQ",
+      "resp": [
+        { "name": "session_id", "type": "u64" }
+      ]
+    },
     { "hex": "0x10", "name": "ALLOC", "reqStruct": "ALLOC_REQ", "respStruct": "ALLOC_RESP" },
-    { "hex": "0x11", "name": "FREE", "req": [ { "name": "handle", "type": "u16" } ], "resp": [] },
-    { "hex": "0x12", "name": "OBJECT_INFO", "req": [ { "name": "handle", "type": "u16" } ], "respStruct": "OBJECT_INFO", "transferOk": true },
+    {
+      "hex": "0x11",
+      "name": "FREE",
+      "req": [
+        { "name": "handle", "type": "u16" }
+      ],
+      "resp": []
+    },
+    {
+      "hex": "0x12",
+      "name": "OBJECT_INFO",
+      "req": [
+        { "name": "handle", "type": "u16" }
+      ],
+      "respStruct": "OBJECT_INFO",
+      "transferOk": true
+    },
     { "hex": "0x13", "name": "SEAL", "reqStruct": "SEAL_REQ", "respStruct": "SEAL_RESP" },
-    { "hex": "0x14", "name": "PCM_CONFIG", "reqStruct": "PCM_CONFIG_REQ", "resp": [] },
-    { "hex": "0x15", "name": "OBJECT_ENUM", "req": [ { "name": "after_handle", "type": "u16" } ], "resp": [ { "name": "next_handle", "type": "u16" } ] },
-    { "hex": "0x16", "name": "LEGACY_INFO", "req": [], "respStruct": "LEGACY_INFO_RESP", "transferOk": true },
+    {
+      "hex": "0x14",
+      "name": "PCM_CONFIG",
+      "reqStruct": "PCM_CONFIG_REQ",
+      "resp": []
+    },
+    {
+      "hex": "0x15",
+      "name": "OBJECT_ENUM",
+      "req": [
+        { "name": "after_handle", "type": "u16" }
+      ],
+      "resp": [
+        { "name": "next_handle", "type": "u16" }
+      ]
+    },
+    {
+      "hex": "0x16",
+      "name": "LEGACY_INFO",
+      "req": [],
+      "respStruct": "LEGACY_INFO_RESP",
+      "transferOk": true
+    },
     { "hex": "0x20", "name": "WRITE_BEGIN", "reqStruct": "WRITE_BEGIN_REQ", "respStruct": "WRITE_BEGIN_RESP", "transferCmd": true },
-    { "hex": "0x21", "name": "WRITE_END", "reqStruct": "WRITE_END_REQ", "resp": [], "transferCmd": true, "transferOk": true },
+    {
+      "hex": "0x21",
+      "name": "WRITE_END",
+      "reqStruct": "WRITE_END_REQ",
+      "resp": [],
+      "transferCmd": true,
+      "transferOk": true
+    },
     { "hex": "0x22", "name": "READ_BEGIN", "reqStruct": "READ_BEGIN_REQ", "respStruct": "READ_BEGIN_RESP", "transferCmd": true },
-    { "hex": "0x23", "name": "READ_END", "reqStruct": "READ_END_REQ", "resp": [], "transferCmd": true, "transferOk": true },
-    { "hex": "0x24", "name": "TRANSFER_CANCEL", "req": [ { "name": "transfer", "type": "u32" } ], "resp": [], "transferOk": true },
-    { "hex": "0x30", "name": "PLAY_PCM", "reqStruct": "PLAY_PCM_REQ", "resp": [ { "name": "play_id", "type": "u16" } ] },
-    { "hex": "0x31", "name": "PLAY_MOD", "reqStruct": "PLAY_MOD_REQ", "resp": [ { "name": "play_id", "type": "u16" } ] },
-    { "hex": "0x32", "name": "CONTROL", "reqStruct": "CONTROL_REQ", "resp": [] },
-    { "hex": "0x33", "name": "SEEK_MOD", "reqStruct": "SEEK_MOD_REQ", "resp": [] },
-    { "hex": "0x34", "name": "SET_MIX", "reqStruct": "SET_MIX_REQ", "resp": [] },
-    { "hex": "0x35", "name": "SET_TEMPO", "reqStruct": "SET_TEMPO_REQ", "resp": [] },
+    {
+      "hex": "0x23",
+      "name": "READ_END",
+      "reqStruct": "READ_END_REQ",
+      "resp": [],
+      "transferCmd": true,
+      "transferOk": true
+    },
+    {
+      "hex": "0x24",
+      "name": "TRANSFER_CANCEL",
+      "req": [
+        { "name": "transfer", "type": "u32" }
+      ],
+      "resp": [],
+      "transferOk": true
+    },
+    {
+      "hex": "0x30",
+      "name": "PLAY_PCM",
+      "reqStruct": "PLAY_PCM_REQ",
+      "resp": [
+        { "name": "play_id", "type": "u16" }
+      ]
+    },
+    {
+      "hex": "0x31",
+      "name": "PLAY_MOD",
+      "reqStruct": "PLAY_MOD_REQ",
+      "resp": [
+        { "name": "play_id", "type": "u16" }
+      ]
+    },
+    {
+      "hex": "0x32",
+      "name": "CONTROL",
+      "reqStruct": "CONTROL_REQ",
+      "resp": []
+    },
+    {
+      "hex": "0x33",
+      "name": "SEEK_MOD",
+      "reqStruct": "SEEK_MOD_REQ",
+      "resp": []
+    },
+    {
+      "hex": "0x34",
+      "name": "SET_MIX",
+      "reqStruct": "SET_MIX_REQ",
+      "resp": []
+    },
+    {
+      "hex": "0x35",
+      "name": "SET_TEMPO",
+      "reqStruct": "SET_TEMPO_REQ",
+      "resp": []
+    },
     { "hex": "0x36", "name": "PLAY_FX", "reqStruct": "PLAY_FX_REQ", "respStruct": "PLAY_FX_RESP" },
-    { "hex": "0x37", "name": "STOP_FX", "req": [ { "name": "voice_mask", "type": "u16" } ], "resp": [] },
-    { "hex": "0x38", "name": "SET_PAN", "req": [ { "name": "channel", "type": "u8" }, { "name": "pan", "type": "u8" } ], "resp": [] },
-    { "hex": "0x39", "name": "CONTROL_FX", "req": [ { "name": "fx_id", "type": "u16" }, { "name": "action", "type": "u8" } ], "resp": [] },
-    { "hex": "0x40", "name": "QUEUE_CLEAR", "req": [], "resp": [] },
-    { "hex": "0x41", "name": "QUEUE_ADD", "reqStruct": "QUEUE_ADD_REQ", "resp": [ { "name": "index", "type": "u8" } ] },
-    { "hex": "0x42", "name": "QUEUE_PLAY", "req": [ { "name": "cycles", "type": "u16" } ], "resp": [ { "name": "play_id", "type": "u16" } ] },
+    {
+      "hex": "0x37",
+      "name": "STOP_FX",
+      "req": [
+        { "name": "instance_id", "type": "u16" }
+      ],
+      "resp": []
+    },
+    {
+      "hex": "0x38",
+      "name": "SET_PAN",
+      "req": [
+        { "name": "logical_channel", "type": "u16" },
+        { "name": "pan", "type": "u8" }
+      ],
+      "resp": []
+    },
+    {
+      "hex": "0x39",
+      "name": "CONTROL_FX",
+      "req": [
+        { "name": "fx_id", "type": "u16" },
+        { "name": "action", "type": "u8" }
+      ],
+      "resp": []
+    },
+    {
+      "hex": "0x40",
+      "name": "QUEUE_CLEAR",
+      "req": [],
+      "resp": []
+    },
+    {
+      "hex": "0x41",
+      "name": "QUEUE_ADD",
+      "reqStruct": "QUEUE_ADD_REQ",
+      "resp": [
+        { "name": "index", "type": "u8" }
+      ]
+    },
+    {
+      "hex": "0x42",
+      "name": "QUEUE_PLAY",
+      "req": [
+        { "name": "cycles", "type": "u16" }
+      ],
+      "resp": [
+        { "name": "play_id", "type": "u16" }
+      ]
+    },
     { "hex": "0x43", "name": "QUEUE_INFO", "reqStruct": "QUEUE_INFO_REQ", "respStruct": "QUEUE_INFO_RESP" },
-    { "hex": "0x50", "name": "SNAPSHOT", "req": [], "respStruct": "SNAPSHOT", "transferOk": true },
-    { "hex": "0x51", "name": "FX_STATUS", "reqStruct": "FX_STATUS_REQ", "resp": [ { "name": "first_lane", "type": "u8" }, { "name": "count", "type": "u8" }, { "name": "records", "type": "varray:FXREC", "countField": "count" } ], "transferOk": true }
+    {
+      "hex": "0x50",
+      "name": "SNAPSHOT",
+      "req": [],
+      "respStruct": "SNAPSHOT",
+      "transferOk": true
+    },
+    {
+      "hex": "0x51",
+      "name": "FX_STATUS",
+      "reqStruct": "PAGE_REQ",
+      "resp": [
+        { "name": "header", "type": "struct:PAGE_HEADER" },
+        { "name": "records", "type": "varray:FXREC", "countField": "count" }
+      ],
+      "transferOk": true
+    },
+    {
+      "hex": "0x52",
+      "name": "VOICE_STATUS",
+      "reqStruct": "PAGE_REQ",
+      "resp": [
+        { "name": "header", "type": "struct:PAGE_HEADER" },
+        { "name": "records", "type": "varray:VOICEREC", "countField": "count" }
+      ],
+      "transferOk": true
+    }
   ],
   "gsCommands": [
     { "hex": "0x00", "name": "GS_RESET_FLAGS", "pre": 0, "post": 0, "out": 0 },

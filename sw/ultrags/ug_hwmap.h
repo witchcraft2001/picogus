@@ -26,9 +26,12 @@ extern "C" {
 /* Allocation per ultra-gs.md resource map */
 #define UG_IOW_SM      0   /* pio0 sm0 */
 #define UG_IOR_SM      1   /* pio0 sm1 */
-/* HANDSHAKE: PIO0 IRQ flag0 is a passive IOR completion latch (no PIO IRQ).
- * Timer alarm2 / TIMER_IRQ_2 belong to core1, priority 0x00, for the read fuse.
- * No extra SM or DMA channel is used; ISA instruction RAM is 10 + 22 = 32. */
+/* UG_LED_DIAG only: alarm1 / TIMER_IRQ_1 on core0 drives GPIO25;
+ * default SDK alarm pool remains alarm3; core1 fuse remains alarm2. */
+/* HANDSHAKE: a shared 32-word program serves pio0 SM0/SM1.
+ * Timer alarm2 / TIMER_IRQ_2 belong to core1, priority 0x00, for the ISA fuse.
+ * Core0 counts serviced responses / WAIT releases; ignored captures are
+ * not completions. No extra SM, PIO IRQ or DMA channel is used. */
 #define UG_M62429_SM   0   /* pio1 sm0 (PICOGUS_2 only) */
 #define UG_PSRAM_SM    1   /* pio1 sm1 */
 #define UG_I2S_SM      3   /* pio1 sm3 */

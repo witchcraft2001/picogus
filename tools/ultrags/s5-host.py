@@ -7,6 +7,7 @@ subprocess.run(['node',str(r/'tools/ultrags/gen-wire.mjs'),str(r/'tools/ultrags/
 subprocess.run(['python3',str(r/'tools/ultrags/gen-diag.py'),str(r/'tools/ultrags/diag-schema.json'),str(a.build/'gen')],check=True)
 src=['tests/ultrags/unit/test_s5.c','tests/ultrags/unit/sdk_mock/sdk_mock.c','sw/multifw/ug_catalog.c','sw/ultrags/ug_config.c','sw/ultrags/ug_minimal.c','sw/ultrags/ug_storage.c','sw/ultrags/ug_store.c','sw/ultrags/ug_memory.c','sw/ultrags/ug_psram.c','sw/ultrags/ug_hwmap.c','sw/ultrags/ug_pcm.c','sw/ultrags/ug_render.c','sw/ultrags/ug_mod.c']
 inputs={r/s for s in src} | set((r/'sw/ultrags').glob('*.h')) | set((r/'common').glob('*.h')) | set((r/'tests/ultrags/unit/sdk_mock').rglob('*.h')) | {r/'tools/ultrags/s5-host.py',r/'tools/ultrags/wire-schema.json',r/'tools/ultrags/gen-wire.mjs',r/'sw/system/flash_settings.h',r/'tools/ultrags/diag-schema.json',r/'tools/ultrags/gen-diag.py',r/'tests/ultrags/unit/test_s5_diag.c',r/'sw/ultrags/ug_diag_isa.c',r/'sw/multifw/ug_catalog.h'}
+inputs.update((r/'sw/ultrags').glob('*.inc'))
 inputs.add(a.build.resolve()/'gen/ug_wire.h');inputs.add(a.build.resolve()/'gen/ug_diag_wire.h')
 inputs |= {r/'tests/ultrags/unit/test_s5_front.c',r/'sw/ultrags/ug_posted.c'} | set((r/'tests/ultrags/unit/s5_mock').rglob('*.h'))
 h=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()

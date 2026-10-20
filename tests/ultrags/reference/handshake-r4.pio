@@ -1,0 +1,79 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * This program is free software under GPL version 2 or any later version.
+ * Shared IOR/IOW classifier, exactly32 words. A5 is IN_BASE. Both captures
+ * are full rotated pin words: address first, muxed data second. Bit15 of
+ * the second capture is the already settled IOCHRDY ownership flag.
+ * core0 resumes a parked SM only after processing its captured transaction.
+ */
+.program ug_handshake_ior
+.side_set 2 opt
+public restart:
+public idle:
+    wait 0 gpio 5
+public decode:
+    mov osr, pins              ; retain the whole address for exact GS decode
+    out x, 5
+public base_compare:
+    set y, 21
+    jmp x!=y alias_compare
+    jmp submit side 0b01 [2]
+public alias_compare:
+    set y, 21
+    jmp x!=y gs_compare
+    jmp submit side 0b01 [2]
+public submit:
+    in pins, 32                 ; autopush: immutable address capture
+    set pins, 1 [3]             ; ADS only; preserves the wait state
+    nop [3]
+    nop [3]
+    nop [3]                    ; sixteen clocks at twice the GUS PIO clock
+    in pins, 32                 ; autopush: muxed data and ownership flag
+    set pins, 0                 ; restore address mux before another bus cycle
+public parked:
+    jmp parked
+public arm_value:
+public value:
+public read_end:
+    wait 1 gpio 5 side 0b10
+public read_release:
+    out pindirs, 8 side 0b00
+public write_restart:
+    wait 1 gpio 4               ; no side-set: late foreign cleanup is passive
+    wait 0 gpio 4
+public dack:
+    jmp pin write_restart       ; high GPIO19 is the board's active DACK
+public gs_compare:
+    set y, 5                   ; patched to JMP submit while aliases are off
+    jmp x!=y submit
+    out null, 22               ; OSR already shifted five address bits above
+    out x, 5
+    set y, 19                  ; 00B3, exactly, not its surrounding block
+    jmp x!=y gs_second
+    jmp submit side 0b01 [2]
+gs_second:
+    set y, 27                  ; 00BB
+    jmp x!=y submit
+    jmp submit side 0b01 [2]
+% c-sdk {
+static inline void ug_handshake_sm_init(PIO pio,uint sm,uint offset,bool read,float clkdiv) {
+    pio_sm_config c=ug_handshake_ior_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,11);
+    sm_config_set_in_shift(&c,false,true,32);
+    /* GS classification uses OUT for bit extraction. Threshold32 avoids an
+     * intervening pull; core0 restarts the OSR before every read verdict. */
+    sm_config_set_out_shift(&c,true,true,32);
+    sm_config_set_out_pins(&c,6,8);
+    sm_config_set_set_pins(&c,27,1);
+    sm_config_set_sideset_pins(&c,26);
+    sm_config_set_jmp_pin(&c,19);
+    sm_config_set_wrap(&c,offset+(read?ug_handshake_ior_offset_restart:ug_handshake_ior_offset_decode),
+        offset+(read?ug_handshake_ior_offset_read_release:ug_handshake_ior_offset_dack));
+    /* Both SMs use twice the GUS PIO clock (at most clk_sys). Sixteen
+     * ADS setup clocks preserve the GUS eight-clock time at 183MHz.
+     * Classification takes half the old time, before the data window ends.
+     * Core0 forces the two initial data/direction OUTs; the read tail below
+     * still releases directions autonomously after IOR. No sync bypass. */
+    sm_config_set_clkdiv(&c,clkdiv);
+    pio_sm_init(pio,sm,offset+(read?ug_handshake_ior_offset_restart:ug_handshake_ior_offset_write_restart),&c);
+}
+%}

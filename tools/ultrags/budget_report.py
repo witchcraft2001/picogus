@@ -59,16 +59,14 @@ def pio_programs(build):
     if any(name not in programs for name in required):
         raise ValueError("missing required generated PIO header/program")
     layouts = []
-    for m62429 in (False, True):
-        for fudge in (False, True):
-            p0 = ["iow", "ior"]
-            p1 = ["audio_i2s", "spi_psram_fudge" if fudge else "spi_psram"]
-            if m62429:
-                p1.append("m62429")
-            layouts.append({"m62429": m62429, "fudge": fudge,
-                            "pio0_programs": p0, "pio1_programs": p1,
-                            "pio0_words": sum(programs[n]["length"] for n in p0),
-                            "pio1_words": sum(programs[n]["length"] for n in p1)})
+    for native in (False,True):
+        for m62429 in (False,True):
+            for fudge in (False,True):
+                p0=['ug_handshake_ior'] if native and 'ug_handshake_ior' in programs else ['iow','ior']
+                p1=['audio_i2s','spi_psram_fudge' if fudge else 'spi_psram']
+                if m62429:p1.append('m62429')
+                layouts.append({'mode':'ULTRAGS HANDSHAKE' if native else 'GUS/reference','m62429':m62429,'fudge':fudge,
+                    'pio0_programs':p0,'pio1_programs':p1,'pio0_words':sum(programs[n]['length'] for n in p0),'pio1_words':sum(programs[n]['length'] for n in p1)})
     return {"programs": programs, "layouts": layouts,
             "note": "Mutually exclusive SPI variants; unused QSPI excluded. Runtime offsets/claims remain REAL_PENDING."}
 

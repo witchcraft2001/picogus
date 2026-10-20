@@ -56,6 +56,7 @@ for (const src of sources) {
     console.log(`  ${exeName} ${b.length}B`);
   } catch (e) {
     failed++;
+    try { unlinkSync(exe); } catch (error) { if(error.code!=="ENOENT")throw error; }
     console.error(`FAIL ${name}: ${(String(e.stdout || '') + String(e.stderr || '') || e.message).split('\n').slice(0, 10).join(' | ')}`);
   }
 }

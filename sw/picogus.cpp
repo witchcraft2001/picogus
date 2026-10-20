@@ -38,6 +38,8 @@
 #include "../common/picogus.h"
 #ifdef SOUND_ULTRAGS
 #include "ultrags/ug_storage.h"
+#include "ultrags/ug_s4.h"
+#include "ultrags/ug_led_diag.h"
 #endif
 
 board_type_t BOARD_TYPE;
@@ -59,6 +61,11 @@ psram_spi_inst_t* async_spi_inst;
 #include "ultrags/ug_handshake.h"
 #define ior_program ug_handshake_ior_program
 #define ior_program_init ug_handshake_ior_program_init
+#elif defined(UG_ISA_COMPAT_READ)
+#include "ug_compat_ior.pio.h"
+#include "ultrags/ug_compat.h"
+#define ior_program ug_compat_ior_program
+#define ior_program_init ug_compat_ior_program_init
 #endif
 
 
@@ -200,6 +207,16 @@ void play_ultrags(void);
 // PicoGUS control and data ports
 static bool control_active = false;
 static uint8_t sel_reg = 0;
+#ifdef UG_CONFIG_PROBE
+#include "ultrags/ug_config_probe.h"
+static ug_config_probe config_probe={0,255,255,0xa0,0};
+#endif
+#ifdef UG_CONFIG_TRACE
+// Temporary read-only diagnostic registers, never part of the native API.
+// +1C=accepted selector, +1D=last raw selector write, +1E=CONFIG read count,
+// +1F=last CONFIG capture flags. Read only via known BASE after failed discovery.
+static uint8_t ug_trace_write=0xff,ug_trace_reads,ug_trace_flags;
+#endif
 static uint32_t cur_read = 0;
 static uint32_t cur_write = 0;
 static bool queueReboot = false;
@@ -228,7 +245,23 @@ static void wtvol_from_mixer(uint8_t volume) {
 #define IOW_PIO_SM 0
 #define IOR_PIO_SM 1
 
+#ifdef UG_GS_STATUS_FAST
+const char* firmware_string = PICO_PROGRAM_NAME "-gsfast-r13 v" PICO_PROGRAM_VERSION_STRING;
+#elif defined(UG_CONFIG_CATALOG_FAST)
+const char* firmware_string = PICO_PROGRAM_NAME "-cfgfast-r12 v" PICO_PROGRAM_VERSION_STRING;
+#elif defined(UG_CONFIG_PROBE)
+const char* firmware_string = PICO_PROGRAM_NAME "-cfgprobe-r11 v" PICO_PROGRAM_VERSION_STRING;
+#elif defined(UG_CONFIG_TRACE)
+const char* firmware_string = PICO_PROGRAM_NAME "-cfgtrace v" PICO_PROGRAM_VERSION_STRING;
+#elif defined(UG_ISA_COMPAT_READ)
+#ifdef UG_LED_DIAG
+const char* firmware_string = PICO_PROGRAM_NAME "-compat-r10-led v" PICO_PROGRAM_VERSION_STRING;
+#else
+const char* firmware_string = PICO_PROGRAM_NAME "-compat-r10 v" PICO_PROGRAM_VERSION_STRING;
+#endif
+#else
 const char* firmware_string = PICO_PROGRAM_NAME " v" PICO_PROGRAM_VERSION_STRING;
+#endif
 
 static uint8_t basePort_low;
 static uint8_t mouseSensitivity_low;
@@ -245,6 +278,9 @@ __force_inline void select_picogus(uint8_t value) {
     // printf("select picogus %x\n", value);
     sel_reg = value;
     ug_config_select(&ug_cfg,value);
+#ifdef UG_CONFIG_PROBE
+    if(value==CMD_FW_CATALOG) ug_config_probe_begin(&config_probe);
+#endif
     if (ug_config_selector(value)) return;
 #ifdef UG_ISA_POSTED
     if(posted_config_blocked()) return;
@@ -836,13 +872,24 @@ static constexpr uint32_t IO_END = 0x0u;
 // OR with 0x0000ff00 is required to set pindirs in the PIO
 static constexpr uint32_t IOR_SET_VALUE = 0x0000ff00u;
 
+#ifdef UG_ISA_EARLY_READ
+#define ISA_PIO_PUT(pio,sm,value) ug_handshake_put(sm,value)
+#else
+#define ISA_PIO_PUT(pio,sm,value) pio_sm_put(pio,sm,value)
+#endif
+
 static inline void ug_iow_verdict(uint32_t value) {
 #ifndef UG_ISA_POSTED
 #ifdef UG_ISA_EARLY_READ
     // Publish a changed native map to PIO before acknowledging the write.
-    if (value==IO_END && !ug_handshake_sync_ports(settings.UltraGS.basePort,settings.UltraGS.bulkAlias)) return;
+    if (value==IO_END && !ug_handshake_sync_ports(settings.UltraGS.basePort,settings.UltraGS.bulkAlias,ug_config_aliases(&ug_cfg))) return;
+#elif defined(UG_ISA_COMPAT_READ)
+    if (value==IO_END && !ug_compat_sync_ports(settings.UltraGS.basePort,settings.UltraGS.bulkAlias)) return;
 #endif
-    pio_sm_put(pio0,IOW_PIO_SM,value);
+    ISA_PIO_PUT(pio0,IOW_PIO_SM,value);
+#ifdef UG_ISA_COMPAT_READ
+    ug_compat_note_write(value);
+#endif
 #else
     (void)value;
 #endif
@@ -1135,6 +1182,9 @@ static void apply_iow(uint32_t iow_read) {
 #ifdef SOUND_ULTRAGS
 config_iow:
 #endif
+#ifdef UG_CONFIG_TRACE
+    if(port==CONTROL_PORT) ug_trace_write=(uint8_t)iow_read;
+#endif
     // PicoGUS control
     if (port == CONTROL_PORT) {
         ug_iow_verdict(IO_WAIT);
@@ -1166,6 +1216,14 @@ config_iow:
 
 __force_inline void handle_iow(void) {
     uint32_t word=pio_sm_get(pio0,IOW_PIO_SM);
+#ifdef UG_ISA_EARLY_READ
+    uint32_t data=pio_sm_get_blocking(pio0,IOW_PIO_SM);
+    uint16_t port=ug_handshake_port(IOW_PIO_SM,word);
+    bool owned=ug_handshake_native(IOW_PIO_SM,word);
+    ug_handshake_capture(IOW_PIO_SM,port,owned);
+    if(!owned && (port<CONTROL_PORT || port>DATA_PORT_HIGH)) { ug_iow_verdict(IO_END);return; }
+    word=((uint32_t)port<<8)|ug_handshake_data(data);
+#endif
 #ifdef UG_ISA_POSTED
     ug_posted_write(word,apply_iow);
 #else
@@ -1189,12 +1247,55 @@ static uint8_t posted_read(uint16_t port) {
 }
 #endif
 
+#ifdef UG_ISA_EARLY_READ
+static uint16_t ug_ior_port;
+static bool ug_ior_pending,ug_ior_owned,ug_ior_service;
+__force_inline void prepare_ior(void) {
+    uint32_t capture = pio_sm_get(pio0, IOR_PIO_SM);
+    ug_ior_port=ug_handshake_port(IOR_PIO_SM,capture);
+    // IOR captures only address/ownership. Do not wait for a write-data
+    // mux capture before asserting CONFIG wait.
+    ug_ior_owned=ug_handshake_native(IOR_PIO_SM,capture);
+    ug_ior_service=ug_handshake_capture(IOR_PIO_SM,ug_ior_port,ug_ior_owned);
+    ug_led_diag_read(ug_ior_port);
+#ifdef UG_CONFIG_TRACE
+    if(ug_ior_port>=CONTROL_PORT && ug_ior_port<=DATA_PORT_HIGH) {
+        uint32_t pins=gpio_get_all();
+        if(ug_trace_reads!=255) ++ug_trace_reads;
+        ug_trace_flags=(ug_ior_owned?1:0)|(!(pins&(1u<<5))?2:0)|
+            (((pins>>6)&1023u)==ug_ior_port?4:0)|(ug_ior_service?8:0)|
+            (control_active?16:0)|(ug_handshake_failed()?32:0)|
+            ((ug_ior_port-CONTROL_PORT)<<6);
+    }
+#endif
+    ug_ior_pending=true;
+}
+#endif
 __force_inline void handle_ior(void) {
     uint8_t x;
 #ifdef UG_ISA_EARLY_READ
-    uint32_t capture = pio_sm_get(pio0, IOR_PIO_SM);
-    bool native_capture = ug_handshake_native(capture);
-    uint16_t port = ug_handshake_port(capture);
+    if(!ug_ior_pending) prepare_ior();
+    uint16_t port=ug_ior_port;
+    bool native_capture=ug_ior_owned;
+    ug_ior_pending=false;
+    // A CONFIG reply can consume FWSTRING/catalogue bytes. An expired read
+    // must not call that handler and silently advance an unseen byte.
+    if((!ug_ior_service || (!native_capture && !ug_handshake_read_active())) && (native_capture || (port>=CONTROL_PORT && port<=DATA_PORT_HIGH))) {
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_END);return;
+    }
+#elif defined(UG_ISA_COMPAT_READ)
+    uint32_t capture=pio_sm_get(pio0,IOR_PIO_SM);
+    bool native_capture=ug_handshake_native(IOR_PIO_SM,capture);
+    uint16_t port=ug_handshake_port(IOR_PIO_SM,capture);
+    // Retain the stale-cycle check without the shared frontend's capture,
+    // recheck and forced-EXEC machinery. Never consume an ended CONFIG/GS
+    // read, or reply after the address has changed to another device.
+    if(!native_capture) {
+        uint32_t pins=gpio_get_all();
+        if((pins&((1023u<<6)|(1u<<5)))!=((uint32_t)port<<6)) {
+            pio_sm_put(pio0,IOR_PIO_SM,IO_END);return;
+        }
+    }
 #else
     uint16_t port = pio_sm_get(pio0, IOR_PIO_SM) & 0x3FF;
 #endif
@@ -1204,6 +1305,24 @@ __force_inline void handle_ior(void) {
     return;
 #endif
 #ifdef SOUND_ULTRAGS
+    // Low GS STATUS has no early PIO hold in COMPAT. Avoid the general
+    // decoder and its atomic statistics update before the host samples.
+    // The COMPAT live-address check above still rejects ended/foreign reads.
+#ifdef UG_GS_STATUS_FAST
+    if (port == 0xbb && ug_config_aliases(&ug_cfg)) {
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_gs_fast_begin\nug_gs_fast_begin:" ::: "memory");
+#endif
+        const uint8_t value = ug_minimal_peek_gs_status();
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | value);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_gs_fast_submitted\nug_gs_fast_submitted:" ::: "memory");
+#endif
+        ug_stat_add(0, 1);
+        return;
+    }
+#endif
     // Avoid the native decoder on the fixed discovery/catalogue path. A
     // late IOCHRDY can lose a consuming read even though its index advances.
     int native_reg=-1;
@@ -1211,58 +1330,81 @@ __force_inline void handle_ior(void) {
 #ifdef UG_ISA_EARLY_READ
     // A foreign read may have completed before a later CONFIG write changes
     // the map. Do not consume or drive a retroactively owned native address.
-    if (port>=0x200 && !native_capture) { pio_sm_put(pio0,IOR_PIO_SM,IO_END); return; }
+    if (!native_capture) { ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_END); return; }
+#elif defined(UG_ISA_COMPAT_READ)
+    // Preserve the prior read's immutable map. Low GS aliases still use the
+    // original software decode; no surrounding legacy ports are claimed.
+    if(port>=0x200 && !native_capture) { ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_END);return; }
 #endif
     native_reg=ug_native_reg(port);
     if (native_reg>=0) {
-        pio_sm_put(pio0,IOR_PIO_SM,IO_WAIT);
+#ifdef UG_ISA_COMPAT_READ
+        // PIO-owned native reads jump straight to the data tail. Low GS
+        // aliases retain the ordinary IO_WAIT word (software ownership).
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,native_capture ? ug_compat_read_entry : IO_WAIT);
+#else
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_WAIT);
+#endif
+#ifdef UG_CONFIG_PROBE
+        if(native_reg>=0x1c && native_reg<=0x1f) {
+            ISA_PIO_PUT(pio0,IOR_PIO_SM,IOR_SET_VALUE|ug_config_probe_read(&config_probe,native_reg));
+            return;
+        }
+#endif
+#ifdef UG_CONFIG_TRACE
+        if(native_reg>=0x1c && native_reg<=0x1f) {
+            uint8_t value=native_reg==0x1c?sel_reg:native_reg==0x1d?ug_trace_write:
+                native_reg==0x1e?ug_trace_reads:ug_trace_flags;
+            ISA_PIO_PUT(pio0,IOR_PIO_SM,IOR_SET_VALUE|value);return;
+        }
+#endif
         uint8_t value=native_reg==1?ug_minimal_read_status():
                       native_reg==3?ug_minimal_read_response():ug_minimal_read_decoded(native_reg);
-        pio_sm_put(pio0,IOR_PIO_SM,IOR_SET_VALUE|value); return;
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IOR_SET_VALUE|value); return;
     }
 #endif
 #if defined(SOUND_GUS)
     if ((port >> 4 | 0x10) == gus_port_test) {
         // Tell PIO to wait for data
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | read_gus(port - settings.GUS.basePort));
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | read_gus(port - settings.GUS.basePort));
         // gpio_xor_mask(LED_PIN);
     } else // if follows down below
 #endif
 #if defined(SOUND_SB)
 #ifdef SOUND_WSS
     if ((port >> 4) == wss_port_test) {
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
         switch (port & 0xf) {
         case 0: // interface register
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | wss_config);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | wss_config);
             break;
         case 1 ... 2:
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | 0xff);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | 0xff);
             break;
         case 3: // chip ID register
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | 0x04);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | 0x04);
             break;
         default:
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | ad1848_read(port & 0x3));
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | ad1848_read(port & 0x3));
             break;
         }
     } else // if follows down below
 #else
     if ((port >> 4) == sb_port_test) {
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
         switch (port - settings.SB.basePort) {
         case 0x0:
         case 0x8: // OPL bank 1 status
             // Timer state is maintained on Core 0 (carve-out handles timer regs immediately),
             // so OPL_Pico_PortRead never needs to wait for the cmd buffer to drain.
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT));
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT));
             break;
         case 0x2: // OPL3 bank 2 status
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT_OPL3));
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT_OPL3));
             break;
         default:
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | sbdsp_read(port & 0xF));
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | sbdsp_read(port & 0xF));
             break;
         }
     } else // if follows down below
@@ -1271,47 +1413,47 @@ __force_inline void handle_ior(void) {
 #if defined(CDROM)
     if ((port >> 4) == cdrom_port_test) {
     // if ((port >> 4) == 0x23) {
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | MKE_READ(port));
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | MKE_READ(port));
         // putchar('r');
     } else // if follows down below
 #endif
 #if defined(SOUND_OPL)
     if (port == settings.SB.oplBasePort) {
         // Tell PIO to wait for data
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
         // Timer state is maintained on Core 0 (carve-out handles timer regs immediately),
         // so OPL_Pico_PortRead never needs to wait for the cmd buffer to drain.
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT));
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT));
     } else if (port == settings.SB.oplBasePort + 2) {
         // OPL3 bank 2 status port — returns same status as bank 1 (OPL3 detection)
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT_OPL3));
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | OPL_Pico_PortRead(OPL_REGISTER_PORT_OPL3));
     } else // if follows down below
 #endif
 #if defined(SOUND_MPU)
     if (port == settings.MPU.basePort) {
         // Tell PIO to wait for data
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
         // printf("MPU IOR: port: %x value: %x\n", port, value);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | MPU401_ReadData());
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | MPU401_ReadData());
     } else if (port == settings.MPU.basePort + 1) {
         // Tell PIO to wait for data
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
         // printf("MPU IOR: port: %x value: %x\n", port, value);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | MPU401_ReadStatus());
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | MPU401_ReadStatus());
     } else // if follows down below
 #endif
 #ifdef NE2000
     if((port & ~0x1F) == settings.NE2K.basePort) {
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | PG_NE2000_Read(port & 0x1f));
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | PG_NE2000_Read(port & 0x1f));
         return;
     }
 #endif
 #ifdef USB_JOYSTICK
     if (port == settings.Joy.basePort) {
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
         uint8_t value =
             // Proportional bits: 1 if counter is still counting, 0 otherwise
             (bool)pwm_get_counter(0) |
@@ -1319,13 +1461,13 @@ __force_inline void handle_ior(void) {
             ((bool)pwm_get_counter(2) << 2) |
             ((bool)pwm_get_counter(3) << 3) |
             joystate_struct.button_mask;
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | value);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | value);
     } else // if follows down below
 #endif // USB_JOYSTICK
 #ifdef USB_MOUSE
     if ((port & ~7) == settings.Mouse.basePort) {
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | uartemu_read(port & 7));
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | uartemu_read(port & 7));
         return;
     } else // if follows down below
 #endif // USB_MOUSE
@@ -1334,16 +1476,16 @@ __force_inline void handle_ior(void) {
         switch (port & 0xf) {
         // CMS autodetect ports
         case 0x4:
-            pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | 0x7F);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | 0x7F);
             return;
         case 0xa:
         case 0xb:
-            pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-            pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | cms_detect);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | cms_detect);
             return;
         default:
-            pio_sm_put(pio0, IOR_PIO_SM, IO_END);
+            ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_END);
             return;
         }
     } else
@@ -1351,21 +1493,70 @@ __force_inline void handle_ior(void) {
 #ifdef SOUND_ULTRAGS
 config_ior:
 #endif
+#ifdef UG_CONFIG_CATALOG_FAST
+    // The COMPAT live-cycle/address check above must precede this branch.
+    // Only the core0-owned immutable catalogue snapshot is eligible. Keep
+    // live RESULT/aliases and every other selector on the existing path.
+    if (port == DATA_PORT_HIGH && sel_reg == CMD_FW_CATALOG) {
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_catalog_fast_begin\nug_catalog_fast_begin:" ::: "memory");
+#endif
+        const uint16_t index = ug_cfg.index;
+        const uint8_t value = index < sizeof(ug_cfg.snapshot) ? ug_cfg.snapshot[index] : 255;
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | value);
+        // Once submitted, advance exactly once even if IOR rises meanwhile.
+        // Do not turn an ended-cycle check after delivery into a duplicate.
+#if defined(__arm__)
+        __asm__ volatile(".global ug_catalog_fast_submitted\nug_catalog_fast_submitted:" ::: "memory");
+#else
+        __asm__ volatile("" ::: "memory");
+#endif
+        if (index < sizeof(ug_cfg.snapshot)) ug_cfg.index = index + 1;
+#if defined(__arm__)
+        __asm__ volatile(".global ug_catalog_fast_done\nug_catalog_fast_done:" ::: "memory");
+#endif
+        return;
+    }
+#endif
     if (port == CONTROL_PORT) {
         // Tell PIO to wait for data
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | sel_reg);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | sel_reg);
     } else if (port == DATA_PORT_LOW) {
         // Tell PIO to wait for data
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | read_picogus_low());
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | read_picogus_low());
     } else if (port == DATA_PORT_HIGH) {
-        pio_sm_put(pio0, IOR_PIO_SM, IO_WAIT);
-        pio_sm_put(pio0, IOR_PIO_SM, IOR_SET_VALUE | read_picogus_high());
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
+#ifdef UG_CONFIG_PROBE
+        uint8_t value=read_picogus_high();
+        // Only this volatile GPIO load precedes the data FIFO store.
+        // Counters/metadata are updated after submission, never before it.
+#if defined(__arm__)
+        asm volatile(".global ug_config_probe_sample\nug_config_probe_sample:" ::: "memory");
+#endif
+        uint32_t before_data=gpio_get_all();
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | value);
+#if defined(__arm__)
+        asm volatile(".global ug_config_probe_submitted\nug_config_probe_submitted:" ::: "memory");
+#endif
+        if(sel_reg==CMD_FW_CATALOG) ug_config_probe_record(&config_probe,ug_cfg.index,value,before_data);
+#else
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | read_picogus_high());
+#endif
     } else {
         // Reset PIO
-        pio_sm_put(pio0, IOR_PIO_SM, IO_END);
+#ifdef UG_ISA_COMPAT_READ
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, native_capture ? ug_compat_read_restart : IO_END);
+#else
+        ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_END);
+#endif
     }
+#ifdef UG_ISA_COMPAT_READ
+    // Keep LED bookkeeping after the two FIFO stores on CONFIG reads.
+    ug_led_diag_read(port);
+#endif
 }
 
 #ifdef USE_IRQ
@@ -1469,6 +1660,9 @@ int main()
         BOARD_TYPE = PICOGUS_2;
     }
     gpio_set_mask(LED_PIN);
+#ifdef SOUND_ULTRAGS
+    ug_led_diag_init(BOARD_TYPE==PICO_BASED);
+#endif
 
     if (BOARD_TYPE == PICOGUS_2) {
         // Create new interface to M62429 digital volume control
@@ -1632,11 +1826,32 @@ extern void PIC_DeActivateIRQ(void);
     // gpio_set_drive_strength(ADS_PIN, GPIO_DRIVE_STRENGTH_12MA);
     gpio_set_slew_rate(ADS_PIN, GPIO_SLEW_RATE_FAST);
 
-#ifdef SOUND_ULTRAGS
 #ifdef UG_ISA_EARLY_READ
-    static_assert(sizeof(iow_program_instructions) + sizeof(ug_handshake_ior_program_instructions) <= 64,
-                  "ISA PIO0 instruction RAM overflow");
-#endif
+    static_assert(sizeof(ug_handshake_ior_program_instructions)==64,"shared ISA program must fit32 words");
+    hard_assert(pio_can_add_program(pio0,&ug_handshake_ior_program));
+    uint ior_offset=pio_add_program(pio0,&ug_handshake_ior_program);
+    pio_sm_claim(pio0,IOW_PIO_SM);pio_sm_claim(pio0,IOR_PIO_SM);
+    for(unsigned pin=6;pin<=15;pin++) pio_gpio_init(pio0,pin);
+    pio_gpio_init(pio0,26);pio_gpio_init(pio0,27);
+    pio_sm_set_consecutive_pindirs(pio0,0,4,12,false);
+    pio_sm_set_consecutive_pindirs(pio0,0,26,2,true);
+    pio_sm_set_pins_with_mask(pio0,0,0,3u<<26);
+    // Speed classification without shortening the known-working ADS interval.
+    // Round the half-divider UP in PIO 16.8 units:16 setup clocks
+    // must not become shorter than the quantized GUS8-clock interval.
+    constexpr uint32_t ug_isa_div256=((uint32_t)(iow_clkdiv*256.0f)+1u)/2u;
+    constexpr float ug_isa_clkdiv=(ug_isa_div256<256u?256u:ug_isa_div256)/256.0f;
+    ug_handshake_sm_init(pio0,IOW_PIO_SM,ior_offset,false,ug_isa_clkdiv);
+    ug_handshake_sm_init(pio0,IOR_PIO_SM,ior_offset,true,ug_isa_clkdiv);
+    ug_handshake_init(ior_offset,settings.UltraGS.basePort,settings.UltraGS.bulkAlias,ug_config_aliases(&ug_cfg));
+    ug_hw_note_program(pio0,ior_offset,ug_handshake_ior_program.length,"ior+iow");
+    ug_led_diag_stage(UG_LED_WAIT_CORE1);
+    multicore_launch_core1(&play_ultrags);
+    while(!ug_handshake_guard_ready()) tight_loop_contents();
+    pio_set_sm_mask_enabled(pio0,3u,true);
+    ug_led_diag_stage(UG_LED_RUNNING);
+#else
+#ifdef SOUND_ULTRAGS
     hard_assert(pio_can_add_program(pio0,&iow_program));
 #endif
     uint iow_offset = pio_add_program(pio0, &iow_program);
@@ -1655,17 +1870,22 @@ extern void PIC_DeActivateIRQ(void);
     ug_posted_init(iow_offset);
 #endif
     ior_program_init(pio0, IOR_PIO_SM, ior_offset);
-#ifdef UG_ISA_EARLY_READ
-    ug_handshake_init(ior_offset,settings.UltraGS.basePort,settings.UltraGS.bulkAlias);
+#ifdef UG_ISA_COMPAT_READ
+    static_assert(sizeof(iow_program_instructions)+sizeof(ug_compat_ior_program_instructions)<=64,"compat ISA PIO budget");
+    ug_compat_init(ior_offset,settings.UltraGS.basePort,settings.UltraGS.bulkAlias);
 #endif
 #ifdef SOUND_ULTRAGS
     ug_hw_note_program(pio0,iow_offset,iow_program.length,"iow");
     ug_hw_note_program(pio0,ior_offset,ior_program.length,"ior");
+    ug_led_diag_stage(UG_LED_WAIT_CORE1);
     multicore_launch_core1(&play_ultrags);
-#ifdef UG_ISA_EARLY_READ
-    while (!ug_handshake_guard_ready()) tight_loop_contents();
+#ifdef UG_ISA_COMPAT_READ
+    while(!ug_handshake_guard_ready()) tight_loop_contents();
     pio_sm_set_enabled(pio0,IOR_PIO_SM,true);
 #endif
+    ug_led_diag_stage(UG_LED_RUNNING);
+#endif
+
 #endif
 
 #ifdef USE_IRQ
@@ -1678,7 +1898,9 @@ extern void PIC_DeActivateIRQ(void);
     irq_set_enabled(PIO0_IRQ_1, true);
 #endif
 
+#ifndef UG_LED_DIAG
     gpio_xor_mask(LED_PIN);
+#endif
 
 #if AUDIO_CALLBACK_CORE0
     pwm_c = pwm_get_default_config();
@@ -1694,16 +1916,30 @@ extern void PIC_DeActivateIRQ(void);
     processSettings();
 
     for (;;) {
+#ifdef SOUND_ULTRAGS
+        ug_led_diag_main_beat();
+#endif
 #ifndef USE_IRQ
 #ifdef UG_ISA_POSTED
         ug_posted_check(ug_minimal_transport_fault);
         if(ior_has_data()) handle_ior();
         else if(iow_has_data()) handle_iow();
 #elif defined(SOUND_ULTRAGS)
+        // UG_SHARED_POLL_BEGIN (also extracted by the production-C fixture)
+        // Hold a captured CONFIG read before earlier IOW work can postpone
+        // IOCHRDY; apply that write before computing the read's value.
+#ifdef UG_ISA_EARLY_READ
+        if(!ug_ior_pending && ior_has_data()) prepare_ior();
+#endif
         // Preserve a captured write before the following read. Native read
         // stretching starts in PIO and no longer depends on ARM priority.
         if (iow_has_data()) handle_iow();
+#ifdef UG_ISA_EARLY_READ
+        if (ug_ior_pending) handle_ior();
+#else
         if (ior_has_data()) handle_ior();
+#endif
+        // UG_SHARED_POLL_END
 #else
         if (iow_has_data()) handle_iow();
         if (ior_has_data()) handle_ior();
@@ -1711,6 +1947,9 @@ extern void PIC_DeActivateIRQ(void);
 #endif
 #ifdef SOUND_ULTRAGS
         ug_minimal_poll_now();
+#ifdef UG_ISA_EARLY_READ
+    ug_handshake_poll();
+#endif
 #endif
         if (queueReboot && !ug_config_busy(&ug_cfg) && gpio_get(IOW_PIN) &&
 #ifdef UG_ISA_POSTED

@@ -44,6 +44,7 @@ print('S3 READ ID: missing ID profile and FAST READ engine mutations rejected')
 (a.build/'s3-id-mutations.json').write_text(json.dumps(rejected,indent=2)+'\n')
 
 inputs={r/s for s in src+backend_src} | set((r/'sw/ultrags').glob('*.h')) | set((r/'tests/ultrags/unit/sdk_mock').rglob('*.h')) | set((r/'tests/ultrags/unit/backend_mock').rglob('*.h')) | {r/'sw/ultrags/ug_psram_id.pio',r/'sw/rp2040-psram/psram_spi.h',r/'sw/rp2040-psram/psram_spi.pio',r/'tools/ultrags/s3-host.py',r/'tools/ultrags/wire-schema.json',r/'tools/ultrags/gen-wire.mjs',r/'sw/system/flash_settings.h',r/'sw/multifw/ug_catalog.h'}
+inputs.update((r/'sw/ultrags').glob('*.inc'))
 h=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 (a.build/'s3-host-evidence.json').write_text(json.dumps({'inputs':{str(p):h(p) for p in sorted(inputs)},'executable':h(exe),'backend_executable':h(backend_exe),
     'outputs':{name:h(a.build/name) for name in ['s3-fixtures.json','s3-commands.json','s3-backend.json','s3-id-mutations.json']},

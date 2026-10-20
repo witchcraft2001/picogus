@@ -8,12 +8,12 @@
 #include "ug_wire.h"
 
 static_assert(UG_ULTRAGS_MODE_ID == 8, "mode id");
-static_assert(UG_INFO_LEN == 36, "info len");
-static_assert(UG_SNAPSHOT_LEN == 128, "snapshot len");
+static_assert(UG_INFO_LEN == 40, "info len");
+static_assert(UG_SNAPSHOT_LEN == 64, "snapshot len");
 static_assert(UG_OP_WRITE_BEGIN_REQ_VLEN == 13, "verified write_begin len");
 static_assert(UG_OP_READ_END_REQ_VLEN == 8, "verified read_end len");
-static_assert(sizeof(ug_info_t) == 36, "info struct");
-static_assert(sizeof(ug_snapshot_t) == 128, "snapshot struct");
+static_assert(sizeof(ug_info_t) == 40, "info struct");
+static_assert(sizeof(ug_snapshot_t) == 64, "snapshot struct");
 static_assert(sizeof(ug_read_begin_req_t) == 9, "read_begin has no crc field");
 
 // generated struct types must behave as normal C++ PODs

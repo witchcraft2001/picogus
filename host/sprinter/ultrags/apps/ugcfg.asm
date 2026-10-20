@@ -55,6 +55,7 @@ PORTREAD EQU V+146
 SAVEFFCOUNT EQU V+147 ; u16, missed non-consuming SAVE result samples
     ASSERT PORTREAD+1 <= SAVEFFCOUNT
     ASSERT SAVEFFCOUNT+2 <= V+160
+GSREQUEST EQU V+149 ; FF=unspecified; 0/1=requested volatile alias state
 RETRIES EQU V+44
 PTR EQU V+30
 SEL EQU V+32
@@ -135,6 +136,8 @@ ENTRY:
     jp z,GS
     cp 6
     jp z,VERIFY
+    cp 8
+    jp z,GS_OPTIONS
     call SAVE
     jp c,EXIT
     jp PASS
@@ -158,6 +161,7 @@ INIT:
     ld (hl),0
     ldir
     ld a,0xFF
+    ld (GSREQUEST),a
     ld (MAGIC),a
     ld (PROTO),a
     ld (BOARD),a
@@ -235,6 +239,11 @@ PARSE:
     jr nz,.command
     ld a,1 ; no command means INFO
     ld (CMD),a
+    ld a,(GSREQUEST)
+    cp 0xFF
+    jr z,.options
+    ld a,8
+    ld (CMD),a
     jr .options
 .command:
     ld hl,(ARGS)
@@ -270,6 +279,15 @@ PARSE:
     cp b
     jp nz,.bad
 .options:
+    ld a,(GSREQUEST)
+    cp 0xFF
+    jr z,.save_option
+    ld a,(CMD)
+    cp 3
+    jr z,.save_option
+    cp 8
+    jr nz,.bad
+.save_option:
     ld a,(SAVING)
     or a
     ret z
@@ -278,10 +296,65 @@ PARSE:
     ret z
     cp 4
     ret z
+    cp 8
+    ret z
 .bad:
     scf
     ret
  ; Validate values before discovery: malformed input must never map ISA.
+GS_OPTIONS:
+    call CHECK_BOOT
+    jp c,EXIT
+    call CHECK_ACTIVE
+    jp c,EXIT
+    call APPLY_GS_OPTION
+    jp c,EXIT
+    call MAYBE_SAVE
+    jp c,EXIT
+    jp PASS
+APPLY_GS_OPTION:
+    ld a,(GSREQUEST)
+    cp 0xFF
+    ret z
+    ld b,a
+    ld a,(ACTIVE)
+    cp 8
+    jr nz,.mode
+    ld a,b
+    or a
+    ld hl,warning_text
+    call nz,PRINT
+    ld a,(GSREQUEST)
+    ld e,a
+    ld a,0x79
+    call WRITE8
+    ret c
+    call RESULT
+    ret c
+    ld a,0x79
+    call READ8
+    ret c
+    ld b,a
+    ld a,(GSREQUEST)
+    cp b
+    jr nz,.verify
+    ld (GSALIAS),a
+    ld hl,gs_volatile_text
+    call PROGRESS
+    xor a
+    ret
+.mode:
+    ld hl,gs_mode_text
+    ld (REASON),hl
+    ld a,9
+    scf
+    ret
+.verify:
+    ld hl,generic_reason
+    ld (REASON),hl
+    ld a,9
+    scf
+    ret
 VALIDATE_ARGS:
     ld a,(CMD)
     cp 3
@@ -305,7 +378,12 @@ MODE_ARG:
 .found:
     or a
     ld (TARGET),a
-    or a
+    cp 8
+    ret z
+    ld a,(GSREQUEST)
+    cp 0xFF
+    ret z
+    scf
     ret
 PORTS_ARGS:
     ld hl,(ARGS+2)
@@ -370,6 +448,8 @@ OPTION:
     or a
     ret
 .slotword:
+    cp 6
+    jp z,GS_OPTION_WORD
     cp 5
     jr z,.slotnext
     ld (SAVING),a
@@ -434,6 +514,48 @@ OPTION:
     jp VALID_BASE
 .badpop:
     pop hl
+    scf
+    ret
+GS_OPTION_WORD:
+    ld a,(GSREQUEST)
+    cp 0xFF
+    jr nz,.bad
+    ld hl,(PTR)
+.space:
+    ld a,(hl)
+    cp ' '
+    jr z,.next
+    cp 9
+    jr nz,.word
+.next:
+    inc hl
+    jr .space
+.word:
+    push hl
+.scan:
+    ld a,(hl)
+    or a
+    jr z,.end
+    cp ' '
+    jr z,.cut
+    cp 9
+    jr z,.cut
+    inc hl
+    jr .scan
+.cut:
+    ld (hl),0
+    inc hl
+.end:
+    ld (PTR),hl
+    pop hl
+    ld de,onoff
+    call LOOKUP
+    ret c
+    dec a
+    ld (GSREQUEST),a
+    or a
+    ret
+.bad:
     scf
     ret
 ; Table contains NUL word then ID, terminated by empty word.
@@ -1130,6 +1252,30 @@ REPORT_COMMON:
     ld a,(QUIET)
     or a
     ret nz
+    ld a,(DIAG)
+    or a
+    jr nz,.raw
+    ld hl,human_card
+    call PRINT
+    ld hl,FWSTR
+    call PRINT
+    ld hl,human_slot
+    call PRINT
+    ld a,(SLOT)
+    add a,'0'
+    call CHAR
+    ld hl,human_mode
+    call PRINT
+    ld a,(ACTIVE)
+    call PRINT_MODE_NAME
+    ld hl,human_startup
+    call PRINT
+    ld a,(DESIRED)
+    call PRINT_MODE_NAME
+    ld hl,newline
+    call PRINT
+    jr .validate
+.raw:
     ld hl,slot_text
     call PRINT
     ld a,(SLOT)
@@ -1162,6 +1308,7 @@ REPORT_COMMON:
     call HEX8
     ld hl,newline
     call PRINT
+.validate:
     ld a,(VALID)
     or a
     jr nz,.ports
@@ -1221,6 +1368,7 @@ PRINT_MODE:
     ld a,' '
     call CHAR
     pop af
+PRINT_MODE_NAME:
     ld hl,modes
     ld b,a
 .scan:
@@ -1371,13 +1519,13 @@ MODE:
     ; is not proof (it may be a delayed select on the old running firmware).
     ld a,(REBOOTSEEN)
     or a
-    jr nz,.identified
+    jp nz,.identified
     xor a
     ld (UGCFG.SEL),a
     call UG_CFG_TRY
     ld a,(UGCFG.OBS)
     cp 0xFF
-    jr z,.disappeared
+    jp z,.disappeared
     ; A fast reboot can finish between two polls. A changed active mode
     ; proves we left the old runtime even when no offline read was sampled.
     ld a,(OLD_ACTIVE)
@@ -1394,16 +1542,37 @@ MODE:
     ld b,a
     ld a,(OLD_ACTIVE)
     cp b
-    jr nz,.identified
+    jp nz,.identified
     call CHECK_ACTIVE
-    jp c,EXIT
+    jr nc,.session_valid
+    ; A delayed same-mode reboot can interrupt our old-runtime INFO.
+    ; Only an observed offline CONTROL invalidates that owned frame. Never
+    ; retry a consuming byte or hide an ordinary CRC failure on a live card.
+    cp 10
+    jp z,EXIT
+    push af
+    call OPEN
+    ld a,(0xC1D0)
+    call CLOSE
+    cp 0xFF
+    jr z,.interrupted
+    pop af
+    jp EXIT
+.interrupted:
+    pop af
+    xor a
+    ld (FRAMELIVE),a
+    ld hl,generic_reason
+    ld (REASON),hl
+    jp .disappeared
+.session_valid:
     ld hl,RESP+14
     ld de,OLD_SESSION
     ld b,8
 .session_compare:
     ld a,(de)
     cp (hl)
-    jr nz,.identified
+    jp nz,.identified
     inc de
     inc hl
     djnz .session_compare
@@ -1415,7 +1584,7 @@ MODE:
     ld b,a
     ld a,(OLD_ACTIVE)
     cp b
-    jr nz,.identified
+    jp nz,.identified
 .boot_probe:
     ld a,0xE5
     call READ8
@@ -1428,7 +1597,7 @@ MODE:
 .disappeared:
     ld a,1
     ld (REBOOTSEEN),a
-    jr .wait
+    jp .wait
 .identified:
     ; An offline card has no selector to confirm. Poll non-consuming CONTROL
     ; first, so the outer deadline/watchdog is not multiplied by nested waits.
@@ -1465,6 +1634,8 @@ MODE:
     ld (STARTED),a
     ld hl,started_text
     call PROGRESS
+    call APPLY_GS_OPTION
+    jp c,EXIT
     call MAYBE_SAVE
     jp c,EXIT
     jp PASS
@@ -1827,13 +1998,14 @@ CHECK_ACTIVE:
     ret
 .transport_ready:
     ; A stopped DSS clock must also bound repeated valid INIT replies
-    ; and unchanged-session probes. 4095 complete INFO exchanges contain
-    ; >196000 protected bus accesses: never an early ten-second cutoff.
+    ; and unchanged-session probes. 2048 complete40-byte INFO exchanges
+    ; exceed ten seconds at the fastest supported host profile; stopped
+    ; clocks still terminate without multiplying the outer boot deadline.
     ld hl,(INFOQUERIES)
     inc hl
     ld (INFOQUERIES),hl
     ld a,h
-    cp 0x10
+    cp 0x08
     jr c,.send_info
     ld a,8
     scf
@@ -1927,11 +2099,11 @@ CHECK_ACTIVE:
     ld (GOT),a
     or a
     jp nz,.status_bad
-    ld a,36
+    ld a,40
     ld (EXPECT),a
     ld a,(RESPLEN)
     ld (GOT),a
-    cp 36
+    cp 40
     jp nz,.length_bad
     ld a,(RESP+6)
     cp 1
@@ -1953,6 +2125,16 @@ CHECK_ACTIVE:
     inc hl
     inc de
     djnz .magic
+    ld hl,RESP+38
+    ld de,info_layout
+    ld b,4
+.layout:
+    ld a,(de)
+    cp (hl)
+    jp nz,.api
+    inc de
+    inc hl
+    djnz .layout
     ld a,(SESSION_PROBE)
     or a
     ret nz ; CRC/API/identity valid; init state need not be READY for a nonce
@@ -2396,7 +2578,7 @@ NIBBLE:
     add a,7
     jp CHAR
 commands: DB "INFO",0,1,"LIST",0,2,"MODE",0,3,"PORTS",0,4,"GSALIAS",0,5,"VERIFY",0,6,"SAVE",0,7,0
-options: DB "/QUIET",0,1,"/?",0,2,"/SAVE",0,3,"/DIAG",0,4,"/SLOT",0,5,0
+options: DB "/QUIET",0,1,"/?",0,2,"/SAVE",0,3,"/DIAG",0,4,"/SLOT",0,5,"/GSALIAS",0,6,0
 modes: DB "GUS",0,1,"ADLIB",0,2,"MPU",0,3,"PSG",0,4,"SB",0,5,"USB",0,6,"NE2000",0,7,"ULTRAGS",0,8,0
 onoff: DB "OFF",0,1,"ON",0,2,0
 slot_prefix: DB "/SLOT:",0
@@ -2405,11 +2587,25 @@ off_text: DB "OFF",0
 cat_header: DB "UGCF",1,0,8,16,148,0,0,0,0,0,0,0
 flash_end: DB 0,0xF0,0x1F,0
 request_info: DB 0x80,0
+info_layout: DB "VLS1"
 info_magic: DB "UGS1",1,0,8
-help_text: DB "UGCFG INFO|LIST|MODE name-or-id [/SAVE]|PORTS base alias-or-OFF [/SAVE]",13,10
-    DB "GSALIAS ON|OFF|VERIFY|SAVE /SLOT:0|1 /SLOT 0|1 /BASE:hex /QUIET /DIAG /?",13,10
-    DB "UGCFG = INFO. UGCFG ULTRAGS = MODE ULTRAGS. Default slot: 0.",13,10
-    DB "Examples: UGCFG ULTRAGS /SAVE; UGCFG VERIFY; UGCFG GUS /SAVE",13,10,0
+help_text: DB "UGCFG - PicoGUS mode and startup settings",13,10
+    DB "  UGCFG                         show current mode and ports",13,10
+    DB "  UGCFG LIST                    list installed modes",13,10
+    DB "  UGCFG ULTRAGS /GSALIAS ON      start Ultra GS with GS ports",13,10
+    DB "  UGCFG GUS /SAVE               start GUS and save boot mode",13,10
+    DB "  UGCFG /GSALIAS OFF            disable GS ports in Ultra GS",13,10
+    DB "  UGCFG VERIFY                  check active mode/readiness",13,10
+    DB "  UGCFG SAVE                    save startup settings",13,10
+    DB "Advanced: MODE name-or-id; PORTS base alias-or-OFF; GSALIAS ON|OFF",13,10
+    DB "Options: /SAVE /GSALIAS ON|OFF /SLOT 0|1 /SLOT:0|1",13,10
+    DB "         /BASE:hex /QUIET /DIAG /?",13,10
+    DB "GSALIAS enables only 00B3/00BB; volatile, lost on reboot even after SAVE.",13,10
+    DB "Native /BASE is a discovery override; PORTS changes native addresses.",13,10,0
+human_card: DB "PicoGUS: ",0
+human_slot: DB 13,10,"ISA slot: ",0
+human_mode: DB 13,10,"Active mode: ",0
+human_startup: DB "   Selected mode: ",0
 slot_text: DB "ISA slot=",0
 board_text: DB " board=",0
 firmware_text: DB " firmware=",0
@@ -2417,9 +2613,9 @@ info_text: DB "protocol=",0
 desired_text: DB " desired=",0
 active_text: DB " active=",0
 boot_text: DB " boot_result=",0
-ports_text: DB "config=01D0-01D2 base=",0
-alias_text: DB " bulk_alias=",0
-gs_text: DB " GS_ALIASES=",0
+ports_text: DB "Native ports: ",0
+alias_text: DB "   BULK alias: ",0
+gs_text: DB "   GS (00B3/00BB): ",0
 gs_off: DB "OFF",0
 gs_on: DB "ON (00B3,00BB)",0
 build_text: DB " build=",0
@@ -2495,4 +2691,9 @@ diag_ports: DB 13,10,"config read/base/alias (LE)=",0
     DEFINE UG_CFG_POLL_HOOK CFG_POLL_DEADLINE
     INCLUDE "ugconfig.asm"
     INCLUDE "isa.asm"
-    INCLUDE "ugcrc.asm"    ASSERT $ < 0xB800
+    INCLUDE "ugcrc.asm"
+
+gs_volatile_text: DB "GS aliases verified; volatile (SAVE does not retain them).",13,10,0
+gs_mode_text: DB "GS aliases require ULTRAGS: use UGCFG ULTRAGS /GSALIAS ON",0
+
+    ASSERT $ < 0xB800

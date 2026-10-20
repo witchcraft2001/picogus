@@ -25,9 +25,8 @@ static uint8_t call(uint8_t op,const uint8_t *q,uint8_t n){
     while(!ug_storage_command(op,q,n,r,&len,&status,time_us_32()))assert(limit--);
     if(vectors){fprintf(vectors,"{\"op\":%u,\"q\":\"",op);hex(vectors,q,n);fprintf(vectors,"\",\"status\":%u,\"r\":\"",status);hex(vectors,r,len);
         if(op==UG_OP_SNAPSHOT){
-            uint8_t mask[128];memset(mask,255,128);memset(mask,0,4);memset(mask+42,0,4);
-            for(unsigned i=0;i<8;i++)memset(mask+62+8*i,0,2);
-            fprintf(vectors,"\",\"mask\":\"");hex(vectors,mask,128);
+            uint8_t mask[64];memset(mask,255,64);memset(mask,0,4);memset(mask+42,0,4);
+            fprintf(vectors,"\",\"mask\":\"");hex(vectors,mask,64);
         }
         fputs("\"}\n",vectors);
     }
@@ -48,6 +47,14 @@ static unsigned upload(unsigned kind,const uint8_t *data,unsigned n){
 static void seal(unsigned h){uint8_t q[7]={0};put16(q,h);assert(!call(UG_OP_SEAL,q,7));}
 static unsigned pins(unsigned h){uint8_t q[2];put16(q,h);assert(!call(UG_OP_OBJECT_INFO,q,2));return get16(r+4);}
 static void snapshot(void){assert(!call(UG_OP_SNAPSHOT,NULL,0));}
+static uint8_t v[20];
+static void voice(unsigned logical){
+    uint8_t key[16];snapshot();memcpy(key,r+4,8);memcpy(key+8,r,4);put16(key+14,1);
+    bool found=false;
+    for(unsigned i=0;i<32;i++) {put16(key+12,i);assert(!call(UG_OP_VOICE_STATUS,key,16));
+        if(get16(r+26)==logical && !(r[39]&2)){memcpy(v,r+20,20);found=true;break;}}
+    assert(found);snapshot();
+}
 static void control(unsigned id,unsigned action){uint8_t q[3];put16(q,id);q[2]=(uint8_t)action;assert(!call(UG_OP_CONTROL,q,3));}
 static void stop(void){control(0,0);render(0);}
 static unsigned play(unsigned h,unsigned flags){uint8_t q[3];put16(q,h);q[2]=(uint8_t)flags;assert(!call(UG_OP_PLAY_MOD,q,3));return get16(r);}
@@ -68,42 +75,42 @@ static void bind(void){ug_storage_bind(&ps,17);ug_storage_publish(8u<<20,0,0);ug
 static void shared(const char *path){
     bind();vectors=fopen(path,"w");assert(vectors);unsigned h=mod(0,0,0),id=play(h,1);render(1);snapshot();
     uint8_t tempo[2]={3,150};assert(!call(UG_OP_SET_TEMPO,tempo,2));render(0);snapshot();frames(959);snapshot();
-    uint8_t pan[2]={0,88};assert(!call(UG_OP_SET_PAN,pan,2));render(0);snapshot();
+    uint8_t pan[3]={0,0,88};assert(!call(UG_OP_SET_PAN,pan,3));render(0);snapshot();
     uint8_t seek[5]={0};put16(seek,id);seek[4]=63;assert(!call(UG_OP_SEEK_MOD,seek,5));render(0);snapshot();
     control(id,1);render(0);snapshot();control(id,2);render(1);snapshot();stop();
     unsigned fh=mod(0,15,0);id=play(fh,0);render(1);snapshot();control(id,2);render(1);snapshot();stop();
-    assert(call(UG_OP_LEGACY_INFO,NULL,0)==UG_ERR_BAD_OPCODE);
+    assert(!call(UG_OP_LEGACY_INFO,NULL,0));
     fclose(vectors);vectors=NULL;
 }
 int main(void){
     mock_reset();ug_hw_claim_audio();ug_hw_claim_psram_sm();assert(!ug_psram_init(&ps,pio1,1,1.85f,8u<<20,false));
     settings.Volume.mainVol=100;settings.UltraGS.basePort=0x2a0;settings.UltraGS.bulkAlias=0xffff;
     ug_config_init(&ug_cfg,&settings,8,NULL,0,0,0);ug_minimal_init();bind();
-    assert(call(UG_OP_LEGACY_INFO,NULL,0)==UG_ERR_BAD_OPCODE);
+    assert(!call(UG_OP_LEGACY_INFO,NULL,0));
     unsigned h=mod(0,0,0),id=play(h,1);assert(pins(h)==1);render(1);assert(audio[0]==16384 && audio[1]==0);
-    snapshot();assert(r[25]==2 && r[39]==0 && r[56]==48 && get16(r+60)==428 && r[57]==64 && r[58]==0 && get16(r+52)==1);
+    voice(0);assert(r[25]==2 && r[39]==0 && v[16]==48 && get16(v+14)==428 && v[17]==64 && v[18]==0 && get16(r+52)==4);
     uint8_t seek[5]={0};put16(seek,id);seek[4]=63;
-    uint8_t pan[2]={0,44};assert(!call(UG_OP_SET_PAN,pan,2));render(0);
-    assert(!call(UG_OP_SEEK_MOD,seek,5));render(1);assert(!audio[0] && !audio[1]);snapshot();assert(r[38]==63 && !get16(r+52) && r[58]==0 && !get16(r+60));
+    uint8_t pan[3]={0,0,44};assert(!call(UG_OP_SET_PAN,pan,3));render(0);
+    assert(!call(UG_OP_SEEK_MOD,seek,5));render(1);assert(!audio[0] && !audio[1]);voice(0);assert(r[38]==63 && get16(r+52)==4 && v[18]==0 && !get16(v+14));
     control(id,1);render(0);control(id,2);render(1);assert(!audio[0] && !audio[1]);stop();assert(!pins(h));
     h=mod(0,9,1);play(h,0);render(1);assert(audio[0]==-16384);stop();
-    h=mod(0,9,15);play(h,0);render(128);snapshot();assert(!get16(r+52));stop();
+    h=mod(0,9,15);play(h,0);render(128);snapshot();assert(get16(r+52)==4);stop();
     puts("S7 storage: immediate intro/9xx, correct snapshot, seek/pan reset, silent resume, retained handles PASS");
-    unsigned fxh=pcm();uint8_t fx[8]={0};put16(fx,fxh);fx[4]=128;fx[5]=64;fx[6]=255;fx[7]=2;
+    unsigned fxh=pcm();uint8_t fx[8]={0};put16(fx,fxh);put16(fx+2,65535);fx[4]=128;fx[5]=64;fx[6]=255;fx[7]=2;
     assert(!call(UG_OP_PLAY_FX,fx,8));render(0);
-    h=mod(0,15,0);id=play(h,0);render(128);snapshot();assert(r[24]==2 && !r[39] && get16(r+52)==0x100 && pins(h)==1);
+    h=mod(0,15,0);id=play(h,0);render(128);snapshot();assert(r[24]==2 && !r[39] && get16(r+52)==5 && pins(h)==1);
     control(id,2);render(128);snapshot();assert(r[24]==1 && pins(h)==1 && pins(fxh)==1);stop();
     uint8_t fxstop[2]={0};assert(!call(UG_OP_STOP_FX,fxstop,2));render(0);
     h=mod(0,0,0);id=play(h,0);put16(seek,id);assert(!call(UG_OP_SEEK_MOD,seek,5));render(0); /* seek admitted before first PLAY render */
     assert(!call(UG_OP_PLAY_FX,fx,8));render(0);frames(5760-1);snapshot();assert(r[24]==1 && r[38]==63 && r[39]==5);
-    render(2);snapshot();assert(r[24]==3 && r[25]==2 && get16(r+52)==0x100 && !pins(h) && pins(fxh)==1);
+    render(2);snapshot();assert(r[24]==3 && r[25]==2 && get16(r+52)==1 && !pins(h) && pins(fxh)==1);
     assert(call(UG_OP_CONTROL,(uint8_t[]){(uint8_t)id,(uint8_t)(id>>8),2},3)==UG_ERR_STATE);
     assert(!call(UG_OP_STOP_FX,fxstop,2));render(0);
     puts("S7 storage: F00 PAUSE/resume/pins with independent FX, exact finite EOF and FX continuation PASS");
     h=mod(2,0,0);play(h,0);render(0);ug_psram_dma_fault=true;render(1);snapshot();
     assert(r[24]==4 && r[50]==UG_ERR_PSRAM && !pins(h));assert(!ug_psram_recover(&ps));
     unsigned raw=pcm();uint8_t q[6]={0};put16(q,raw);put16(q+2,0);q[4]=64;q[5]=128;
-    assert(!call(UG_OP_PLAY_PCM,q,6));render(1);snapshot();assert(r[25]==1 && r[56]==127 && !get16(r+60));stop();
+    assert(!call(UG_OP_PLAY_PCM,q,6));render(1);voice(0);assert(r[25]==1 && v[16]==127 && !get16(v+14));stop();
     h=mod(0,0,0);id=play(h,1);uint8_t playq[3]={0};put16(playq,h);assert(call(UG_OP_PLAY_MOD,playq,3)==UG_ERR_BUSY);
     put16(q,raw);assert(!call(UG_OP_PLAY_PCM,q,6));assert(get16(r)!=id);render(0);assert(!pins(h) && pins(raw)==1);stop();
     puts("S7 storage: non-first-channel PSRAM failure, PCM kind regression, queued ownership/ID isolation PASS");

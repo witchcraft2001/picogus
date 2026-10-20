@@ -28,7 +28,7 @@ def segments(path):
         if kind==1 and memsz:yield vaddr,b[off:off+filesz]
 
 class Machine:
-    MIX=0x20100000;OUT=0x20104000;STOP=0x201fd000;READ=0x201fe000;STACK=0x201ff000;DATA=0x20200000
+    MIX=0x20100000;OUT=0x20140000;STOP=0x201fd000;READ=0x201fe000;STACK=0x201ff000;DATA=0x20200000
     def __init__(self,elf,nm):
         self.sym=symbols(elf,nm);self.uc=Uc(UC_ARCH_ARM,UC_MODE_THUMB|UC_MODE_MCLASS)
         self.uc.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_M0)
@@ -99,12 +99,25 @@ class Machine:
         for i in range(fx):
             pan=(64 if i<2 else 192) if profile=='stereo-balance' else 128
             lanes.append((8+i,0x100001+(i//2)*4096,882,(44100<<32)//48000,16,pan,1,1+(i&1),i&1))
+        if profile in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx'):
+            if profile=='mod4-28-fx': lanes=lanes[:4];start=4;rate=44100
+            else:lanes=[];start=0;rate=44100 if profile=='32-mono-44100' else 48000
+            for i in range(start,32):
+                stereo=profile=='16-stereo-48000'
+                lanes.append((i,0x200001+(i//2 if stereo else i)*4096,882,(rate<<32)//48000,
+                              16+i%32,128 if stereo else i*13%256,1,(1+(i&1)) if stereo else 0,(i&1) if stereo else 0))
         for lane,offset,length,step,gain,pan,fmt,mode,side in lanes:
             assert self.call('ug_lane_set',[self.MIX,lane,offset,length,0,length,step&0xffffffff,step>>32,gain,pan,fmt,mode,1,side])==0
             # AAPCS rounds ug_lane's 580 data bytes to its u64 alignment.
             lane_address=self.MIX+16+lane*584
             assert struct.unpack('<II',self.uc.mem_read(lane_address,8))==(offset,length),'target lane ABI changed'
-            if lane>=8:self.call('ug_lane_pcm_rate',[lane_address,44100,48000,0])
+            pcm=lane>=4 if profile=='mod4-28-fx' else profile in ('32-mono-48000','32-mono-44100','16-stereo-48000') or lane>=8
+            if pcm:self.call('ug_lane_pcm_rate',[lane_address,rate if profile in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx') else 44100,48000,0])
+        if 'ug_lane_share_cache' in self.sym:
+            for lane,offset,length,step,gain,pan,fmt,mode,side in lanes:
+                if mode==2:
+                    partner=next((x[0] for x in lanes if x[1]==offset and x[7]==1),None)
+                    if partner is not None:assert self.call('ug_lane_share_cache',[self.MIX,lane,partner])==0
         # The lane layout is a target ABI contract checked against init data:
         # ug_mem_if=16 bytes, ug_lane=584 bytes in the linked RP2040 build.
         assert struct.unpack('<I',self.uc.mem_read(self.MIX,4))[0]==self.READ|1
@@ -120,7 +133,9 @@ class Machine:
         for frame in range(1024):
             left=right=0
             for lane,offset,length,step,gain,pan,fmt,mode,side in lanes:
-                phase=(frame*44100*(1<<32))//48000 if lane>=8 else frame*step
+                pcm=lane>=4 if profile=='mod4-28-fx' else profile in ('32-mono-48000','32-mono-44100','16-stereo-48000') or lane>=8
+                pcmrate=rate if profile in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx') else 44100
+                phase=(frame*pcmrate*(1<<32))//48000 if pcm else frame*step
                 pos=(phase>>32)%length;fraction=phase&0xffffffff;nextpos=(pos+1)%length
                 def sample(idx):
                     base=offset+(idx*(2 if mode else 1)+side)*(2 if fmt==1 else 1)
@@ -140,17 +155,17 @@ class Machine:
         return {'profile':profile,'frames':1024,'instructions':self.instructions,'division64Calls':self.div64,'cacheReads':self.reads,'cacheReadBytes':self.read_bytes,'outputSha256':hashlib.sha256(output).hexdigest(),'independentOracle':'PASS'}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--baseline',type=Path);p.add_argument('--nm',default='arm-none-eabi-nm');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--baseline',type=Path);p.add_argument('--elf',type=Path);p.add_argument('--nm',default='arm-none-eabi-nm');a=p.parse_args()
     assert unicorn.__version__=='2.1.4','use the pinned audio-check environment'
-    elf=a.build/'multifw-release/pg-ultrags-multifw.elf'
+    elf=a.elf or a.build/'multifw-release/pg-ultrags-multifw.elf'
     files=[elf,Path(__file__),ROOT/'sw/ultrags/ug_render.c',ROOT/'sw/ultrags/ug_render.h',ROOT/'tools/ultrags/requirements-audio-check.txt']
     if a.baseline:files.append(a.baseline)
     inputs={str(f.resolve()):digest(f) for f in files}
     cases=[]
-    for profile in ['mod4','mod4-one-stereo','mod4-two-stereo','paused-mod-two-stereo','stereo-balance','twelve-lane']:
+    for profile in ['mod4','mod4-one-stereo','mod4-two-stereo','paused-mod-two-stereo','stereo-balance','twelve-lane','32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx']:
         row=Machine(elf,a.nm).run(profile)
         assert row['division64Calls']==0,'64-bit division in bounded audio kernel'
-        if a.baseline:
+        if a.baseline and profile not in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx'):
             old=Machine(a.baseline,a.nm).run(profile)
             assert old['outputSha256']==row['outputSha256'],'changed samples '+profile
             assert row['instructions']<old['instructions'],'no instruction improvement '+profile

@@ -11,13 +11,20 @@ export class ConfigCard {
   this.responseReads=0;this.overreads=0;this.resets=0;this.infoReadIndex=0;
   this.session=1n;
  }
+ resetConfigInterface() {
+  // Firmware globals are reinitialized on every mode boot. Keeping the old
+  // unlocked selector here hid the fresh-runtime state during reboot tests.
+  this.unlocked=false;this.sel=0;this.low=0;this.index=0;
+  this.selectPending=null;this.confirmed=false;this.fwIndex=0;
+  this.snapshotCatalog=undefined;
+ }
  tickUs(us) {
   this.now+=us;
   if(this.selectPending && this.now>=this.selectPending.at){this.applySelect(this.selectPending.v);this.selectPending=null;}
   if(this.saveAt&&this.now>=this.saveAt&&!this.o.saveTimeout){if(!this.o.saveFail)this.flash={...this.snapshot};this.saveAt=0;this.result=this.o.saveFail?22:0;this.saves++;}
-  if(this.rebootAt&&this.now>=this.rebootAt&&!this.o.timeout){this.rebootAt=0;if(this.o.selectorDelayAfterRebootUs)this.o.selectorDelayUs=this.o.selectorDelayAfterRebootUs;this.session++;this.mode=this.o.fallback?1:this.desired;this.boot=this.o.fallback?2:0;this.base=this.flash.base;this.alias=this.flash.alias;this.gs=false;this.request=[];this.response=[];this.low=0;if(this.o.protocolAfterReboot)this.o.protocol=this.o.protocolAfterReboot;if(this.o.catalogFailureAfterReboot){this.catalog[0]^=1;this.boot=5;this.mode=1;this.o.invalidRaw=true;}}
+  if(this.rebootAt&&this.now>=this.rebootAt&&!this.o.timeout){this.rebootAt=0;if(this.o.selectorDelayAfterRebootUs)this.o.selectorDelayUs=this.o.selectorDelayAfterRebootUs;this.session++;this.mode=this.o.fallback?1:this.desired;this.boot=this.o.fallback?2:0;this.base=this.flash.base;this.alias=this.flash.alias;this.gs=false;this.request=[];this.response=[];this.resetConfigInterface();if(this.o.protocolAfterReboot)this.o.protocol=this.o.protocolAfterReboot;if(this.o.catalogFailureAfterReboot){this.catalog[0]^=1;this.boot=5;this.mode=1;this.o.invalidRaw=true;}}
  }
- powerCycle(){this.session++;this.mode=this.desired=this.flash.mode;this.base=this.flash.base;this.alias=this.flash.alias;this.gs=false;this.boot=0;this.request=[];this.response=[];this.saveAt=this.rebootAt=0;this.low=0;}
+ powerCycle(){this.session++;this.mode=this.desired=this.flash.mode;this.base=this.flash.base;this.alias=this.flash.alias;this.gs=false;this.boot=0;this.request=[];this.response=[];this.saveAt=this.rebootAt=0;this.resetConfigInterface();}
  offline(){return this.rebootAt && this.now>=this.rebootStartAt;}
  fwByte(){const v=Buffer.from('PicoGUS model\0')[this.fwIndex++]??0;if(!v)this.fwIndex=0;return v;}
  applySelect(v) {
@@ -65,8 +72,8 @@ export class ConfigCard {
   if(this.mode!==8)return;
   if(p-this.base===2 && v===0xa0){this.resets++;this.request=[];this.response=[];}
   if(p-this.base===3){this.request.push(v);if(this.request.length>=2&&this.request.length===2+this.request[1]+(this.request[0]&128?4:0)){
-   const payload=Buffer.alloc(36);payload.write('UGS1');payload[4]=this.o.api??1;payload[5]=this.o.apiMinor??0;payload[6]=8;payload[7]=this.o.bootState??(this.o.notReady||this.now<(this.o.readyAtUs??0)?2:0);payload.writeBigUInt64LE(this.session,12);payload.write('0123456789abcde+',20);
-   const n=this.o.infoLength??36,r=Buffer.alloc(n+6);r[0]=this.o.infoStatus??0;r[1]=this.o.infoDeclaredLength??n;payload.copy(r,2,0,Math.min(n,36));r.writeUInt32LE(crc32(r.subarray(0,n+2)),n+2);if(this.o.badInfoCrc)r[n+2]^=1;this.response=[...r];this.infoReadIndex=0;this.request=[];
+   const payload=Buffer.alloc(40);payload.write('UGS1');payload[4]=this.o.api??1;payload[5]=this.o.apiMinor??0;payload[6]=8;payload[7]=this.o.bootState??(this.o.notReady||this.now<(this.o.readyAtUs??0)?2:0);payload.writeBigUInt64LE(this.session,12);payload.write('0123456789abcde+',20);
+   payload.write(this.o.infoLayout??'VLS1',36);const n=this.o.infoLength??40,r=Buffer.alloc(n+6);r[0]=this.o.infoStatus??0;r[1]=this.o.infoDeclaredLength??n;payload.copy(r,2,0,Math.min(n,40));r.writeUInt32LE(crc32(r.subarray(0,n+2)),n+2);if(this.o.badInfoCrc)r[n+2]^=1;this.response=[...r];this.infoReadIndex=0;this.request=[];
   }}
  }
 }

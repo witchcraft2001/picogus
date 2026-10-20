@@ -106,8 +106,8 @@ int main(int argc,char **argv){
  assert(ug_minimal_read(base+6)==UG_ERR_OVERFLOW);
  ug_minimal_init();ug_minimal_ready(0,123);
  ug_minimal_write(base+3,0,0);assert(!ug_minimal_idle());ug_minimal_write(base+3,0,0);assert(ug_minimal_read(base+1)&2);ug_minimal_dispatch();assert(ug_minimal_read(base+1)&4);
- uint8_t reply[42];for(unsigned i=0;i<38;i++)reply[i]=ug_minimal_read(base+3);assert(!memcmp(reply,"\0\44UGS1\1\0\10\0",10));assert(ug_minimal_idle());
- ug_minimal_write(base+3,0x80,0);ug_minimal_write(base+3,0,0);uint8_t req[]={0x80,0};uint32_t crc=ug_crc32(req,2);for(unsigned i=0;i<4;i++)ug_minimal_write(base+3,crc>>(i*8),0);ug_minimal_dispatch();for(unsigned i=0;i<42;i++)reply[i]=ug_minimal_read(base+3);assert(ug_get32(reply+38)==ug_crc32(reply,38));
+ uint8_t reply[46];for(unsigned i=0;i<42;i++)reply[i]=ug_minimal_read(base+3);assert(!memcmp(reply,"\0\50UGS1\1\0\10\0",10));assert(ug_minimal_idle());
+ ug_minimal_write(base+3,0x80,0);ug_minimal_write(base+3,0,0);uint8_t req[]={0x80,0};uint32_t crc=ug_crc32(req,2);for(unsigned i=0;i<4;i++)ug_minimal_write(base+3,crc>>(i*8),0);ug_minimal_dispatch();for(unsigned i=0;i<46;i++)reply[i]=ug_minimal_read(base+3);assert(ug_get32(reply+42)==ug_crc32(reply,42));
  ug_minimal_write(base+3,0,0);ug_minimal_write(base+3,129,0);assert(!(ug_minimal_read(base+1)&7)&&ug_minimal_read(base+6)==3);ug_minimal_write(base+3,0,0);assert(!(ug_minimal_read(base+1)&7));
  ug_minimal_write(base+2,0xa0,0);assert(ug_minimal_idle());ug_minimal_write(base+3,0,0);ug_minimal_poll(1000000);assert(ug_minimal_read(base+6)==13);ug_minimal_write(base+2,0xa0,0);
  ug_minimal_write(base+3,1,0);ug_minimal_write(base+3,0,0);ug_minimal_dispatch();assert(ug_minimal_read(base+3)==1&&ug_minimal_read(base+3)==0);
@@ -137,14 +137,14 @@ int main(int argc,char **argv){
   * alone. CB/DB must return to idle before the next GS command is posted. */
  pthread_t worker;assert(!pthread_create(&worker,NULL,dispatch_thread,NULL));
  for(unsigned n=0;n<10000;n++) {
-  ug_minimal_write(base+0x13,n,0);ug_minimal_write(base+0x1b,n,0);
+  ug_minimal_write(base+0x13,n,0);ug_minimal_write(base+0x1b,1,0);
   while(ug_minimal_read(base+0x1b)&1) {}
   assert(ug_minimal_read(base+0x1b)==0x7e);
   ug_minimal_write(base+3,0x80,0);ug_minimal_write(base+3,0,0);
   for(unsigned i=0;i<4;i++)ug_minimal_write(base+3,crc>>(i*8),0);
   while(!(ug_minimal_read(base+1)&4)) {}
-  for(unsigned i=0;i<42;i++)reply[i]=ug_minimal_read(base+3);
-  assert(!reply[0]&&reply[1]==36&&ug_get32(reply+14)==123&&ug_get32(reply+38)==ug_crc32(reply,38));
+  for(unsigned i=0;i<46;i++)reply[i]=ug_minimal_read(base+3);
+  assert(!reply[0]&&reply[1]==40&&ug_get32(reply+14)==123&&ug_get32(reply+42)==ug_crc32(reply,42));
  }
  __atomic_store_n(&stop_dispatch,1,__ATOMIC_RELEASE);assert(!pthread_join(worker,NULL));
  ug_config_init(&ug_cfg,&s,8,NULL,0,0,0);ug_config_select(&ug_cfg,0xe3);assert(!ug_cfg.catalog_ok&&ug_config_read(&ug_cfg,true)==255);

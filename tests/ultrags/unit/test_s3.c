@@ -115,16 +115,16 @@ int main(int argc,char **argv) {
     settings.UltraGS.basePort=0x2a0;settings.UltraGS.bulkAlias=65535;
     ug_config_init(&ug_cfg,&settings,8,NULL,0,0,0);
     ug_minimal_init();ug_storage_bind(&ps,123);uint8_t r[128],q[5]={0};
-    rpc(0,q,0,0,36,r);CHECK(r[7]==2);rpc(2,q,0,5,0,r);CHECK(!ug_minimal_idle());
+    rpc(0,q,0,0,40,r);CHECK(r[7]==2);rpc(2,q,0,5,0,r);CHECK(!ug_minimal_idle());
     ug_config_select(&ug_cfg,0xe1);ug_config_write(&ug_cfg,true,255,ug_minimal_idle());CHECK(ug_cfg.result==5 && !ug_config_busy(&ug_cfg));
-    ug_storage_publish(8u<<20,0,0);rpc(1,q,0,0,32,r);CHECK(ug_get32(r)==1510 && ug_get32(r+4)==15 && r[21]==4);
+    ug_storage_publish(8u<<20,0,0);rpc(1,q,0,0,44,r);CHECK(ug_get32(r)==1511 && ug_get32(r+4)==15 && (r[24]|r[25]<<8)==32);
     /* GS aliases may change during an EXT frame; CAPS crosses the cores. */
     ug_config_select(&ug_cfg,0x79);
     pthread_t aliases; CHECK(!pthread_create(&aliases,NULL,aliases_thread,NULL));
     for(unsigned i=0;i<10000;i++) {
         uint8_t len,status;
         CHECK(ug_storage_command(1,q,0,r,&len,&status,0));
-        CHECK(!status && len==32 && !(ug_get32(r)&~2030u));
+        CHECK(!status && len==44 && !(ug_get32(r)&~2031u));
     }
     CHECK(!pthread_join(aliases,NULL));ug_config_write(&ug_cfg,true,0,true);
     rpc(2,q,0,0,20,r);CHECK(ug_get32(r+4)==8u<<20);
@@ -144,11 +144,11 @@ int main(int argc,char **argv) {
     ug_put32(q+1,16);rpc(16,q,5,0,6,r);
     ug_cfg.aliases=true;
     ug_put32(q,0x55475253);q[4]=0;rpc(6,q,5,0,8,r);CHECK(ug_get32(r)==124);CHECK(ug_cfg.aliases && settings.UltraGS.basePort==0x2a0);
-    q[4]=1;mock_stuck_bit=0;rpc(6,q,5,17,0,r);rpc(0,q,0,0,36,r);CHECK(ug_get32(r+12)==125 && r[7]==1);mock_stuck_bit=-1;
+    q[4]=1;mock_stuck_bit=0;rpc(6,q,5,17,0,r);rpc(0,q,0,0,40,r);CHECK(ug_get32(r+12)==125 && r[7]==1);mock_stuck_bit=-1;
     q[0]=0;rpc(5,q,1,0,14,r);rpc(127,q,0,1,0,r);rpc(16,q,4,3,0,r);
     /* Retry after a DMA fault and after a failed startup without reboot. */
     mock_dma_stuck=true;q[0]=0;rpc(5,q,1,17,14,r);mock_dma_stuck=false;
-    rpc(5,q,1,0,14,r);rpc(0,q,0,0,36,r);CHECK(!r[7]);
+    rpc(5,q,1,0,14,r);rpc(0,q,0,0,40,r);CHECK(!r[7]);
     ug_storage_publish(0,17,0);q[0]=0;rpc(5,q,1,0,14,r);
     rpc(2,q,0,0,20,r);CHECK(ug_get32(r+4)==8u<<20);
     q[0]=0;rpc(5,q,1,0,14,r);uint32_t quick_tested=ug_get32(r);
@@ -174,7 +174,7 @@ int main(int argc,char **argv) {
     if(argc>2) { fixtures=fopen(argv[2],"w");assert(fixtures);fprintf(fixtures,"[\n"); }
     ug_cfg.aliases=false;
     ug_storage_bind(&ps,123);ug_storage_publish(8u<<20,0,0);
-    rpc(1,q,0,0,32,r);rpc(2,q,0,0,20,r);
+    rpc(1,q,0,0,44,r);rpc(2,q,0,0,20,r);
     q[0]=0;ug_put32(q+1,17);rpc(16,q,5,0,6,r);
     q[0]=1;ug_put32(q+1,31);rpc(16,q,5,0,6,r);
     q[0]=0;q[1]=0;rpc(21,q,2,0,2,r);

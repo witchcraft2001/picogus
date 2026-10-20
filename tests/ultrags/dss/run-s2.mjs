@@ -57,13 +57,18 @@ if(badPort[data8+3]!==0x3a||badPort[data8+4]!==0xd2)throw Error('unexpected DATA
 test('regression-wrong-magic-port','INFO',2,{exe:badPort,noMutation:true});
 const unchecked=Buffer.from(bytes),select=label('UG_CFG_SELECT');unchecked[select]=0xaf;unchecked[select+1]=0xc9;
 test('regression-unconfirmed-selector','LIST',2,{exe:unchecked,selectorDelayUs:800,requireEcho:true,noMutation:true,check:c=>c.staleReads>0});
-test('info','INFO',0,{check:(c,m)=>m.text.includes('bulk_alias=OFF')});
-test('info-alias-range','INFO',0,{mode:8,alias:0x280,check:(c,m)=>m.text.includes('bulk_alias=0280-029F')});
+test('info','INFO',0,{check:(c,m)=>m.text.includes('BULK alias: OFF')});
+test('info-alias-range','INFO',0,{mode:8,alias:0x280,check:(c,m)=>m.text.includes('BULK alias: 0280-029F')});
 for(const [base,alias] of [[0,0xffff],[0x400,0xffff],[0x2a1,0xffff],[0x2a0,0x2a0],[0x2a0,0]])
  test(`invalid committed ports ${base}/${alias}`,'INFO /DIAG',9,{mode:8,base,alias,noMutation:true,check:(c,m)=>!c.request.length&&!c.responseReads&&m.text.includes('CONFIG_PORTS')&&m.isaLog.every(e=>e.isa>=0x1d0&&e.isa<=0x1d2)});
 test('list','LIST',0,{check:(c,m)=>m.text.includes('08 ULTRAGS')&&m.text.includes('07 NE2000 ABSENT')});
-test('default-info','',0,{check:(c,m)=>m.text.includes('ISA slot=00')&&m.text.includes('firmware=PicoGUS model')});
+test('default-info','',0,{check:(c,m)=>m.text.includes('ISA slot: 0')&&m.text.includes('PicoGUS: PicoGUS model')});
 test('short-mode','ULTRAGS /SAVE',0,{check:c=>c.reboots===1&&c.saves===1&&c.flash.mode===8});
+test('canonical-gs-save','ULTRAGS /GSALIAS ON /SAVE',0,{check:c=>c.gs&&c.reboots===1&&c.saves===1&&c.flash.mode===8});
+test('canonical-gs-off','/GSALIAS OFF',0,{mode:8,gs:true,check:c=>!c.gs&&!c.reboots&&!c.saveRequests});
+test('canonical-gs-busy-no-save','/GSALIAS ON /SAVE',9,{mode:8,busy:true,check:c=>!c.gs&&!c.saveRequests});
+for(const cli of ['GUS /GSALIAS ON /SAVE','ULTRAGS /GSALIAS ON /GSALIAS OFF','ULTRAGS /GSALIAS MAYBE'])
+ test('canonical-gs-invalid '+cli,cli,1,{noMutation:true});
 test('slot-space','ULTRAGS /SLOT 1',0,{slot:1});
 test('help-examples','/?',0,{check:(c,m)=>!m.ioLog.length&&!m.isaLog.length&&m.text.includes('UGCFG GUS /SAVE')});
 for(const selectorDelayUs of [150,800,5000]) {
@@ -116,7 +121,7 @@ for(const [name,mask] of [
  test(`SAVE transient FF ${name} slot${slot} iff${iff}`,'SAVE /DIAG /SLOT:'+slot,0,
   {card:c,slot,iff,clobberDss:true,check:(c,m)=>c.saveRequests===1&&c.saves===1&&c.flash.mode===8&&
    c.saveSamples.some(s=>s.value===255)&&c.saveSamples.some(s=>s.value===5)&&
-   c.responseReads===42&&!c.overreads&&m.text.includes('save_result_ff_reads=000')});
+   c.responseReads===46&&!c.overreads&&m.text.includes('save_result_ff_reads=000')});
 }
 const allBusyLost=saveResultFault(s=>s.result===5);
 test('SAVE FF throughout BUSY remains unconfirmed','SAVE /DIAG',9,{card:allBusyLost,
@@ -152,7 +157,7 @@ const lostInfoLength=new ConfigCard(catalog,{infoReadFFAt:1});
 test('native late length MODE no Flash','ULTRAGS /SAVE',9,{card:lostInfoLength,check:(c,m)=>c.mode===8&&c.reboots===1&&c.saveRequests===0&&c.responseReads===2&&!c.overreads&&c.resets===1&&m.text.includes('INFO_LENGTH')});
 test('native late length INFO diagnostics','INFO /DIAG',9,{card:lostInfoLength,check:(c,m)=>c.mode===8&&c.reboots===1&&c.saveRequests===0&&c.responseReads===4&&!c.overreads&&c.resets===2&&m.text.includes('INFO bytes/raw frame=02 00 FF')});
 test('native late length LIST remains valid','LIST /DIAG',0,{card:lostInfoLength,check:c=>c.reboots===1&&c.saveRequests===0&&c.resets===2});
-for(const infoReadFFAt of [2,20,41])test('native lost response byte '+infoReadFFAt,'VERIFY /DIAG',9,{mode:8,infoReadFFAt,check:(c,m)=>c.responseReads===42&&!c.overreads&&c.saveRequests===0&&m.text.includes('INFO_CRC')});
+for(const infoReadFFAt of [2,20,41])test('native lost response byte '+infoReadFFAt,'VERIFY /DIAG',9,{mode:8,infoReadFFAt,check:(c,m)=>c.responseReads===46&&!c.overreads&&c.saveRequests===0&&m.text.includes('INFO_CRC')});
 test('INFO normal summary','INFO',0,{mode:8,check:(c,m)=>m.text.includes('api=1.0 boot_state=READY')&&m.text.includes('build=0123456789abcde+')&&!c.overreads});
 test('fast reboot into ULTRAGS','ULTRAGS /SAVE',0,{rebootDownUs:1,check:c=>c.mode===8&&c.saves===1&&c.reboots===1});
 test('fast reboot into GUS','GUS /SAVE',0,{mode:8,rebootDownUs:1,check:c=>c.mode===1&&c.saves===1&&c.reboots===1});
@@ -170,7 +175,7 @@ test('old-fallback-delayed-reboot','MODE ULTRAGS',0,{boot:2,rebootDelayUs:100000
 test('ignored-same-mode-reboot','MODE ULTRAGS',8,{mode:8,ignoredReboot:true,check:c=>c.reboots===1});
 test('protocol-after-reboot','MODE ULTRAGS',3,{protocolAfterReboot:5});
 test('catalog-fallback-after-reboot','MODE ULTRAGS',9,{catalogFailureAfterReboot:true,check:(c,m)=>m.text.includes('BOOT_FALLBACK')});
-test('catalog-failure-handoff-info','INFO',3,{boot:5,check:(c,m)=>m.text.includes('CATALOG_INVALID')});
+test('catalog-failure-handoff-info','INFO',3,{boot:5,check:(c,m)=>m.text.includes('CATALOG_BOOT')});
 test('catalog-failure-handoff-readonly','MODE ULTRAGS',3,{boot:5,noMutation:true});
 if(results.some(r=>!r.ok)){writeFileSync(join(build,'s2-dss-debug.json'),JSON.stringify(results,null,2));process.exit(1);}
 for(const slot of [0,1])for(const cpuHz of [21000000,3500000])for(const iff of [0,1]){

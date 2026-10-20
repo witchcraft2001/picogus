@@ -15,7 +15,7 @@
 #include "pico/rand.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
-#ifdef UG_ISA_EARLY_READ
+#if defined(UG_ISA_EARLY_READ) || defined(UG_ISA_COMPAT_READ)
 #include "ug_handshake.h"
 #endif
 extern void ug_board_maintenance(void);
@@ -47,7 +47,7 @@ volatile ug_psram_attempt ug_psram_attempts[2];
 volatile unsigned ug_psram_attempt_count;
 extern board_type_t BOARD_TYPE;
 void play_ultrags(void) {
-#ifdef UG_ISA_EARLY_READ
+#if defined(UG_ISA_EARLY_READ) || defined(UG_ISA_COMPAT_READ)
     ug_handshake_guard_core1();
 #endif
     ug_hw_claim_audio(); ug_hw_claim_psram_sm();

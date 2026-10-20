@@ -53,14 +53,14 @@ for(const turboInit of [false,true]) for(const app of ['UGCFG','UGMEM','UGLOAD',
 for(const turboInit of [false,true]) for(const iff of [0,1]) {
   const card=new UgCard({}),m=run('UGDIAG',null,{card,turboInit,iff});
   assert.equal(card.snapSeq,1);
-  assert.equal(m.isaLog.filter(e=>e.dir==='r' && e.isa===0x2A5).length,128);
+  assert.equal(m.isaLog.filter(e=>e.dir==='r' && e.isa===0x2A5).length,64);
   let count=0,groups=[];
   for(const e of [...m.isaLog.map(e=>({...e,isaAccess:true})),...m.ioLog].sort((a,b)=>a.t-b.t)) {
     if(e.isaAccess && e.dir==='r' && e.isa===0x2A5)count++;
     if(e.dir==='out' && e.port===PORT_SYSTEM && e.val===1 && count){groups.push(count);count=0;}
   }
-  assert.deepEqual(groups,Array(16).fill(8));
-  results.push({name:`SNAPSHOT single latch, exactly 128 reads in 16 windows; Turbo=${turboInit} IFF=${iff}`,
+  assert.deepEqual(groups,Array(8).fill(8));
+  results.push({name:`SNAPSHOT single latch, exactly 64 reads in 8 windows; Turbo=${turboInit} IFF=${iff}`,
     ok:true,maxWindowUs:m.maxWindowUs,maxDiUs:m.maxDiUs});
 }
 const listing=readFileSync(join(dir,'ugmem.lst'),'utf8'),entries=new Set();

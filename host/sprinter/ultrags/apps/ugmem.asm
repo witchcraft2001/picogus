@@ -105,6 +105,10 @@ ENTRY:
     call PRINT
     jp PASS
 .run:
+    IFDEF APP_S6TEST
+    call S6TEST_VALIDATE
+    jp c,SYNTAX
+    ENDIF
     IFDEF APP_BENCH
     ld a,(BMETHOD)
     cp 3
@@ -126,7 +130,7 @@ ENTRY:
     ; INFO/CAPS are checked before any destructive operation.
     ld a,0
     ld bc,0
-    ld e,36
+    ld e,40
     call RPC
     jp c,RPC_ERROR
     ld hl,RESP
@@ -139,6 +143,16 @@ ENTRY:
     inc hl
     inc de
     djnz .magic
+    ld hl,RESP+36
+    ld de,info_layout
+    ld b,4
+.layout:
+    ld a,(de)
+    cp (hl)
+    jp nz,PROTOCOL
+    inc hl
+    inc de
+    djnz .layout
     ; Bind all file/temporary-object operations to the discovered session.
     ld hl,RESP+12
     ld de,SESSION
@@ -154,7 +168,7 @@ ENTRY:
     call NL
     ld a,1
     ld bc,0
-    ld e,32
+    ld e,44
     call RPC
     jp c,RPC_ERROR
     ld a,(RESP)
@@ -394,6 +408,12 @@ PARSE:
     scf
     ret
 OPTION:
+    IFDEF APP_S6TEST
+    push hl
+    call S6TEST_OPTION
+    pop hl
+    ret nc
+    ENDIF
     IFDEF APP_S6TEST
     push hl
     ld de,s6_real_option
@@ -737,18 +757,35 @@ RPC:
     push af
     ld a,e
     ld (EXPECT),a
+    IFDEF APP_S6TEST
+    ld a,1
+    ld (S6RPCHECK),a
+    ld hl,0xFFFF
+    ld (S6RPCGOT),hl
+    ENDIF
     pop af
     ld hl,REQ
     ld de,RESP
     ld ix,128
     call UG_RPC
     ret c
+    IFDEF APP_S6TEST
+    ld (S6RPCGOT),bc
+    ld a,2
+    ld (S6RPCHECK),a
+    ENDIF
     ld a,(EXPECT)
     cp c
     jr nz,.bad
     ld a,b
     or a
+    IFDEF APP_S6TEST
+    jr nz,.bad
+    ld (S6RPCHECK),a
+    ret
+    ELSE
     ret z
+    ENDIF
 .bad:
     ld a,UG_XC_TRANSPORT_RESET
     call UG_XCTRL
@@ -954,6 +991,9 @@ RPC_ERROR:
     call HEX8
 .diagnosed:
     call NL
+    IFDEF APP_S6TEST
+    call S6TEST_RPC_DIAG
+    ENDIF
     pop bc
     pop af
     ld b,a
@@ -1215,7 +1255,7 @@ powers:
     DD 1000000000,100000000,10000000,1000000,100000,10000,1000,100,10,1,0
 commands: DB "INFO",0,1,"LIST",0,2,"TEST",0,3,"RESET",0,4,"FREE",0,5,"ROUNDTRIP",0,6,"PROTO",0,7
     IFDEF APP_S6TEST
-    DB "PCM",0,8,"FX",0,9
+    DB "PCM",0,8,"FX",0,9,"MIX",0,10
     ENDIF
     DB 0
 options: DB "/QUIET",0,1,"/?",0,2,"/VERIFY",0,3,"/SLOW",0,4,"/OVERWRITE",0,5,"/TYPE:BLOB",0,6,0
@@ -1223,6 +1263,7 @@ test_modes: DB "QUICK",0,1,"FULL",0,2,0
 reset_modes: DB "WARM",0,1,"COLD",0,2,0
 slot_prefix: DB "/SLOT:",0
 base_prefix: DB "/BASE:",0
+info_layout: DB "VLS1"
 info_magic: DB "UGS1",1,0,8
     IFDEF APP_BENCH
 help_text: DB "UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024 /METHOD:ALL|SLOW|FIXED|ALIAS|STACK",13,10
@@ -1232,7 +1273,7 @@ help_text: DB "UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024 /METHOD:ALL|SLOW|FIXED|A
 help_text: INCLUDE "ugaudio_help.inc"
     ELSE
     IFDEF APP_PROTO
-help_text: DB "UGTEST PROTO|PCM|FX [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
+help_text: DB "UGTEST PROTO|PCM|FX|MIX [/VOICES:N /SECONDS:N] [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
     ELSE
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
     DB "ROUNDTRIP bytes /SLOW /VERIFY /SLOT:0|1 /BASE:hex /QUIET /?",13,10

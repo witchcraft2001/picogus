@@ -243,15 +243,15 @@ int main(int argc,char **argv) {
     CHECK(ug_minimal_read(0x2b3)==255);end(token,true,false,14);
     ug_storage_test_tokens(UINT32_MAX);begin(h,0,1,true,false,0);token=ug_get32(r);CHECK(token==UINT32_MAX);end(token,true,false,16);
     begin(h,0,1,true,false,14);
-    rpc(80,0,0,128);CHECK(r[27]==255&&!r[24]&&!ug_get32(r+120));
-    ug_minimal_write(0x2a2,0xa3,0);uint8_t snapshot[128];for(unsigned i=0;i<128;i++)snapshot[i]=ug_minimal_read(0x2a5);
-    CHECK(snapshot[27]==255 && snapshot[56]==127);CHECK(ug_minimal_read(0x2a4)==128);CHECK(ug_minimal_read(0x2a5)==255);
+    rpc(80,0,0,64);CHECK(!r[24]&&!ug_get32(r+56));
+    ug_minimal_write(0x2a2,0xa3,0);uint8_t snapshot[64];for(unsigned i=0;i<64;i++)snapshot[i]=ug_minimal_read(0x2a5);
+    CHECK(!snapshot[27] && !snapshot[56]);CHECK(ug_minimal_read(0x2a4)==64);CHECK(ug_minimal_read(0x2a5)==255);
     /* A held SRAM snapshot remains byte-identical through repeated core1
      * publications. Latch/read never touches PSRAM. */
     unsigned reads=mock_read_calls;
     for(unsigned i=0;i<100;i++)ug_minimal_dispatch();
     ug_minimal_write(0x2a4,0,0);
-    for(unsigned i=0;i<128;i++)CHECK(ug_minimal_read(0x2a5)==snapshot[i]);
+    for(unsigned i=0;i<64;i++)CHECK(ug_minimal_read(0x2a5)==snapshot[i]);
     CHECK(mock_read_calls==reads);
     ug_stat_add(2,UINT32_MAX);rpc(3,0,0,64);CHECK(ug_get32(r+8)==UINT32_MAX);rpc(4,0,0,0);rpc(3,0,0,64);CHECK(!ug_get32(r+8));
     q[0]=h;q[1]=0;rpc(17,2,0,0);rpc(2,0,0,20);CHECK(ug_get32(r+8)==8u<<20);
@@ -269,7 +269,7 @@ int main(int argc,char **argv) {
     ug_put32(q,1);rpc(36,4,0,0);q[0]=h;q[1]=0;rpc(17,2,0,0);
     h=alloc(1);begin(h,0,1,false,false,0);
     ug_minimal_write(0x2bb,0xf4,time_us_32());ug_minimal_dispatch();ug_minimal_dispatch();
-    rpc(0,0,0,36);CHECK(r[7]==2);
+    rpc(0,0,0,40);CHECK(r[7]==2);
     rpc(2,0,UG_ERR_BUSY,0); /* Must not reuse the cold-reset job as this RPC. */
     unsigned limit=100000;while(ug_storage_busy()&&--limit)ug_minimal_dispatch();CHECK(limit);
     rpc(2,0,0,20);CHECK(!r[16]&&!r[17]&&ug_get32(r+8)==8u<<20);

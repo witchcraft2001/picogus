@@ -1,0 +1,65 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * This program is free software under GPL version 2 or any later version.
+ * ULTRAGS HANDSHAKE only. IN_BASE is A5 (GPIO11); core0 reconstructs A0..A9
+ * from the rotated full pin snapshot. SET immediates are patched at idle.
+ */
+.program ug_compat_ior
+.side_set 2 opt
+public restart:
+    wait 1 gpio 5 side 0b00
+.wrap_target
+public idle:
+    wait 0 gpio 5
+    jmp pin native_decode     ; A9: low CONFIG/GS ports bypass both native tests
+foreign:
+    mov isr, pins
+public submit:
+    push block                ; raw address snapshot; PUSH clears ISR
+public condition:
+    out x, 32                 ; IO_WAIT / IO_END for software-owned ports
+    jmp !x restart
+public value:
+    out pins, 8 side 0b01     ; load data before enabling output
+    out pindirs, 8 side 0b11 [3] ; keep WAIT asserted through mux/output setup
+    wait 1 gpio 5 side 0b10
+    out pindirs, 8 side 0b00
+    irq 0                     ; completed read, sampled by the core1 fuse
+.wrap
+native_decode:
+    in pins, 5                ; ISR is cleared by the preceding PUSH/restart
+    mov x, isr
+public base_compare:
+    set y, 21                 ; default BASE 02A0h >> 5
+    jmp x!=y alias_compare
+    jmp owned
+public alias_compare:
+    set y, 21                 ; disabled ALIAS repeats BASE, no extra block
+    jmp x!=y foreign
+public owned:
+    mov isr, ~pins side 0b01  ; /IOR was low: inverted bit26 tags native ownership
+public owned_submit:
+    push block side 0b01
+public owned_condition:
+    out pc, 32 side 0b01     ; ARM supplies relocated value PC, then 0xFF00|byte
+                              ; retain native WAIT even while SM0 finishes IOW
+% c-sdk {
+static inline void ug_compat_ior_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = ug_compat_ior_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, 11);
+    sm_config_set_in_shift(&c, false, false, 32);
+    sm_config_set_out_pins(&c, 6, 8);
+    sm_config_set_out_shift(&c, true, true, 24);
+    sm_config_set_sideset_pins(&c, 26);
+    sm_config_set_jmp_pin(&c, 15); /* A9, sampled before ADS selects data */
+    pio_sm_set_consecutive_pindirs(pio, sm, 5, 1, false);
+    pio_sm_set_consecutive_pindirs(pio, sm, 6, 10, false);
+    for (unsigned pin = 6; pin <= 15; ++pin) pio_gpio_init(pio, pin);
+    pio_gpio_init(pio, 26);
+    pio_gpio_init(pio, 27);
+    pio_sm_set_pins_with_mask(pio, sm, 0, 3u << 26);
+    pio_sm_set_consecutive_pindirs(pio, sm, 26, 2, true);
+    pio_sm_init(pio, sm, offset, &c);
+    /* Core0 enables SM1 after the independent core1 fuse is ready.
+     * IOW remains the upstream ten-word program; total PIO0 usage is 32. */
+}
+%}

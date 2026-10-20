@@ -63,7 +63,7 @@ let modRun=test('MOD4 verified upload','UGLOAD','FOUR.MOD /TYPE:MOD /VERIFY',0,{
 test('MOD4 native handle repeat','UGPLAY','HANDLE 1 /LOOP',0,{card:modRun.card,check:c=>c.foreground?.mod&&c.objects.get(1).pins===1});
 test('MOD4 snapshot tracker fields','UGMON','/COUNT:1 /HZ:10',0,{card:modRun.card,check:c=>c.foreground?.mod&&c.foreground.tracker.speed===6});
 test('MOD4 STOP retains READY','UGPLAY','STOP',0,{card:modRun.card,check:c=>!c.foreground&&c.objects.get(1).state===1&&c.objects.get(1).pins===0});
-for(const cli of ['T.RAW','T.RAW /RATE:7999 /BITS:8 /CH:1 /FMT:U8','T.RAW /RATE:8000 /BITS:16 /CH:1 /FMT:U8','HANDLE 65536','HANDLE 0x10000','LIST X','SEEK 0 0','T.WAV /GS','FXHANDLE 1 /VOICE:7','FXHANDLE 1 /PRIORITY:0','FXHANDLE 1 /PRIORITY:255'])test('syntax '+cli,'UGPLAY',cli,1);
+for(const cli of ['T.RAW','T.RAW /RATE:7999 /BITS:8 /CH:1 /FMT:U8','T.RAW /RATE:8000 /BITS:16 /CH:1 /FMT:U8','HANDLE 65536','HANDLE 0x10000','LIST X','SEEK 0 0','T.WAV /GS','FXHANDLE 1 /PRIORITY:0','FXHANDLE 1 /PRIORITY:255'])test('syntax '+cli,'UGPLAY',cli,1);
 for(const cli of ['STOP /GAIN:1','PAUSE /PAN:2','RESUME /PRIORITY:128','FXSTOP 1 /VOICE:8','HANDLE 1 /SLOW','HANDLE 1 /CRC:00000000','HANDLE 1 /TYPE:WAV','T.WAV /TYPE:RAW','HANDLE 1 /VOICE:255','HANDLE 1 /PRIORITY:128'])test('ignored option rejected '+cli,'UGPLAY',cli,1);
 for(const cli of ['/HZ:0','/HZ:11','/COUNT:0','/COUNT:4294967296','/GS','X'])test('monitor syntax '+cli,'UGMON',cli,1);
 card=new PcmCard(catalog);asset(card);test('loop foreground','UGPLAY','HANDLE 1 /LOOP',0,{card});
@@ -72,11 +72,11 @@ test('pause','UGPLAY','PAUSE',0,{card,check:c=>c.foreground?.paused});
 test('paused replace required','UGPLAY','HANDLE 1',7,{card});
 test('resume','UGPLAY','RESUME',0,{card,check:c=>!c.foreground?.paused});
 test('replacement valid','UGPLAY','HANDLE 1 /REPLACE /LOOP',0,{card});
-for(let i=0;i<4;i++)test('FX '+i,'UGPLAY','FXHANDLE 1 /LOOP',0,{card,check:c=>c.foreground&&c.fx.length===i+1});
-test('NO_VOICE','UGPLAY','FXHANDLE 1',7,{card,check:c=>c.fx.length===4&&!!c.foreground});
+for(let i=0;i<31;i++)test('FX '+i,'UGPLAY','FXHANDLE 1 /LOOP',0,{card,check:c=>c.foreground&&c.fx.length===i+1});
+test('NO_VOICE','UGPLAY','FXHANDLE 1',7,{card,check:c=>c.fx.length===31&&!!c.foreground});
 test('FXPAUSE','UGPLAY','FXPAUSE 1',0,{card,check:c=>c.fx[0].paused});
 test('FXRESUME','UGPLAY','FXRESUME 1',0,{card,check:c=>!c.fx[0].paused});
-test('monitor','UGMON','/COUNT:2 /HZ:10',0,{card,check:(c,m)=>c.fx.length===4&&!!c.foreground&&m.text.match(/output_frames=/g)?.length===2});
+test('monitor','UGMON','/COUNT:2 /HZ:10',0,{card,check:(c,m)=>c.fx.length===31&&!!c.foreground&&m.text.match(/output_frames=/g)?.length===2});
 test('FXSTOP ALL','UGPLAY','FXSTOP ALL',0,{card,check:c=>!c.fx.length&&!!c.foreground});
 test('STOP','UGPLAY','STOP',0,{card,check:c=>!c.foreground&&c.objects.size===1});
 test('FREE','UGMEM','FREE 1',0,{card,check:c=>!c.objects.size});
@@ -85,7 +85,7 @@ test('UGTEST FX','UGTEST','FX',0,{check:c=>!c.objects.size&&!c.foreground&&!c.fx
 for(const [suite,op] of [['PCM',48],['FX',54]])test('UGTEST lost PLAY cleanup '+suite,'UGTEST',suite,8,{noReplyOp:op,
  check:c=>c.calls.filter(x=>x===op).length===1&&!c.objects.size&&!c.foreground&&!c.fx.length});
 card=new PcmCard(catalog,{noReplyOp:54});asset(card);card.command(48,Buffer.from([1,0,0,0,64,128]));card.render(1);
-test('UGTEST lost FX keeps foreign foreground','UGTEST','FX',8,{card,
+test('UGTEST refuses foreign foreground before allocation','UGTEST','FX',4,{card,
  check:c=>c.objects.size===1&&c.objects.has(1)&&c.objects.get(1).pins===1&&c.foreground?.handle===1&&!c.fx.length});
 card=new PcmCard(catalog);const withoutFx=card.command.bind(card);
 card.command=(op,q,defer=false)=>{const r=withoutFx(op,q,defer);if(op===1&&!r[0])r[1][1]&=~1;return r;};
@@ -142,23 +142,23 @@ test('FX WAIT ESC targeted','UGPLAY','FXHANDLE 1 /LOOP /WAIT',10,{card,onDss:(st
 test('invalid replacement preserves music','UGPLAY','BAD.WAV /REPLACE',6,{card,files:{'BAD.WAV':raw},check:c=>!!c.foreground&&c.objects.size===1});
 test('monitor ESC preserves playing PCM','UGMON','',0,{card,escAfter:2,check:c=>!!c.foreground});
 let switched=false;test('WAIT specific replaced instance','UGPLAY','HANDLE 1 /LOOP /WAIT /REPLACE',0,{card,onDss:(st,c,m)=>{if(st.c===0x31&&m.mem[0xbc57]&&c.foreground?.id===(m.mem[0x5a06]|m.mem[0x5a07]<<8)&&!switched){switched=true;c.command(48,Buffer.from([1,0,0,0,64,128]));}},check:c=>c.foreground?.id===4});
-card=new PcmCard(catalog);asset(card,2);test('stereo first','UGPLAY','FXHANDLE 1 /LOOP /VOICE:8',0,{card,check:c=>c.fx[0].mask===0x300});
-test('stereo second','UGPLAY','FXHANDLE 1 /LOOP /VOICE:10',0,{card,check:c=>c.fx[1].mask===0xc00});
-test('stereo NO_VOICE atomic','UGPLAY','FXHANDLE 1',7,{card,check:c=>c.fx.length===2&&c.objects.get(1).pins===2});
+card=new PcmCard(catalog);asset(card,2);test('stereo first','UGPLAY','FXHANDLE 1 /LOOP /VOICE:8',0,{card,check:c=>c.fx[0].voices[0]===8&&c.fx[0].voices.length===2});
+test('stereo second','UGPLAY','FXHANDLE 1 /LOOP /VOICE:10',0,{card,check:c=>c.fx[1].voices[0]===10&&c.fx[1].voices.length===2});
+test('stereo explicit occupied voice atomic','UGPLAY','FXHANDLE 1 /VOICE:8',7,{card,check:c=>c.fx.length===2&&c.objects.get(1).pins===2});
 // Real report: MOD plus the same stereo WAV twice at /GAIN:16. Two stereo
 // instances fill all four FX lanes; a third is an expected capacity error.
 {
  const concurrent=new PcmCard(catalog);asset(concurrent,2);
  test('MOD stereo workload upload','UGLOAD','FOUR.MOD /TYPE:MOD /VERIFY',0,{card:concurrent,files:{'FOUR.MOD':mod4()}});
  test('MOD stereo workload start','UGPLAY','HANDLE 2 /LOOP',0,{card:concurrent});
- for(let n=1;n<=2;n++)test('MOD stereo FX gain16 '+n,'UGPLAY','FXHANDLE 1 /LOOP /GAIN:16',0,{card:concurrent,
-  check:c=>!!c.foreground&&c.fx.length===n&&c.fx.every(x=>x.gain===16&&x.pan===128)&&c.fx[n-1].mask===(n===1?0x300:0xc00)});
- test('MOD third stereo expected NO_VOICE','UGPLAY','FXHANDLE 1 /LOOP /GAIN:16',7,{card:concurrent,check:c=>!!c.foreground&&c.fx.length===2});
+ for(let n=1;n<=14;n++)test('MOD stereo FX gain16 '+n,'UGPLAY','FXHANDLE 1 /LOOP /GAIN:16',0,{card:concurrent,
+  check:c=>!!c.foreground&&c.fx.length===n&&c.fx.every(x=>x.gain===16&&x.pan===128)&&c.fx[n-1].voices.length===2});
+ test('MOD fifteenth stereo expected NO_VOICE','UGPLAY','FXHANDLE 1 /LOOP /GAIN:16',7,{card:concurrent,check:c=>!!c.foreground&&c.fx.length===14});
  test('MOD stereo workload pause','UGPLAY','PAUSE',0,{card:concurrent,check:c=>c.foreground.paused&&c.fx.every(x=>!x.paused)});
- test('MOD stereo workload monitor','UGMON','/COUNT:2 /HZ:1',0,{card:concurrent,check:c=>c.foreground.paused&&c.fx.length===2});
+ test('MOD stereo workload monitor','UGMON','/COUNT:2 /HZ:1',0,{card:concurrent,check:c=>c.foreground.paused&&c.fx.length===14});
 }
-test('stereo higher priority steal','UGPLAY','FXHANDLE 1 /VOICE:8 /STEAL /PRIORITY:200 /LOOP',0,{card,check:c=>c.fx.length===2&&c.fx.some(x=>x.id===3&&x.mask===0x300)&&c.objects.get(1).pins===2});
-test('stereo odd voice rejected','UGPLAY','FXHANDLE 1 /VOICE:9',6,{card,check:c=>c.fx.length===2});
+test('stereo higher priority steal','UGPLAY','FXHANDLE 1 /VOICE:8 /STEAL /PRIORITY:200 /LOOP',0,{card,check:c=>c.fx.length===2&&c.fx.some(x=>x.id===3&&x.voices[0]===8&&x.voices.length===2)&&c.objects.get(1).pins===2});
+test('stereo odd preferred voice allowed','UGPLAY','FXHANDLE 1 /VOICE:9 /LOOP',0,{card,check:c=>c.fx.length===3&&c.fx.at(-1).voices[0]===9});
 for(const handle of [1,255,256,32767,32768,65535]){const c=new PcmCard(catalog);c.next=handle;asset(c);test('u16 handle '+handle,'UGPLAY',`HANDLE ${handle} /WAIT`,0,{card:c,check:c=>c.objects.has(handle)});}
 card=new PcmCard(catalog);asset(card);let changed=false;test('WAIT session changed','UGPLAY','HANDLE 1 /LOOP /WAIT',3,{card,onDss:(st,c)=>{if(st.c===0x31&&c.foreground&&!changed){changed=true;c.session++;}},check:c=>c.objects.size===1});
 // A second upload and original byte readback while PCM + independent FX keep running.
@@ -195,17 +195,17 @@ test('session change cannot overwrite foreign LOADING','UGLOAD',`T.RAW /TYPE:RAW
  if(st.c===0x13&&!replacedLoading){replacedLoading=true;c.session++;c.objects.clear();c.next=1;c.command(16,Buffer.from([1,1,1,0,0]));}
 },check:c=>c.objects.size===1&&c.objects.get(1)?.state===0&&c.objects.get(1)?.uploaded===0&&c.objects.get(1)?.data.equals(Buffer.alloc(257))});
 // Independent model queue and cyclic token stress, tied to C vectors above.
-const stress=new PcmCard(catalog);asset(stress);const q=Buffer.from([1,0,0,1,128,64,128,2]);
+const stress=new PcmCard(catalog);asset(stress);const q=Buffer.from([1,0,8,0,128,64,128,2]);
 const kept=stress.command(54,q)[1].readUInt16LE();stress.render(1);let churn=0;
 for(let n=0;n<65540;n++) {
  if(churn){const stop=Buffer.from([churn&255,churn>>>8,0]);if(stress.command(57,stop)[0])throw Error('model stop');}
- q.writeUInt16LE(0x200,2);const [e,r]=stress.command(54,q);if(e||r.readUInt16LE()===kept)throw Error('model cyclic token');churn=r.readUInt16LE();stress.render(1);
+ q.writeUInt16LE(9,2);const [e,r]=stress.command(54,q);if(e||r.readUInt16LE()===kept)throw Error('model cyclic token');churn=r.readUInt16LE();stress.render(1);
 }
 if(stress.objects.size!==1||stress.objects.get(1).pins!==2)throw Error('model lifetime');
 // A queued STOP still leaves its token live until the next render boundary.
 stress.nextFx=kept;
 if(stress.command(57,Buffer.from([kept&255,kept>>>8,0]))[0])throw Error('model queued stop');
-q.writeUInt16LE(0x100,2);const [wrapStatus,wrapReply]=stress.command(54,q);
+q.writeUInt16LE(8,2);const [wrapStatus,wrapReply]=stress.command(54,q);
 if(wrapStatus||wrapReply.readUInt16LE()===kept||wrapReply.readUInt16LE()===churn)throw Error('model reused live queued-STOP token');
 stress.render(1);if(stress.objects.get(1).pins!==2)throw Error('model queued stop pins');
 mkdirSync(join(build,'ultrags/logs'),{recursive:true});verifyBuild(root,join(build,'ultrags/dss'));if(JSON.stringify(before)!==JSON.stringify(executionInputs(root)))throw Error('S6 inputs changed');

@@ -67,8 +67,9 @@ for(const [name,cli,code,o] of [
  ['mode','INFO',2,{mode:1}],['absent','INFO',2,{absent:true}],['protocol','INFO',3,{protocol:3}],['api','INFO',3,{api:2}],['caps','INFO',3,{noCaps:true}],
  ['bad-length','INFO',3,{badLength:true,check:c=>c.resets===1}],['bad-status','INFO',3,{badStatus:true}],
  ['timeout','INFO',8,{noReply:true,check:c=>c.resets===1}],
- ['warm-timeout','RESET WARM',8,{noReplyOp:6,check:c=>c.resets===1&&c.now<2000000}],
- ['full-timeout','TEST FULL',8,{noReplyOp:5,cpuHz:3500000,budget:120000000,check:c=>c.resets===1&&c.now>=119000000&&c.now<121000000}],
+ // Whole-second DSS quantization must not expire before the full budget.
+ ['warm-timeout','RESET WARM',8,{noReplyOp:6,check:c=>c.resets===1&&c.now>=1000000&&c.now<3000000}],
+ ['full-timeout','TEST FULL',8,{noReplyOp:5,cpuHz:3500000,budget:120000000,check:c=>c.resets===1&&c.now>=120000000&&c.now<122000000}],
  ['esc','TEST FULL',10,{delayUs:90000000,escAfter:2,check:c=>c.resets===1}],
  ['stopped','TEST FULL',8,{delayUs:90000000,stopped:true,budget:200000000,check:c=>c.resets===1}],
  ['help','/?',0,{}],

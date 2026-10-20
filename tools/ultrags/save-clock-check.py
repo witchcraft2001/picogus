@@ -10,6 +10,7 @@ import struct
 import subprocess
 from pathlib import Path
 from cfg_evidence import verify_multifw
+from firmware_evidence import compare_image_except_sdk_date
 
 p=argparse.ArgumentParser()
 p.add_argument('--build',type=Path,required=True)
@@ -108,10 +109,11 @@ for mode in ('gus','ultrags'):
  image=fw/f'pg-{mode}-multifw.bin';inputs.append(image)
  assert image.read_bytes()[:256]==boot2
 baseline=r/'build/save-clock-baseline/GUS.bin'
+baseline_comparison=None
 if baseline.exists():
  inputs.append(baseline)
- assert baseline.read_bytes()==(fw/'pg-gus-multifw.bin').read_bytes(),'working GUS image changed'
-report=dict(status='LINKED_SAVE_CLOCK_PASS / REAL_PENDING',host_cases=cases,
+ baseline_comparison=compare_image_except_sdk_date(baseline.read_bytes(),(fw/'pg-gus-multifw.bin').read_bytes(),fw/'pg-gus-multifw.elf',objdump.removesuffix('objdump')+'nm')
+report=dict(status='LINKED_SAVE_CLOCK_PASS / REAL_PENDING',host_cases=cases,baseline_comparison=baseline_comparison,
  core_clock_hz=370000000,boot2_divider=divider,rom_command_divider=6,
  xip_hz=92500000,program_hz=370000000/6,boot2_setup_words=setup,closures=closures,
  rom_revision='ef22cd8ede5bc007f81d7f2416b48db90f313434',

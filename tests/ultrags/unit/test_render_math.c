@@ -18,10 +18,11 @@ int main(void) {
     for(unsigned i=0;i<1000000;i++) {
         seed=seed*1664525+1013904223;int32_t s=(int16_t)seed;
         uint32_t gain=((seed>>16)%65)*((seed>>9)%65)*((seed>>2)%65);
-        assert(round_shift((int64_t)s*gain,18)==ug_rdiv((int64_t)s*gain,1ll<<18));
+        assert(scale_gain(s,gain)==ug_rdiv((int64_t)s*gain,1ll<<18));
         seed=seed*1664525+1013904223;int32_t t=(int16_t)seed;
         int64_t v=(int64_t)s*0x100000000ll+(int64_t)(t-s)*seed;
-        assert(round_shift(v,32)==ug_rdiv(v,1ll<<32));
+        assert(interpolate(s,t,seed)==ug_rdiv(v,1ll<<32));
+        assert(interpolate(s,t,UINT32_C(0x80000000))==ug_rdiv((int64_t)s+t,2));
         assert(round_shift((int64_t)s*(seed&32767),15)==ug_rdiv((int64_t)s*(seed&32767),1ll<<15));
     }
     puts("Render exact math: exhaustive pan numerators, 65536x256 pan signs, million interpolation/gain/master vectors PASS");

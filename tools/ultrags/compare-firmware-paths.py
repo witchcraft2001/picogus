@@ -56,12 +56,12 @@ def pio_words(header, name):
 pio = {'iow': pio_words(build / 'isa_io.pio.h', 'iow'),
        'gus-ior': pio_words(build / 'isa_io.pio.h', 'ior'),
        'ultrags-ior': pio_words(build / 'ug_handshake_ior.pio.h', 'ug_handshake_ior')}
-assert len(pio['iow']) + len(pio['ultrags-ior']) <= 32
+assert len(pio['ultrags-ior']) == 32
 summary = ['# Linked GUS / ULTRAGS ISA paths', '',
     'Actual optimized MULTIFW ELF disassembly, with resolved call destinations.',
     'The full main polling loop and all statically reachable callees are retained.',
     'Indirect calls and physical SRAM arbitration/I2S/PSRAM contention are not bounded by this report.', '',
-    'PIO IOW remains the original DACK-gated program in both modes.',
+    'GUS retains its original IOW/IOR programs; ULTRAGS uses one32-word classifier shared by two SMs.',
     'ULTRAGS native IOCHRDY is asserted before PUSH/PULL can block, independently of ARM polling phase.',
     'Generated-instruction tests supply finite ARM hiatuses; core1 TIMER_IRQ_2 handles a stopped core0.',
     'Timer2: core1 priority 0x00; 100 us sampling, 10 ms hold threshold; a trip disconnects the bus until reboot.',
@@ -69,8 +69,8 @@ summary = ['# Linked GUS / ULTRAGS ISA paths', '',
     'Worst arrival phase: an idle SM can observe an edge one instruction clock later. Once captured, native matching and early wait use only PIO registers/instructions, with no ARM/SRAM dependency.',
     'ARM work already in progress, timer accesses and statistics atomic locks can delay the data phase; the early wait remains asserted throughout that delay.',
     'HANDSHAKE serializes one transaction per SM: a preceding foreign cycle can still await its ARM verdict. RX FIFO depth is not a burst buffer; arbitrary unbounded foreign traffic is not guaranteed.',
-    'IOW opcodes/DACK/ADS match GUS. Their software-verdict deadline and real SRAM/I2S/PSRAM service latency require the functional/electrical REAL gates.', '']
-summary.append('Native PUSH/OUT/JMP continuously side-set the held bus: SM1 overrides SM0 cleanup on every stalled clock. OSR is reserved for ARM verdict/data, never address decoding.')
+    'Both ULTRAGS IOW and IOR classify BASE/ALIAS and exact enabled B3/BB before capture. IOW retains DACK gating. Both SMs run at up to366MHz (twice GUS183MHz); ADS settling is16 clocks, preserving the GUS8-clock interval. ARM forces the initial two response OUTs; PIO retains the autonomous WAIT/direction-release tail. Real setup/hold/service latency require the functional/electrical REAL gates.', '']
+summary.append('IOW parks after two captures. IOR wraps directly to park after a single address/ownership capture, skipping ADS/write-data setup. core0 resumes it with a forced JMP; foreign cleanup has no side-set. GS decoding uses OSR, which core0 empties before delivering each read value. The autonomous read tail releases data directions after IOR rises.')
 for name, words in pio.items():
     summary.append(f'{name}: {len(words)} instructions: ' + ' '.join(f'{w:04x}' for w in words))
 for mode in ('gus', 'ultrags'):
@@ -117,15 +117,18 @@ for mode in ('gus', 'ultrags'):
         guard = next(m for m in blocks if m[2] == 'guard_irq')
         assert 0x20000000 <= int(guard[1], 16) < 0x20042000, 'fuse IRQ must run in SRAM'
         summary.append('Core1 fuse IRQ linked in SRAM at 0x' + guard[1] + '.')
-    for key, name in [('iow', 'iow'), (mode + '-ior', 'ior' if mode == 'gus' else 'ug_handshake_ior')]:
+    for key, name in ([('iow','iow'),('gus-ior','ior')] if mode=='gus' else [('ultrags-ior','ug_handshake_ior')]):
         symbol = name + '_program_instructions'
         section = f'.rodata._ZL{len(symbol)}{symbol}'
         with tempfile.NamedTemporaryFile() as raw:
             subprocess.run([objcopy, f'--dump-section={section}={raw.name}', str(obj)], check=True)
             raw.seek(0)
             assert raw.read() == b''.join(w.to_bytes(2, 'little') for w in pio[key]), (mode, name)
-summary += ['', 'Compiled PIO bytes match pioasm output in both target objects; total ULTRAGS PIO0 instruction RAM: '
-            + str(len(pio['iow']) + len(pio['ultrags-ior'])) + '/32.',
+summary += ['', 'CONFIG is acquired on read prefetch before applying pending IOW work; the write is still applied before reading a selector/catalogue value.',
+            'A stale CONFIG capture is rejected before its consuming register handler. Parked read ownership remains immutable across a map update.',
+            'CONFIG still requires ARM capture before the host deadline; its additional linked ARM/PIO finite-deadline regression is not a physical timing bound.',
+            'Compiled PIO bytes match pioasm output in both target objects; total ULTRAGS PIO0 instruction RAM: '
+            + str(len(pio['ultrags-ior'])) + '/32.',
             'STATUS/response have dedicated entry points; CRC is prepared by core1 before REPLY publication.',
             'Static code/call counts are not cycle limits. REAL_PENDING remains in force.', '']
 write('REPORT.md', '\n'.join(summary))

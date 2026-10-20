@@ -262,8 +262,8 @@ function run(cmd, args, opts = {}) {
                : bad('card model unit tests', r.out.trim().split('\n').slice(-8).join(' | '));
 }
 
-// ---- 8. DSS EXE vertical: real header load + pinned-core ISA roundtrip ----
-{
+// ---- 8. DSS EXE vertical: separate invocation can avoid repeating the full gate.
+if (!process.argv.includes('--wire-only')) {
   const r = run(process.execPath, [join(root, 'tests/ultrags/dss/run-ugdiag.mjs'), root, build]);
   r.code === 0 ? ok('UGDIAG vertical (EXE + ISA window + card)', r.out.trim().split('\n').pop())
                : bad('UGDIAG vertical (EXE + ISA window + card)', r.out.trim().split('\n').slice(-10).join(' | '));
@@ -273,10 +273,10 @@ function run(cmd, args, opts = {}) {
 //      never edited here; outputs to build/ultrags/{model,schema}-review) ----
 {
   const r = run(process.execPath, [
-    join(root, 'tests/ultrags/reports/S0b-review-2026-10-07/model-extra-probes.mjs'),
+    join(root, 'tests/ultrags/protocol/model-voices-probes.mjs'),
     root, join(build, 'model-review')]);
-  r.code === 0 ? ok('reviewer model probes', r.out.trim().split('\n').pop() || 'all pass')
-               : bad('reviewer model probes', r.out.trim().split('\n').slice(-10).join(' | '));
+  r.code === 0 ? ok('API1 VLS1 model boundary probes', r.out.trim().split('\n').pop() || 'all pass')
+               : bad('API1 VLS1 model boundary probes', r.out.trim().split('\n').slice(-10).join(' | '));
 }
 {
   const r = run(process.execPath, [

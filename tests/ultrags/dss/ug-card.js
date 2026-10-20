@@ -232,7 +232,7 @@ class UgCard {
           this._setXerr(ERR.UNDERFLOW);                          // past end: no wrap
           return 0xFF;
         }
-        return this.snapshot[this.snapIndex++];                  // index stops at 128
+        return this.snapshot[this.snapIndex++];                  // index stops at64
       }
       case 0x06: return this.xerr;
       case 0x07: return this.gserr;
@@ -251,7 +251,7 @@ class UgCard {
       case 0x02: return this._control(v);
       case 0x03: return this._reqWrite(v);
       case 0x04:
-        if (v > 0x7F) { this._setXerr(ERR.RANGE); return; }      // 0..127 writable; 128 is the internal end sentinel
+        if (v > 0x3F) { this._setXerr(ERR.RANGE); return; }      // 0..63 writable;64 is the internal end sentinel
         this.snapIndex = v; return;
       case 0x13: return this._gsDataWrite(v);
       case 0x1B: return this._gsCommandWrite(v);
@@ -400,16 +400,16 @@ class UgCard {
     }
     switch (op) {
       case 0x00: { // INFO
-        const b = new Uint8Array(36);
+        const b = new Uint8Array(40);
         b.set([0x55, 0x47, 0x53, 0x31]);
         b[4] = 1; b[5] = 0; b[6] = this.mode; b[7] = this.injectPsramFail ? 1 : 0;
         w32(b, 8, 0x010000);
         for (let i = 0; i < 8; i++) b[12 + i] = Number((this.session >> BigInt(8 * i)) & 0xFFn);
-        b.set(Buffer.from('deadbeeffeedface', 'ascii'), 20);
+        b.set(Buffer.from('deadbeeffeedface', 'ascii'),20);b.set(Buffer.from('VLS1'),36);
         return ok(Array.from(b));
       }
       case 0x01: { // CAPS - advertise ONLY what this model implements
-        const b = new Uint8Array(32);
+        const b = new Uint8Array(44);
         const feat = 0x02 | 0x04 | 0x20 | 0x40                    // slow+bulk+snapshot+crc
           | (this.alias !== 0xFFFF ? 0x08 : 0)                    // alias enabled
           | (this.gsAliases ? 0x200 : 0);                         // legacy gs aliases enabled
@@ -420,8 +420,8 @@ class UgCard {
         w16(b, 16, MAX_OBJECTS); w16(b, 18, 0);  // playlist_entries: none
         b[20] = 0; b[21] = 0;                    // music_voices / fx_voices: none
         b[22] = 0; b[23] = 0;                    // gs_profile 0: no musical engine
-        w16(b, 24, this.base); w16(b, 26, this.alias);
-        w16(b, 28, 0); w16(b, 30, 0);            // pcm range n/a (no PCM path)
+        b[27]=1;w16(b,28,this.base);w16(b,30,this.alias);b[40]=20;b[41]=16;w16(b,42,64);
+        w32(b,32,0);w32(b,36,0);            // pcm range n/a (no PCM path)
         return ok(Array.from(b));
       }
       case 0x02: { // MEM_INFO
@@ -954,16 +954,14 @@ class UgCard {
   }
 
   _buildSnapshot() {
-    const b = new Uint8Array(128);                               // schema SNAPSHOT layout
+    const b = new Uint8Array(64);                                // summary only; voices are paged
     w32(b, 0, ++this.snapSeq);                                   // advancing seq
     for (let i = 0; i < 8; i++) b[4 + i] = Number((this.session >> BigInt(8 * i)) & 0xFFn);
     // output_frames 12..19 = 0: no I2S engine runs in this model
-    b[27] = 0xFF;                                                // playlist_index: none
     b[50] = 0;                                                   // last_audio_error
-    for (let ch = 0; ch < 8; ch++) b[56 + ch * 8] = 127;         // CHANREC.note: none
-    w32(b, 120, this.transfer ? this.transfer.id : 0);
-    w16(b, 124, this.transfer ? (this.transfer.dir === 'w' ? this.transfer.got : this.transfer.idx) : 0);
-    w16(b, 126, this.transfer ? this.transfer.n : 0);
+    w32(b, 56, this.transfer ? this.transfer.id : 0);
+    w16(b, 60, this.transfer ? (this.transfer.dir === 'w' ? this.transfer.got : this.transfer.idx) : 0);
+    w16(b, 62, this.transfer ? this.transfer.n : 0);
     return b;
   }
 

@@ -3,7 +3,7 @@
 AV EQU 0x5A00
 AFLAGS EQU AV
 AFX EQU AV+1
-AVOICE EQU AV+2
+AVOICE EQU AV+54 ; u16 preferred physical voice, FFFF=automatic
 APRI EQU AV+3
 AGAIN EQU AV+4
 APAN EQU AV+5
@@ -21,7 +21,11 @@ AFXERRORS EQU AV+48 ; PSRAM error counter before the accepted FX start
 AOPTS EQU AV+52 ; explicit VOICE/PRIORITY/GAIN/PAN options
 ACAPS EQU AV+64
 ASNAP EQU 0x5B00
-AFXSTAT EQU 0x5B80
+AFXSTAT EQU 0x6000 ; u16 count + up to256 instance records
+AFXOLD EQU 0x7100 ; pre-PLAY instance IDs, max256
+APAGE EQU AV+56
+AOLDCOUNT EQU AV+58
+APAGEOP EQU AV+60
 AMEM EQU 0x5C00
 ASTATS EQU 0x5C20
 AUDIO_INIT:
@@ -30,8 +34,8 @@ AUDIO_INIT:
     ld bc,127
     ld (hl),0
     ldir
-    ld a,255
-    ld (AVOICE),a
+    ld hl,0xFFFF
+    ld (AVOICE),hl
     ld a,128
     ld (APRI),a
     ld (APAN),a
@@ -117,7 +121,21 @@ AUDIO_OPTION:
     ld de,(NUM32)
     ld a,h
     or l
-    or d
+    scf
+    ret nz
+    IFNDEF APP_MON
+    ld a,b
+    cp 1
+    jr nz,.byte_option
+    ld (AVOICE),de
+    ld hl,AOPTS
+    set 0,(hl)
+    xor a
+    ret
+.byte_option:
+    ENDIF
+    ld a,d
+    or a
     scf
     ret nz
     ld a,e
@@ -337,8 +355,10 @@ AUDIO_PARSE:
     ld a,(AFLAGS)
     and 8
     jp nz,.bad
-    ld a,(AVOICE)
-    cp 255
+    ld hl,(AVOICE)
+    inc hl
+    ld a,h
+    or l
     jp nz,.bad
     ld a,(AOPTS)
     and 3
@@ -357,13 +377,6 @@ AUDIO_PARSE:
     ld a,(AFLAGS)
     and 4
     jp nz,.bad
-    ld a,(AVOICE)
-    cp 255
-    jp z,.good
-    cp 8
-    jp c,.bad
-    cp 16
-    jp nc,.bad
 .good:
     xor a
     ret
@@ -374,8 +387,28 @@ AUDIO_PARSE:
 AUDIO_RUN:
     ld hl,RESP
     ld de,ACAPS
-    ld bc,32
+    ld bc,44
     ldir
+    ; Bound every page/cache destination before accepting capabilities.
+    ld hl,(ACAPS+20)
+    dec hl
+    ld de,256
+    or a
+    sbc hl,de
+    jp nc,PROTOCOL
+    ld hl,(ACAPS+40)
+    ld de,0x1014
+    or a
+    sbc hl,de
+    jp nz,PROTOCOL
+    ld hl,(ACAPS+42)
+    ld de,64
+    or a
+    sbc hl,de
+    jp nz,PROTOCOL
+    ld a,(ACAPS+27)
+    dec a
+    jp nz,PROTOCOL
     ld a,(ACAPS)
     and 32
     jp z,AUDIO_UNSUPPORTED
@@ -460,7 +493,7 @@ AUDIO_RUN:
     ld a,(AFX)
     or a
     jp z,.ready
-    call AUDIO_VOICE_MASK
+    call AUDIO_PREFERRED_VOICE
 .ready:
     ; FX_STATUS removes ended/faulted instances alike. Remember the sticky
     ; PSRAM counter before PLAY so WAIT cannot report a render fault as EOF.
@@ -490,9 +523,14 @@ AUDIO_RUN:
     or a
     jp z,.old_saved
     call AUDIO_FX_STATUS
+    ld hl,(AFXSTAT)
+    ld (AOLDCOUNT),hl
+    ld a,h
+    or l
+    jr z,.old_saved
+    ld b,l ; 256 records use DJNZ with B=0
     ld ix,AFXSTAT+2
-    ld hl,AV+32
-    ld b,4
+    ld hl,AFXOLD
 .old_fx:
     ld a,(ix+0)
     ld (hl),a
@@ -532,7 +570,7 @@ AUDIO_RUN:
     call RPC
     jp .ack
 .fx:
-    ld hl,(AMASK)
+    ld hl,(AVOICE)
     ld (REQ+2),hl
     ld a,(APRI)
     ld (REQ+4),a
@@ -639,12 +677,12 @@ AUDIO_RUN:
 AUDIO_SNAPSHOT:
     ld a,80
     ld bc,0
-    ld e,128
+    ld e,64
     call RPC
     jp c,RPC_ERROR
     ld hl,RESP
     ld de,ASNAP
-    ld bc,128
+    ld bc,64
     ldir
     ld hl,ASNAP+4
     ld de,SESSION
@@ -658,25 +696,151 @@ AUDIO_SNAPSHOT:
     djnz .session
     ret
 AUDIO_FX_STATUS:
-    ld a,8
-    ld (REQ),a
-    ld a,4
-    ld (REQ+1),a
+    xor a
+    ld (APAGE),a
+    ld (APAGE+1),a
+.page:
     ld a,81
-    ld bc,2
-    ld e,66
-    call RPC
-    jp c,RPC_ERROR
-    ld a,(RESP)
-    cp 8
-    jp nz,PROTOCOL
-    ld a,(RESP+1)
-    cp 4
-    jp nz,PROTOCOL
-    ld hl,RESP
-    ld de,AFXSTAT
-    ld bc,66
+    call AUDIO_PAGE
+    ld hl,(RESP+16)
+    ld (AFXSTAT),hl
+    ld hl,(APAGE)
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    ld de,AFXSTAT+2
+    add hl,de
+    ex de,hl
+    ld hl,(RESP+14)
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    ld b,h
+    ld c,l
+    ld hl,RESP+20
+    ld a,b
+    or c
+    jr z,.copied
     ldir
+.copied:
+    ld hl,(APAGE)
+    ld de,(RESP+14)
+    add hl,de
+    ld (APAGE),hl
+    ld de,(RESP+16)
+    or a
+    sbc hl,de
+    jr c,.page
+    ret
+; A=page opcode. Session/sequence come from the held summary. Validate the
+; complete header and exact payload length before copying any record.
+AUDIO_PAGE:
+    ld (APAGEOP),a
+    ld hl,ASNAP+4
+    ld de,REQ
+    ld bc,8
+    ldir
+    ld hl,ASNAP
+    ld bc,4
+    ldir
+    ld hl,(APAGE)
+    ld (REQ+12),hl
+    ld hl,6
+    ld (REQ+14),hl
+    ld hl,REQ
+    ld de,RESP
+    ld ix,128
+    ld bc,16
+    ld a,(APAGEOP)
+    call UG_RPC
+    jp c,RPC_ERROR
+    ld a,b
+    or a
+    jp nz,PROTOCOL
+    ld a,c
+    cp 20
+    jp c,PROTOCOL
+    ld (AV+61),a
+    ld hl,REQ
+    ld de,RESP
+    ld b,14
+.header:
+    ld a,(de)
+    cp (hl)
+    jp nz,PROTOCOL
+    inc hl
+    inc de
+    djnz .header
+    ld hl,(RESP+16)
+    ld de,(ACAPS+20)
+    or a
+    sbc hl,de
+    jp nc,.limit_equal
+    jr .limit_ok
+.limit_equal:
+    jp nz,PROTOCOL
+.limit_ok:
+    ; The held summary fixes the FX total; the voice table always contains
+    ; the complete CAPS capacity, including idle voices.
+    ld a,(APAGEOP)
+    cp 81
+    ld hl,(ASNAP+54)
+    jr z,.expected_total
+    ld hl,(ACAPS+20)
+.expected_total:
+    ld de,(RESP+16)
+    or a
+    sbc hl,de
+    jp nz,PROTOCOL
+    ld hl,(RESP+14)
+    ld a,h
+    or a
+    jp nz,PROTOCOL
+    ld a,l
+    cp 7
+    jp nc,PROTOCOL
+    ld b,a
+    ld hl,(RESP+18)
+    ld de,16
+    ld a,(APAGEOP)
+    cp 81
+    jr z,.size
+    ld de,20
+    ld a,b
+    cp 6
+    jp nc,PROTOCOL
+.size:
+    or a
+    sbc hl,de
+    jp nz,PROTOCOL
+    ld hl,20
+    ld a,b
+    or a
+    jr z,.length
+.record:
+    add hl,de
+    djnz .record
+.length:
+    ld a,(AV+61)
+    cp l
+    jp nz,PROTOCOL
+    ld hl,(APAGE)
+    ld de,(RESP+14)
+    add hl,de
+    jp c,PROTOCOL
+    ld de,(RESP+16)
+    or a
+    sbc hl,de
+    jp nc,.end
+    ld hl,(RESP+14)
+    ld a,h
+    or l
+    jp z,PROTOCOL
+    ret
+.end:
+    jp nz,PROTOCOL
     ret
     IFDEF APP_PLAY
 AUDIO_SETTLE:
@@ -717,40 +881,18 @@ AUDIO_REPLACE_CHECK:
     ld (REASON),hl
     ld a,7
     jp EXIT
-AUDIO_VOICE_MASK:
-    ld a,(ACHANNELS)
-    cp 2
-    jp nz,.mask
-    ld a,(ACAPS+1)
-    and 4
-    jp z,AUDIO_UNSUPPORTED
-.mask:
-    ld a,(AVOICE)
-    cp 255
+AUDIO_PREFERRED_VOICE:
+    ld hl,(AVOICE)
+    inc hl
+    ld a,h
+    or l
     ret z
-    sub 8
-    ld b,a
-    ld a,(ACAPS+21)
-    cp b
-    jp z,AUDIO_UNSUPPORTED
-    jp c,AUDIO_UNSUPPORTED
-    ld a,(ACHANNELS)
-    cp 2
-    ld hl,0x100
-    jp nz,.shift
-    bit 0,b
-    jp nz,PCM_FORMAT_ERROR
-    ld hl,0x300
-.shift:
-    ld a,b
+    dec hl
+    ld de,(ACAPS+20)
     or a
-    jp z,.done
-.loop:
-    add hl,hl
-    djnz .loop
-.done:
-    ld (AMASK),hl
-    ret
+    sbc hl,de
+    ret c
+    jp AUDIO_UNSUPPORTED
 AUDIO_PLAY_ERROR:
     ld a,(UG_LAST_SOURCE)
     cp 1
@@ -797,8 +939,12 @@ AUDIO_PLAY_ERROR:
     xor a
     jp AUDIO_RUN.ack
 .find_fx:
+    ld hl,(AFXSTAT)
+    ld a,h
+    or l
+    jp z,.unknown
+    ld b,l
     ld ix,AFXSTAT+2
-    ld b,4
 .record:
     ld l,(ix+4)
     ld h,(ix+5)
@@ -812,8 +958,12 @@ AUDIO_PLAY_ERROR:
     or e
     jp z,.next_record
     push bc
-    ld hl,AV+32
-    ld b,4
+    ld hl,(AOLDCOUNT)
+    ld a,h
+    or l
+    jr z,.fresh
+    ld b,l
+    ld hl,AFXOLD
 .old_id:
     ld a,(hl)
     inc hl
@@ -825,6 +975,7 @@ AUDIO_PLAY_ERROR:
 .old_high:
     inc hl
     djnz .old_id
+.fresh:
     pop bc
     ld (RESP),de
     ld l,(ix+2)
@@ -883,8 +1034,12 @@ AUDIO_WAIT:
     jp .watch
 .fx:
     call AUDIO_FX_STATUS
+    ld hl,(AFXSTAT)
+    ld a,h
+    or l
+    jp z,.missing
+    ld b,l
     ld ix,AFXSTAT+2
-    ld b,4
 .find:
     ld l,(ix+0)
     ld h,(ix+1)
@@ -1016,9 +1171,7 @@ AUDIO_SHOW_SNAPSHOT:
     call DEC16
     ld hl,audio_channels_text
     call SHOW
-    ld a,(ASNAP+26)
-    ld l,a
-    ld h,0
+    ld hl,(ASNAP+26)
     call DEC16
     ld hl,audio_state_text
     call SHOW
@@ -1065,16 +1218,16 @@ AUDIO_SHOW_SNAPSHOT:
     call DEC16
     ld hl,audio_transfer_text
     call SHOW
-    ld hl,ASNAP+120
+    ld hl,ASNAP+56
     ld b,4
     call HEX_BYTES
     ld hl,audio_transfer_progress_text
     call SHOW
-    ld hl,(ASNAP+124)
+    ld hl,(ASNAP+60)
     call DEC16
     ld a,'/'
     call OUTCHAR
-    ld hl,(ASNAP+126)
+    ld hl,(ASNAP+62)
     call DEC16
     jp NL
     IFDEF APP_MON
@@ -1116,33 +1269,60 @@ AUDIO_MONITOR:
     inc ix
     djnz .mod
     call NL
-    ld ix,ASNAP+56
-    ld b,8
+    ld hl,0
+    ld (APAGE),hl
+.voice_page:
+    ld a,82
+    call AUDIO_PAGE
+    ld hl,(RESP+14)
+    ld b,l
+    ld a,b
+    or a
+    jr z,.voices_done
+    ld ix,RESP+20
 .channel:
     push bc
-    ld hl,audio_note_text
+    ld hl,audio_voice_text
     call SHOW
     ld l,(ix+0)
+    ld h,(ix+1)
+    call DEC16
+    ld hl,audio_note_text
+    call SHOW
+    ld l,(ix+16)
     ld h,0
     call DEC16
     ld hl,audio_volume_text
     call SHOW
-    ld l,(ix+1)
+    ld l,(ix+17)
     ld h,0
     call DEC16
     ld hl,audio_peak_text
     call SHOW
-    ld l,(ix+6)
-    ld h,(ix+7)
+    ld l,(ix+12)
+    ld h,(ix+13)
     call DEC16
     call NL
-    ld de,8
+    ld de,20
     add ix,de
     pop bc
     djnz .channel
+    ld hl,(APAGE)
+    ld de,(RESP+14)
+    add hl,de
+    ld (APAGE),hl
+    ld de,(RESP+16)
+    or a
+    sbc hl,de
+    jr c,.voice_page
+.voices_done:
     call AUDIO_FX_STATUS
+    ld hl,(AFXSTAT)
+    ld a,h
+    or l
+    jr z,.fx_done
+    ld b,l
     ld ix,AFXSTAT+2
-    ld b,4
 .fx:
     push bc
     ld hl,audio_fx_text
@@ -1192,6 +1372,7 @@ AUDIO_MONITOR:
     add ix,de
     pop bc
     djnz .fx
+.fx_done:
     ld a,2
     ld bc,0
     ld e,20
@@ -1315,7 +1496,7 @@ audio_prefixes: DB "/COUNT:",0,"/HZ:",0
     ENDIF
 audio_play_text: DB " play_id=0x",0
 audio_fx_text: DB " fx_id=0x",0
-audio_mask_text: DB " voice_mask=0x",0
+audio_mask_text: DB " voices=0x",0
 audio_state_text: DB "state=",0
 audio_position_text: DB " source_frame=",0
 audio_frames_text: DB " output_frames=0x",0
@@ -1331,9 +1512,10 @@ audio_unsupported_text: DB "UNSUPPORTED_S6_FEATURE",0
 audio_session_text: DB "SESSION_CHANGED",0
 audio_timeout_text: DB "OUTPUT_CLOCK_STOPPED",0
 audio_error_reason: DB "AUDIO_PLAYBACK_ERROR",0
-    ASSERT AV+96 <= ASNAP
-    ASSERT ASNAP+128 <= AFXSTAT
-    ASSERT AFXSTAT+66 <= AMEM
+    ASSERT AV+108 <= ASNAP
+    ASSERT ASNAP+64 <= AMEM
+    ASSERT AFXSTAT+2+256*16 <= AFXOLD
+    ASSERT AFXOLD+512 < 0x8000
     ASSERT ASTATS+64 < 0x8000
 
 audio_mode_text: DB "mode=8 ",0
@@ -1344,3 +1526,5 @@ audio_note_text: DB "note=",0
 audio_volume_text: DB " volume=",0
 audio_psram_text: DB " psram_errors=",0
 audio_protocol_text: DB " protocol_errors=",0
+
+audio_voice_text: DB "voice=",0

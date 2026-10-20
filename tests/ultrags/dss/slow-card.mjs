@@ -3,7 +3,7 @@
 import {MemoryCard} from './memory-card.mjs';
 import {crc32} from './config-card.mjs';
 export class SlowCard extends MemoryCard {
- constructor(catalog,opts={}) {super(catalog,opts);this.transfer=null;this.nextToken=opts.nextToken??1;this.fault=false;this.ackToken=0;this.trace=[];this.stats=new Uint32Array(16);this.snapshot=Buffer.alloc(128);this.snapshot[27]=255;for(let i=0;i<8;i++)this.snapshot[56+8*i]=127;this.index=0;}
+ constructor(catalog,opts={}) {super(catalog,opts);this.transfer=null;this.nextToken=opts.nextToken??1;this.fault=false;this.ackToken=0;this.trace=[];this.stats=new Uint32Array(16);this.snapshot=Buffer.alloc(64);this.index=0;}
  tickUs(us) {super.tickUs(us);if(this.transfer?.granted && this.now-this.transfer.last>=5000000){this.cancel();this.error=13;this.stats[8]++;}}
  cancel(){if(this.transfer)this.objects.get(this.transfer.h).pins--;this.transfer=null;this.ackToken=0;}
  readPort(p) {
@@ -13,20 +13,20 @@ export class SlowCard extends MemoryCard {
   if(off===0x1b)return 0x7e|(this.transfer?.granted&&this.transfer.rd&&this.transfer.done<this.transfer.n?128:0);
   if(off===0||off===0x13){const t=this.transfer;if(!t?.granted||!t.rd||t.bulk!==(off===0)){this.error=6;return 255;}if(t.done===t.n){t.fault=14;this.error=15;return 255;}t.last=this.now;return t.data[t.done++];}
   if(off===4)return this.index;
-  if(off===5){if(this.index===128){this.error=15;return 255;}return this.snapshot[this.index++];}
+  if(off===5){if(this.index===64){this.error=15;return 255;}return this.snapshot[this.index++];}
   return super.readPort(p);
  }
  writePort(p,v) {
   const off=this.alias!==65535&&p>=this.alias&&p<this.alias+32?0:p-this.base;
   if(off===2){if(v===0xa0){this.cancel();this.fault=false;}if(v===0xa1){this.cancel();return;}if(v===0xa3){this.snapshot=this.snap();this.index=0;return;}if(v===0xa2){this.error=0;return;}}
-  if(off===4){if(v>127)this.error=8;else this.index=v;return;}
+  if(off===4){if(v>63)this.error=8;else this.index=v;return;}
   if(off===0||off===0x13){const t=this.transfer;if(!t?.granted||t.rd||t.bulk!==(off===0)){this.error=6;return;}if(t.done===t.n){this.error=t.fault=14;return;}t.data[t.done++]=v;t.last=this.now;return;}
   if(off===0x1b){if([0,0xf3,0xf4].includes(v)){this.cancel();if(v){this.objects.clear();this.session++;this.next=1;this.nextToken=1;}}else this.gsError=this.transfer?5:1;return;}
   if(off===3 && this.fault)return;
   if(off===3 && this.frame.length===1 && v>128){this.frame=[];this.fault=true;this.error=3;return;}
   super.writePort(p,v);
  }
- snap(){const r=Buffer.alloc(128);r.writeUInt32LE((this.seq=(this.seq??0)+1));r.writeBigUInt64LE(this.session,4);r[27]=255;for(let i=0;i<8;i++)r[56+i*8]=127;if(this.transfer){r.writeUInt32LE(this.transfer.id,120);r.writeUInt16LE(this.transfer.done,124);r.writeUInt16LE(this.transfer.n,126);}return r;}
+ snap(){const r=Buffer.alloc(64);r.writeUInt32LE((this.seq=(this.seq??0)+1));r.writeBigUInt64LE(this.session,4);if(this.transfer){r.writeUInt32LE(this.transfer.id,56);r.writeUInt16LE(this.transfer.done,60);r.writeUInt16LE(this.transfer.n,62);}return r;}
  command(op,q,defer=false) {
   this.trace.push({op,q:q.toString('hex')});
   const err=e=>[e,Buffer.alloc(0)],ok=(r=Buffer.alloc(0))=>[0,r];

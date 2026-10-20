@@ -36,7 +36,9 @@ export function treeFiles(root, dir) {
     e.isDirectory() ? treeFiles(root, `${dir}/${e.name}`) : [`${dir}/${e.name}`]).sort();
 }
 export function buildInputs(root, exeDir) {
-  const paths = [...treeFiles(root, 'host/sprinter/ultrags'),
+  // Only assembler inputs belong to EXE provenance. Tester Notes are hashed
+  // by packaging; editing prose must not falsely invalidate machine code.
+  const paths = [...treeFiles(root, 'host/sprinter/ultrags').filter(p=>/\.(asm|inc)$/.test(p)),
     'tools/ultrags/wire-schema.json', 'tools/ultrags/gen-wire.mjs',
     'tools/ultrags/diag-schema.json', 'tools/ultrags/gen-diag.py',
     'tools/ultrags/build-evidence.mjs', 'tests/ultrags/dss/assemble.mjs'].sort();
@@ -44,7 +46,7 @@ export function buildInputs(root, exeDir) {
     generated: sha256(Buffer.concat(['ug_wire.inc','ug_diag_wire.inc'].map(p=>readFileSync(join(exeDir, '../gen',p))))) };
 }
 export function executionInputs(root) {
-  return Object.fromEntries(['Z80core.js', 'ug-card.js', 'ug-harness.mjs', 'run-ugdiag.mjs', 'diag-card.mjs', 'run-s1.mjs', 'config-card.mjs', 'run-s2.mjs', 'memory-card.mjs', 'run-s3.mjs', 'slow-card.mjs', 'run-s4.mjs', 'run-s5.mjs', 'pcm-card.mjs', 'mod-tracker.mjs', 'run-s6.mjs', 'run-s7.mjs', 'throughput.mjs']
+  return Object.fromEntries(['Z80core.js', 'ug-card.js', 'ug-harness.mjs', 'run-ugdiag.mjs', 'diag-card.mjs', 'run-s1.mjs', 'config-card.mjs', 'run-s2.mjs', 'memory-card.mjs', 'run-s3.mjs', 'slow-card.mjs', 'run-s4.mjs', 'run-s5.mjs', 'pcm-card.mjs', 'mod-tracker.mjs', 'run-s6.mjs', 'run-s7.mjs', 'throughput.mjs','run-native.mjs','native-card.mjs','legacy-machine.mjs']
     .map(p => [`tests/ultrags/dss/${p}`, sha256(readFileSync(join(root, 'tests/ultrags/dss', p)))]));
 }
 export function verifyBuild(root, exeDir) {

@@ -89,7 +89,7 @@ const u16 = (n) => [n & 0xFF, (n >> 8) & 0xFF];
 {
   const card = new UgCard();
   const r = rpc(card, 0x00, []);
-  if (rpcStatus(r) !== 0 || r[1] !== 36) bad('info fast', `status=${r[0]} len=${r[1]}`);
+  if (rpcStatus(r) !== 0 || r[1] !== 40) bad('info fast', `status=${r[0]} len=${r[1]}`);
   else {
     const p = rpcPayload(r);
     if (p.slice(0, 4).join(',') === '85,71,83,49' && p[6] === 8) ok('info fast', 'UGS1 mode 8');
@@ -101,7 +101,7 @@ const u16 = (n) => [n & 0xFF, (n >> 8) & 0xFF];
 {
   const card = new UgCard();
   const r = rpc(card, 0x00, [], { crc: true });
-  if (rpcStatus(r) !== 0 || r[1] !== 36 || r.length !== 42) bad('info crc', `len=${r.length}`);
+  if (rpcStatus(r) !== 0 || r[1] !== 40 || r.length !== 46) bad('info crc', `len=${r.length}`);
   else ok('info crc', `${r.length} bytes incl trailer`);
 }
 
@@ -410,7 +410,7 @@ function le32s(a, o) { return (a[o] | (a[o + 1] << 8) | (a[o + 2] << 16) | (a[o 
   wr(card, 0x04, 0x81);                                          // >128 -> RANGE
   const rErr = card.xerr === ERR.RANGE;
   // session_id = 0x0123456789ABCDEF little-endian at bytes 4..11
-  b0 === 0xEF && b1 === 0xCD && rErr ? ok('snap_index/snap_data + RANGE on >128')
+  b0 === 0xEF && b1 === 0xCD && rErr ? ok('snap_index/snap_data + RANGE on >=64')
     : bad('snapshot regs', `b0=${b0.toString(16)} b1=${b1.toString(16)} xerr=${card.xerr}`);
 }
 
