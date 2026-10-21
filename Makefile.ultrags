@@ -297,7 +297,7 @@ s7-native-check: dss s2-host s6-host s7-host
 		$(NODE) $(ROOT)/tests/ultrags/dss/run-s7.mjs $(ROOT) $(BUILD)
 	$(NODE) $(ROOT)/tools/ultrags/s7-report.mjs --build $(BUILD)
 	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_s7_evidence.py --build $(BUILD)
-	@echo "S7 IN_PROGRESS: native regression subset passed; GS/full effect audio/REAL gates remain open"
+	@echo "S7 IN_PROGRESS: native regression subset passed; GS105 is a separate software gate; REAL remains open"
 
 s7-native-package: test-dss s7-native-check fixtures s7-stack firmware
 	$(NODE) $(ROOT)/tools/ultrags/package-s0b.mjs --stage S7 --exe-dir $(UGBUILD)/dss \
@@ -308,8 +308,8 @@ s7-native-package: test-dss s7-native-check fixtures s7-stack firmware
 		--exe-dir $(UGBUILD)/dss --fixtures $(UGBUILD)/fixtures
 
 # A successful subset must not masquerade as the complete S7 acceptance gate.
-s7-check: s6-check s7-native-check s7-stack
-	@echo "S7 INCOMPLETE: GS 1.05 dispatcher/streams/FX, UGPLAY /GS, UGTEST GS/MOD4 and full conformance are pending"; exit 2
+s7-check: s6-check s7-native-check s7-stack gs105-check
+	@echo "S7 software HOST_PASS / DSS_EXE_PASS; S7 IN_PROGRESS / REAL_PENDING"
 
 # DSS ISA clock correction only; firmware acceptance remains separate.
 .PHONY: isa-dss-check
@@ -407,3 +407,25 @@ f00-exe: dss f00-bruno
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-fast.py --build $(BUILD)
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
 	UG_F00_MOD="$(UG_F00_MOD)" $(NODE) $(ROOT)/tests/ultrags/dss/run-f00.mjs $(ROOT) $(BUILD)
+
+# GS105 compatibility is checked at Turbo OFF. The GS Turbo ON fix and FLT8
+# are separate following stages. Private originals are read, never packaged.
+.PHONY: gs105-host gs105-exe gs105-check gs105-package
+gs105-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/gs105-host.py --build $(BUILD)/host/gs105
+gs105-exe: dss s2-host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
+	UG_PROPLAY_MOD="$(UG_PROPLAY_MOD)" UG_F00_MOD="$(UG_F00_MOD)" $(NODE) $(ROOT)/tests/ultrags/dss/run-gs.mjs $(ROOT) $(BUILD)
+gs105-check: gs105-host gs105-exe s7-host s8a-host f00-host
+	@test -n "$(UG_PROPLAY)" || { echo "Set UG_PROPLAY to unchanged PROPLAY.EXE"; exit 2; }
+	UG_PROPLAY="$(UG_PROPLAY)" UG_PROPLAY_MOD="$(UG_PROPLAY_MOD)" $(NODE) $(ROOT)/tests/ultrags/dss/run-native.mjs $(ROOT) $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/f00-bruno.py --build $(BUILD)/host/f00 --mod "$(UG_F00_MOD)"
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-fast.py --build $(BUILD)
+	UG_F00_MOD="$(UG_F00_MOD)" $(NODE) $(ROOT)/tests/ultrags/dss/run-f00.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-s8a.mjs $(ROOT) $(BUILD)
+	UG_S2_CATALOG="$(BUILD)/host/s2-catalog.bin" $(NODE) $(ROOT)/tests/ultrags/dss/run-s7.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-lowram.mjs $(ROOT) $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/gs105-report.py --build $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_gs105_evidence.py --build $(BUILD)
+gs105-package:
+	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs

@@ -95,6 +95,15 @@ S6TEST_OPTION:
     xor a
     ret
 S6TEST_VALIDATE:
+    ld a,(GTRESET)
+    or a
+    jr z,.ordinary
+    ld a,(CMD)
+    cp 12
+    jr nc,.ordinary
+    scf
+    ret
+.ordinary:
     ld a,(S6OPTS)
     or a
     ret z

@@ -127,6 +127,7 @@ export class SprinterMachine {
     this.isaLog = [];          // {t, dir:'r'|'w', isa, val}
     this.ioLog = [];           // {t, dir, port, val}
     this.violations = [];
+    this.residentWrites = 0;
     this.nowFrac = 0;          // sub-us T-state fraction accumulator
     this.dssCalls = [];        // {fn, sp}
     this.text = '';
@@ -174,8 +175,19 @@ export class SprinterMachine {
     if (a >= WIN3_BASE && this.page3 === 0xFE) return this.systemPage[a - WIN3_BASE];
     return this.mem[a];
   };
+  checkResidentWrite(a,n=1) {
+    // Stock DSS EXEC maps application pages only into WIN1..3. The low
+    // 16 KiB remains resident; corrupting it may surface only at EXIT.
+    // Reserve 0000..00FF for the explicitly modelled NMI vector selftests.
+    const first=Math.max(a,0x100),end=Math.min(a+n,0x4000);
+    if(first<end){
+      if(!this.residentWrites)this.violations.push(`write into resident DSS: ${first.toString(16)}`);
+      this.residentWrites+=end-first;
+    }
+  }
   memWrite = (a, v) => {
     a &= 0xFFFF; v &= 0xFF;
+    this.checkResidentWrite(a);
     if (a >= WIN3_BASE && this.isaOpen) {
       const isa = this.isaAddr(a);
       if (this.rejectTurboIsa && this.turbo && this.turboHardware && !this.turboWriteGranted(isa))
@@ -286,7 +298,7 @@ export class SprinterMachine {
         const ptr=(st.h<<8)|st.l,wanted=(st.d<<8)|st.e;
         let n=Math.min(wanted,st.c===0x13?(this.disk.shortRead??wanted):(this.disk.shortWrite??wanted));
         let bytes=this.files.get(file.path);
-        if(st.c===0x13){n=Math.min(n,Math.max(0,bytes.length-file.pos));this.mem.set(bytes.subarray(file.pos,file.pos+n),ptr);}
+        if(st.c===0x13){n=Math.min(n,Math.max(0,bytes.length-file.pos));this.checkResidentWrite(ptr,n);this.mem.set(bytes.subarray(file.pos,file.pos+n),ptr);}
         else {if(file.pos+n>bytes.length){const grow=Buffer.alloc(file.pos+n);bytes.copy(grow);bytes=grow;this.files.set(file.path,bytes);}bytes.set(this.mem.subarray(ptr,ptr+n),file.pos);}
         file.pos+=n;
         // WRITE's optional FAT flush does not preserve DE in real DSS.

@@ -24,7 +24,7 @@ SSUPPLIED EQU SV+56 ; acknowledged PCM bytes, u32
 SSTATE EQU SV+64 ; 70 bytes
 ; STREAM never enumerates FX. Reuse its disjoint 4 KiB instance workspace
 ; for sequential disk reads, keeping the wire/staging packets at 1024 bytes.
-SDISKBUF EQU AFXSTAT
+SDISKBUF EQU AFXRECORDS
 SDISKSIZE EQU 4096
 STREAM_INIT:
     ld hl,SV
@@ -1507,8 +1507,8 @@ stream_unknown: DB "unknown",0
 stream_bytes: DB " bytes=",0
 stream_bench_prefix: DB "/BENCH:",0
 stream_bench_values: DB "DISK",0,1,"FEED",0,2,"ALL",0,3,0
-    ASSERT SV+144 <= AFXSTAT
-    ASSERT SDISKBUF >= SV+144
+    ASSERT SV+144 <= HEADER
+    ASSERT SDISKBUF+SDISKSIZE <= BUF
     ASSERT SDISKBUF+SDISKSIZE <= AFXOLD
-    ASSERT AFXSTAT+4098 <= AFXOLD
+    ASSERT AFXRECORDS+4096 <= AFXOLD
     ASSERT AFXOLD+512 <= HEADER

@@ -83,6 +83,21 @@ static uint8_t legacy_free_all(void) {
     legacy.module=0;legacy.selected=legacy.last_fx=0;legacy.next_fx=1;
     memset(legacy_samples,0,sizeof(legacy_samples));update_playback_busy();return 0;
 }
+/* EXT FREE may be used to clean up a host-owned GS upload. A successful
+ * unpinned deletion must not leave public legacy handles pointing at freed
+ * storage. Failed FREE (including pending/playing pins) leaves selection intact. */
+static void legacy_forget(uint16_t handle) {
+    if(legacy.module==handle) legacy.module=0;
+    for(unsigned i=1;i<=60;i++) if(legacy_samples[i].handle==handle) {
+        memset(&legacy_samples[i],0,sizeof(legacy_samples[i]));
+        if(legacy.selected==i) legacy.selected=0;
+        if(legacy.last_fx==i) {
+            legacy.last_fx=0;
+            for(unsigned j=1;j<=60;j++) if(legacy_samples[j].handle) legacy.last_fx=(uint8_t)j;
+        }
+    }
+    legacy_publish();
+}
 static uint8_t legacy_begin(bool module,uint8_t sign,uint8_t *out) {
     *out=0;uint8_t e=0;
     if(module && (e=legacy_free_all())) return e;

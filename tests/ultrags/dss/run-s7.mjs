@@ -60,7 +60,7 @@ test('resume same handle','UGPLAY','RESUME',0,{card,check:c=>c.foreground&&!c.fo
 test('MOD handle ignores GAIN rejected','UGPLAY','HANDLE 1 /GAIN:32 /REPLACE',3,{card,check:c=>c.objects.size===1&&c.objects.get(1).pins===1});
 test('STOP retains READY','UGPLAY','STOP',0,{card,check:c=>!c.foreground&&c.objects.get(1).state===1&&!c.objects.get(1).pins});
 test('explicit FREE','UGMEM','FREE 1',0,{card,check:c=>!c.objects.size});
-for(const cli of ['FOUR.MOD /GS','FX FOUR.MOD','FOUR.MOD /GAIN:32','FOUR.MOD /PAN:1'])test('unsupported option before hardware '+cli,'UGPLAY',cli,1);
+for(const cli of ['FOUR.MOD /GS /F00:IGNORE','FX FOUR.MOD','FOUR.MOD /GAIN:32','FOUR.MOD /PAN:1'])test('unsupported option before hardware '+cli,'UGPLAY',cli,1);
 for(const app of ['UGLOAD','UGPLAY','UGMON'])test(app+' help',''+app,'/?');
 test('BLOB type marker regression','UGLOAD','TEST.BIN /TYPE:BLOB',0,{files:{'TEST.BIN':Buffer.alloc(16,42)},check:c=>c.objects.get(1)?.kind===0});
 test('no MOD capability before ALLOC','UGLOAD','FOUR.MOD /TYPE:MOD',3,{noCaps:true,files:{'FOUR.MOD':mod4()},check:c=>!c.objects.size&&!c.calls.includes(16)});
@@ -87,6 +87,6 @@ for(const slot of [0,1])for(const iff of [0,1])for(const turbo of [false,true])f
 if(JSON.stringify(before)!==JSON.stringify(executionInputs(root)))throw Error('S7 runner inputs changed during execution');
 verifyBuild(root,join(build,'ultrags/dss'));
 mkdirSync(build,{recursive:true});writeFileSync(out,JSON.stringify({status:'PASS',stage_status:'IN_PROGRESS',
- scope:'Native MOD4 review regressions only; full GS 1.05/effect audio conformance remains pending',inputs:before,buildInputs:assembly.inputs,
+ scope:'Native MOD4 review regressions only; GS105 conformance is recorded separately by gs105-check; physical acceptance remains pending',inputs:before,buildInputs:assembly.inputs,
  catalogSha256:sha256(catalog),sharedCount,sharedSha256:sha256(vectors),executed:[...executed.values()],results},null,2)+'\n');
-console.log(`S7 native MOD4 ${results.length}/${results.length} actual-EXE + ${sharedCount} C/model PASS; S7 IN_PROGRESS / GS PENDING / REAL_PENDING`);
+console.log(`S7 native MOD4 ${results.length}/${results.length} actual-EXE + ${sharedCount} C/model PASS; S7 IN_PROGRESS / GS105 separate gate / REAL_PENDING`);

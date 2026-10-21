@@ -18,6 +18,7 @@ S8TEST_INIT:
     ld (S8COUNT),a
     ret
 S8TEST_MOD:
+    call S8TEST_BUILD
     ld a,(RESP+4)
     and 16
     jp z,PROTOCOL

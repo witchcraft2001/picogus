@@ -65,7 +65,7 @@ test('MOD4 snapshot tracker fields','UGMON','/COUNT:1 /HZ:10',0,{card:modRun.car
 test('MOD4 STOP retains READY','UGPLAY','STOP',0,{card:modRun.card,check:c=>!c.foreground&&c.objects.get(1).state===1&&c.objects.get(1).pins===0});
 for(const cli of ['T.RAW','T.RAW /RATE:7999 /BITS:8 /CH:1 /FMT:U8','T.RAW /RATE:8000 /BITS:16 /CH:1 /FMT:U8','HANDLE 65536','HANDLE 0x10000','LIST X','SEEK 0 0','T.WAV /GS','FXHANDLE 1 /PRIORITY:0','FXHANDLE 1 /PRIORITY:255'])test('syntax '+cli,'UGPLAY',cli,1);
 for(const cli of ['STOP /GAIN:1','PAUSE /PAN:2','RESUME /PRIORITY:128','FXSTOP 1 /VOICE:8','HANDLE 1 /SLOW','HANDLE 1 /CRC:00000000','HANDLE 1 /TYPE:WAV','T.WAV /TYPE:RAW','HANDLE 1 /VOICE:255','HANDLE 1 /PRIORITY:128'])test('ignored option rejected '+cli,'UGPLAY',cli,1);
-for(const cli of ['/HZ:0','/HZ:11','/COUNT:0','/COUNT:4294967296','/GS','X'])test('monitor syntax '+cli,'UGMON',cli,1);
+for(const cli of ['/HZ:0','/HZ:11','/COUNT:0','/COUNT:4294967296','X'])test('monitor syntax '+cli,'UGMON',cli,1);
 card=new PcmCard(catalog);asset(card);test('loop foreground','UGPLAY','HANDLE 1 /LOOP',0,{card});
 test('replace required','UGPLAY','HANDLE 1',7,{card,check:c=>c.foreground?.id===1});
 test('pause','UGPLAY','PAUSE',0,{card,check:c=>c.foreground?.paused});

@@ -23,10 +23,14 @@ AF00 EQU AV+53 ; explicit PLAY_MOD policy, zero selects default IGNORE
 ACAPS EQU AV+64
 ASNAP EQU 0x5B00
     IFDEF APP_PLAY
-AFXSTAT EQU 0x5E00
-AFXOLD EQU 0x6F00
+; Separate the count from the 4096-byte table so it fits exactly in page1
+; below the file buffers. 0000..3FFF belongs to resident DSS, not the EXE.
+AFXSTAT EQU AV+62
+AFXRECORDS EQU 0x4000
+AFXOLD EQU 0x5E00
     ELSE
 AFXSTAT EQU 0x6000 ; u16 count + up to256 instance records
+AFXRECORDS EQU AFXSTAT+2
 AFXOLD EQU 0x7100 ; pre-PLAY instance IDs, max256
     ENDIF
 APAGE EQU AV+56
@@ -35,6 +39,7 @@ APAGEOP EQU AV+60
 AMEM EQU 0x5C00
 ASTATS EQU 0x5C20
 AUDIO_INIT:
+    call GS_INIT
     ld hl,AV
     ld de,AV+1
     ld bc,127
@@ -54,6 +59,10 @@ AUDIO_INIT:
     ENDIF
     ret
 AUDIO_OPTION:
+    push hl
+    call GS_OPTION
+    pop hl
+    ret nc
     IFDEF APP_PLAY
     push hl
     ld de,audio_f00_options
@@ -252,8 +261,15 @@ AUDIO_PARSE:
     ld a,(AF00)
     or a
     jp nz,.bad
+    ld a,(GSFLAG)
+    or a
+    jp nz,.bad
     jp STREAM_VALIDATE
 .not_stream:
+    ld a,(GSFLAG)
+    or a
+    jp nz,.bad
+    ld a,(CMD)
     cp 5
     jp z,.fxfile
     cp 1
@@ -393,6 +409,24 @@ AUDIO_PARSE:
     cp 3
     jp nz,.bad
 .policy_options_ok:
+    ld a,(GSFLAG)
+    or a
+    jr z,.gs_validated
+    ld a,(AF00)
+    ld b,a
+    ld a,(CMD)
+    or b
+    ld b,a
+    ld a,(AOPTS)
+    or b
+    ld b,a
+    ld a,(AFX)
+    or b
+    jp nz,.bad
+    ld a,(PCM_KIND)
+    cp 3
+    jp nz,.bad
+.gs_validated:
     ld a,(PCM_KIND)
     cp 3
     jr nz,.pcm_options
@@ -486,6 +520,9 @@ AUDIO_RUN:
     and 1
     jp z,AUDIO_UNSUPPORTED
 .precheck:
+    ld a,(GSFLAG)
+    or a
+    jp nz,GS_PLAY_FILE
     ld a,(CMD)
     cp 1
     jp z,.object
@@ -602,7 +639,7 @@ AUDIO_RUN:
     or l
     jr z,.old_saved
     ld b,l ; 256 records use DJNZ with B=0
-    ld ix,AFXSTAT+2
+    ld ix,AFXRECORDS
     ld hl,AFXOLD
 .old_fx:
     ld a,(ix+0)
@@ -803,7 +840,7 @@ AUDIO_FX_STATUS:
     add hl,hl
     add hl,hl
     add hl,hl
-    ld de,AFXSTAT+2
+    ld de,AFXRECORDS
     add hl,de
     ex de,hl
     ld hl,(RESP+14)
@@ -1002,6 +1039,9 @@ AUDIO_PLAY_ERROR:
     ; Inspection only: no automatic PLAY/ALLOC repeat or speculative STOP.
     call AUDIO_SNAPSHOT
     call AUDIO_FX_STATUS
+    IFDEF APP_MON
+    call GS_MONITOR
+    ENDIF
     call AUDIO_SHOW_SNAPSHOT
     ; Only a new token for this READY handle can reconcile a lost PLAY ACK.
     ld a,(CMD)
@@ -1038,7 +1078,7 @@ AUDIO_PLAY_ERROR:
     or l
     jp z,.unknown
     ld b,l
-    ld ix,AFXSTAT+2
+    ld ix,AFXRECORDS
 .record:
     ld l,(ix+4)
     ld h,(ix+5)
@@ -1133,7 +1173,7 @@ AUDIO_WAIT:
     or l
     jp z,.missing
     ld b,l
-    ld ix,AFXSTAT+2
+    ld ix,AFXRECORDS
 .find:
     ld l,(ix+0)
     ld h,(ix+1)
@@ -1345,6 +1385,9 @@ AUDIO_MONITOR:
     call AUDIO_SNAPSHOT
     call AUDIO_WATCH_INIT
 .print:
+    IFDEF APP_MON
+    call GS_MONITOR
+    ENDIF
     call AUDIO_SHOW_SNAPSHOT
     ld hl,audio_mod_text
     call SHOW
@@ -1416,7 +1459,7 @@ AUDIO_MONITOR:
     or l
     jr z,.fx_done
     ld b,l
-    ld ix,AFXSTAT+2
+    ld ix,AFXRECORDS
 .fx:
     push bc
     ld hl,audio_fx_text
@@ -1559,6 +1602,7 @@ AUDIO_MONITOR:
     ENDIF
 AUDIO_CLEANUP:
     IFDEF APP_PLAY
+    call GS_CLEANUP
     call STREAM_CLEANUP
     ENDIF
     ret ; handles persist; WAIT/ESC stops only its own instance above
@@ -1626,9 +1670,13 @@ audio_timeout_text: DB "OUTPUT_CLOCK_STOPPED",0
 audio_error_reason: DB "AUDIO_PLAYBACK_ERROR",0
     ASSERT AV+108 <= ASNAP
     ASSERT ASNAP+64 <= AMEM
-    ASSERT AFXSTAT+2+256*16 <= AFXOLD
+    ASSERT AFXRECORDS+256*16 <= AFXOLD
     ASSERT AFXOLD+512 < 0x8000
     IFDEF APP_PLAY
+    ASSERT AFXRECORDS >= 0x4000
+    ASSERT AFXRECORDS+256*16 <= BUF
+    ASSERT AFXSTAT+2 <= ACAPS
+    ASSERT SV+144 <= AFXOLD
     ASSERT AFXOLD+512 <= HEADER
     ENDIF
     ASSERT ASTATS+64 < 0x8000
@@ -1643,3 +1691,5 @@ audio_psram_text: DB " psram_errors=",0
 audio_protocol_text: DB " protocol_errors=",0
 
 audio_voice_text: DB "voice=",0
+
+    INCLUDE "uggscli.asm"

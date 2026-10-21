@@ -78,6 +78,7 @@ static void update_playback_busy(void);
 static uint8_t legacy_flush(void);
 static void legacy_info(uint8_t *r);
 static bool legacy_pending(uint16_t handle);
+static void legacy_forget(uint16_t handle);
 static int audio_mem_read(void *ctx,uint32_t off,uint8_t *dst,uint32_t n);
 static uint16_t get16(const uint8_t *p) { return p[0]|((uint16_t)p[1]<<8); }
 static void put16(uint8_t *p,uint16_t v) { p[0]=v; p[1]=v>>8; }
@@ -1307,7 +1308,10 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         if(q[0]>3) { *status=UG_ERR_BAD_ARGUMENT;return true; }
         ug_object_t *o; *status=ug_store_reserve(&store,q[0],ug_get32(q+1),&o);
         if(!*status) { put16(r,o->handle); ug_put32(r+2,o->reserved); *len=6; }
-    } else if(op==UG_OP_FREE) *status=ug_store_free(&store,get16(q));
+    } else if(op==UG_OP_FREE) {
+        uint16_t handle=get16(q);*status=ug_store_free(&store,handle);
+        if(!*status) legacy_forget(handle);
+    }
     else if(op==UG_OP_OBJECT_ENUM) { put16(r,ug_store_enum(&store,get16(q))); *len=2; }
     else {
         ug_object_t *o=ug_store_find(&store,get16(q));

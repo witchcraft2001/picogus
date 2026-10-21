@@ -42,7 +42,7 @@
     ENDIF
     IFNDEF APP_PROTO
     IFDEF APP_PLAY
-    ORG 0x7100 ; immediately above the private buffers; includes MOD policy CLI
+    ORG 0x6000 ; FX table4000..4FFF, file buffers5000..57FF, IDs5E00..5FFF
     ELSE
     ORG 0x8000
     ENDIF
@@ -193,6 +193,8 @@ ENTRY:
     ENDIF
     ld a,(CMD)
     IFDEF APP_S6TEST
+    cp 12
+    jp nc,GT_RUN
     cp 11
     jp z,S8TEST_MOD
     cp 8
@@ -240,6 +242,7 @@ INIT:
     IFDEF APP_S6TEST
     call S6TEST_INIT
     call S8TEST_INIT
+    call GS_INIT
     ENDIF
     IFDEF APP_BENCH
     call BENCH_INIT
@@ -415,6 +418,12 @@ PARSE:
     scf
     ret
 OPTION:
+    IFDEF APP_S6TEST
+    push hl
+    call GT_OPTION
+    pop hl
+    ret nc
+    ENDIF
     IFDEF APP_S6TEST
     push hl
     call S6TEST_OPTION
@@ -1087,6 +1096,7 @@ EXIT:
     call AUDIO_CLEANUP
     ENDIF
     IFDEF APP_S6TEST
+    call GT_CLEANUP
     call S8TEST_CLEANUP
     call S6TEST_CLEANUP
     ENDIF
@@ -1269,7 +1279,7 @@ powers:
     DD 1000000000,100000000,10000000,1000000,100000,10000,1000,100,10,1,0
 commands: DB "INFO",0,1,"LIST",0,2,"TEST",0,3,"RESET",0,4,"FREE",0,5,"ROUNDTRIP",0,6,"PROTO",0,7
     IFDEF APP_S6TEST
-    DB "PCM",0,8,"FX",0,9,"MIX",0,10,"MOD8",0,11
+    DB "PCM",0,8,"FX",0,9,"MIX",0,10,"MOD8",0,11,"GS",0,12,"MOD4",0,13
     ENDIF
     DB 0
 options: DB "/QUIET",0,1,"/?",0,2,"/VERIFY",0,3,"/SLOW",0,4,"/OVERWRITE",0,5,"/TYPE:BLOB",0,6,0
@@ -1287,7 +1297,7 @@ help_text: DB "UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024 /METHOD:ALL|SLOW|FIXED|A
 help_text: INCLUDE "ugaudio_help.inc"
     ELSE
     IFDEF APP_PROTO
-help_text: DB "UGTEST PROTO|PCM|FX|MIX|MOD8 [/VOICES:N /SECONDS:N] [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
+help_text: DB "UGTEST PROTO|PCM|FX|MIX|MOD8|GS|MOD4 [/RESET] [/VOICES:N /SECONDS:N] [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
     ELSE
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
     DB "ROUNDTRIP bytes /SLOW /VERIFY /SLOT:0|1 /BASE:hex /QUIET /?",13,10
@@ -1340,6 +1350,7 @@ newline: DB 13,10,0
     IFDEF APP_S6TEST
     INCLUDE "ugtestpcm.asm"
     INCLUDE "ugtestmod8.asm"
+    INCLUDE "ugtestgs.asm"
     ENDIF
     ENDIF
     IFDEF APP_BENCH

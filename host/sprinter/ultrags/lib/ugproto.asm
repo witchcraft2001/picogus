@@ -1553,6 +1553,9 @@ UG_GS_POLL_CB:
 ;
 ; UG_GS_WC: wait until CB(bit0) clears, bounded
 UG_GS_WC:
+    IFDEF UG_DSS_TIMED
+    call UG_GS_WAIT_START
+    ENDIF
 	ld	hl,UG_GS_BUDGET
 .wc:	push	hl
 	call	UG_GS_POLL_CB
@@ -1560,10 +1563,16 @@ UG_GS_WC:
 	bit	0,a
 	jr	z,.wcdone
 	pop	hl
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_NEXT
+    jp c,UG_GS_WAIT_ERROR
+    jr .wc
+    ELSE
 	dec	hl
 	ld	a,h
 	or	l
 	jr	nz,.wc
+    ENDIF
 	ld	a,UG_ERR_TIMEOUT
 	ld	b,3			; GS source
 	jp	UG_SET_ERR
@@ -1575,6 +1584,11 @@ UG_GS_WC:
 ;
 ; UG_GS_WN: wait until DB(bit7) sets, bounded
 UG_GS_WN:
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_START
+    ld a,1
+    ld (UGTM.LIMIT),a
+    ENDIF
 	ld	hl,UG_GS_BUDGET
 .wn:	push	hl
 	call	UG_GS_POLL_CB
@@ -1582,10 +1596,16 @@ UG_GS_WN:
 	bit	7,a
 	jr	nz,.wndone
 	pop	hl
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_NEXT
+    jp c,UG_GS_WAIT_ERROR
+    jr .wn
+    ELSE
 	dec	hl
 	ld	a,h
 	or	l
 	jr	nz,.wn
+    ENDIF
 	ld	a,UG_ERR_TIMEOUT
 	ld	b,3
 	jp	UG_SET_ERR
@@ -1596,6 +1616,11 @@ UG_GS_WN:
 	ret
 ;
 UG_GS_WD:
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_START
+    ld a,1
+    ld (UGTM.LIMIT),a
+    ENDIF
     ld hl,UG_GS_BUDGET
 .loop:
     push hl
@@ -1604,13 +1629,42 @@ UG_GS_WD:
     ret c
     bit 7,a
     ret z
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_NEXT
+    jp c,UG_GS_WAIT_ERROR
+    jr .loop
+    ELSE
     dec hl
     ld a,h
     or l
     jr nz,.loop
+    ENDIF
     ld a,UG_ERR_TIMEOUT
     ld b,3
     jp UG_SET_ERR
+;
+    IFDEF UG_DSS_TIMED
+; COMMAND is retained by SC until WC completes. No ISA window is open here.
+UG_GS_WAIT_START:
+    call UG_WAIT_START
+    ld a,(UGREQ.GPRE)
+    cp 0xD2
+    ld b,30
+    jr z,.limit
+    cp 0xF3
+    ld b,120
+    jr z,.limit
+    cp 0xF4
+    jr z,.limit
+    ld b,1
+.limit:
+    ld a,b
+    ld (UGTM.LIMIT),a
+    ret
+UG_GS_WAIT_ERROR:
+    ld b,3
+    jp UG_SET_ERR
+    ENDIF
 ;
 ; UG_GS_SD: in A=byte -> GS_DATA write (bounded window)
 UG_GS_SD:
@@ -1653,7 +1707,7 @@ UG_GS_GD:
 ;   +0 command, +1 has_pre(0/1), +2 pre, +3 post_count, +4 post_ptr u16,
 ;   +6 reply_count, +7 reply_ptr u16   (spec 12.1)
 ; Handshake per spec 8.1: optional pre -> GS_DATA, SC -> GS_CMDSTAT, WC
-; until CB clears, post bytes -> GS_DATA, reply_count WN/GD reads.
+; until CB clears, post bytes SD/WD, first reply GD, subsequent WN/GD.
 ; out CF=0; CF=1 A=err (TIMEOUT src=GS on the latch waits).
 ; clobbers AF,BC,DE,HL; IX/IY preserved
 UG_GS_COMMAND:
@@ -1689,7 +1743,7 @@ UG_GS_COMMAND:
 	; WC
 	call	UG_GS_WC
 	jp	c,.g_ret
-	; post bytes (WD semantics: WC poll between each SD)
+	; post bytes (WD: DB clears after every SD)
 	ld	a,(UG_ARGBUF+3)
 	or	a
 	jr	z,.g_reply
@@ -1701,7 +1755,7 @@ UG_GS_COMMAND:
 	ld	a,(hl)
 	call	UG_GS_SD
 	jp	c,.g_postpop
-	call	UG_GS_WC
+	call	UG_GS_WD
 	jp	c,.g_postpop
 	pop	hl
 	pop	bc
@@ -1717,8 +1771,13 @@ UG_GS_COMMAND:
 .g_rloop:
 	push	bc
 	push	hl
-	call	UG_GS_WN		; WN: DB set
+    ; First OUT is already available after WC, including optional DB=0.
+    ld a,(UG_ARGBUF+6)
+    cp b
+    jr z,.g_first
+	call	UG_GS_WN		; later bytes require DB set
 	jp	c,.g_rpop
+.g_first:
 	call	UG_GS_GD		; GD: read byte
 	jp	c,.g_rpop
 	pop	hl

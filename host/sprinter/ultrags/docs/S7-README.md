@@ -1,9 +1,16 @@
+Актуализация 2026-10-21: этот документ описывает исторический native subset.
+Текущие GS dispatcher/LOAD/FX и GS CLI проверяются отдельным `gs105-check`;
+инструкции и границы доказательств — [GS105-README.md](GS105-README.md).
+Прежние формулировки «GS dispatcher отсутствует» относились к дате исходного ревью.
+S7 остаётся IN_PROGRESS / REAL_PENDING до аппаратной приёмки.
+
 # Ultra GS S7: native MOD4, промежуточная сборка
 
 **S7 IN_PROGRESS.** Проверен native-сценарий MOD4 M.K./M!K!:
 загрузка → READY handle → повторное воспроизведение → STOP → явный FREE.
-CAPS.formats bit3 сообщает MOD4; CAPS.features bit0 (GS musical) выключен.
-Полный GS 1.05, `/GS`, `UGTEST GS/MOD4` и нормативная аудиоприёмка ещё открыты.
+CAPS.formats bit3 сообщает MOD4. На 2026-10-21 GS musical bit включён,
+`/GS` и `UGTEST GS/MOD4` реализованы; программный профиль UGS-GS105/1 имеет
+отдельный HOST_PASS / DSS_EXE_PASS. Аппаратная аудиоприёмка остаётся открытой.
 Подробности и оставшийся объём — [S7-REVIEW.md](S7-REVIEW.md).
 
 ## Повторение проверок и сборка

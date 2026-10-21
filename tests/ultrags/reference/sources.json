@@ -65,7 +65,11 @@
       "revision": "83b5d9aebddb528ea177e115b0afed5d75f6b92a",
       "license": "BSD-3-Clause",
       "notice": "tests/ultrags/reference/micromod-licence.txt",
-      "use": "Reference/license audit only in S0a; no player source copied or compiled"
+      "use": "Unmodified pinned host-only GS105 tick comparator; never compiled or linked into firmware",
+      "host_reference_sha256": {
+        "micromod-c/micromod.c": "15481720d1ba6c7b023f699ae80fe8a12bcbfe5fb1847243b53ab537c0356a5a",
+        "micromod-c/micromod.h": "40fec0a4849ce0853c6d13c3f1ebf086091c39a8e0f09ee65c3f6ec27e5d17f6"
+      }
     },
     {
       "name": "M62429",
