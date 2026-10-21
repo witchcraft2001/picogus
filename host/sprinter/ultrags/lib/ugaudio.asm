@@ -21,8 +21,13 @@ AFXERRORS EQU AV+48 ; PSRAM error counter before the accepted FX start
 AOPTS EQU AV+52 ; explicit VOICE/PRIORITY/GAIN/PAN options
 ACAPS EQU AV+64
 ASNAP EQU 0x5B00
+    IFDEF APP_PLAY
+AFXSTAT EQU 0x5E00
+AFXOLD EQU 0x6F00
+    ELSE
 AFXSTAT EQU 0x6000 ; u16 count + up to256 instance records
 AFXOLD EQU 0x7100 ; pre-PLAY instance IDs, max256
+    ENDIF
 APAGE EQU AV+56
 AOLDCOUNT EQU AV+58
 APAGEOP EQU AV+60
@@ -43,6 +48,9 @@ AUDIO_INIT:
     ld (AGAIN),a
     ld a,5
     ld (AHZ),a
+    IFDEF APP_PLAY
+    call STREAM_INIT
+    ENDIF
     ret
 AUDIO_OPTION:
     IFDEF APP_PLAY
@@ -202,6 +210,16 @@ AUDIO_PARSE:
     xor a
     ret
     ELSE
+    IFDEF APP_PLAY
+    ld a,(SOPTIONS)
+    or a
+    jr z,.stream_options_ok
+    ld hl,(ARGS)
+    ld de,stream_word
+    call EQUAL
+    jp nz,.bad
+.stream_options_ok:
+    ENDIF
     ld a,(BLOBTYPE)
     or a
     jp nz,.bad
@@ -213,6 +231,8 @@ AUDIO_PARSE:
     call LOOKUP
     jp c,.file
     ld (CMD),a
+    cp 11
+    jp z,STREAM_VALIDATE
     cp 5
     jp z,.fxfile
     cp 1
@@ -416,6 +436,8 @@ AUDIO_RUN:
     jp AUDIO_MONITOR
     ELSE
     ld a,(CMD)
+    cp 11
+    jp z,STREAM_RUN
     cp 2
     jp c,.launch
     cp 5
@@ -1464,6 +1486,9 @@ AUDIO_MONITOR:
     jp .poll
     ENDIF
 AUDIO_CLEANUP:
+    IFDEF APP_PLAY
+    call STREAM_CLEANUP
+    ENDIF
     ret ; handles persist; WAIT/ESC stops only its own instance above
 AUDIO_SESSION_ERROR:
     xor a
@@ -1486,7 +1511,9 @@ AUDIO_ERROR:
     ld a,7
     jp EXIT
     IFDEF APP_PLAY
-audio_commands: DB "HANDLE",0,1,"STOP",0,2,"PAUSE",0,3,"RESUME",0,4,"FX",0,5,"FXHANDLE",0,6,"FXSTOP",0,7,"FXPAUSE",0,8,"FXRESUME",0,9,0
+stream_word: DB "STREAM",0
+    INCLUDE "ugstream.asm"
+audio_commands: DB "STREAM",0,11,"HANDLE",0,1,"STOP",0,2,"PAUSE",0,3,"RESUME",0,4,"FX",0,5,"FXHANDLE",0,6,"FXSTOP",0,7,"FXPAUSE",0,8,"FXRESUME",0,9,0
 audio_extensions: DB "RAW",0,1,"WAV",0,2,"MOD",0,3,0
 audio_options: DB "/WAIT",0,1,"/LOOP",0,2,"/REPLACE",0,4,"/STEAL",0,8,0
 audio_prefixes: DB "/VOICE:",0,"/PRIORITY:",0,"/GAIN:",0,"/PAN:",0

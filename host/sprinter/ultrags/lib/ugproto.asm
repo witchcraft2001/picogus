@@ -432,6 +432,28 @@ UG_RPC:
 .wait:	push	hl
 	call	UG_POLL_STATUS
 	jp	c,.poll_winfail
+    IFDEF APP_PLAY
+    bit 3,a
+    jr z,.no_stream_grant
+    push af
+    ld a,(UGREQ.OP)
+    cp UG_OP_STREAM_FEED
+    jr nz,.not_stream
+    ld a,(SSENT)
+    or a
+    jr nz,.not_stream
+    call STREAM_BULK
+    jr c,.stream_failed
+    ; The old status preceded the payload. Re-poll once immediately after
+    ; completing it, before paying a DSS timeout-clock call. Subsequent
+    ; BUSY polls still use the normal timed deadline (SSENT is now set).
+    pop af
+    pop hl
+    jr .wait
+.not_stream:
+    pop af
+.no_stream_grant:
+    ENDIF
 	bit	2,a			; REPLY first: an error response still
 					; arrives as a consumable REPLY frame
 	jr	nz,.have_reply
@@ -459,6 +481,12 @@ UG_RPC:
 	jp	z,.timeout
     ENDIF
 	jr	.wait
+    IFDEF APP_PLAY
+.stream_failed:
+    pop de ; saved status AF
+    pop hl ; wait budget
+    ret
+    ENDIF
 .have_reply:
 	pop	hl
 	; ---- receive window (bounded) ----

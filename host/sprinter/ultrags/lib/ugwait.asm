@@ -30,10 +30,13 @@ UG_WAIT_START:
     ld (UGTM.LIMIT),a
     jr .clock
 .block:
+    cp UG_OP_STREAM_FEED
+    jr z,.transfer
     cp UG_OP_WRITE_BEGIN
     jr c,.clock
     cp UG_OP_TRANSFER_CANCEL+1
     jr nc,.clock
+.transfer:
     ld a,2
     ld (UGTM.LIMIT),a
     jr .clock

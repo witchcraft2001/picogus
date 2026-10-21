@@ -41,7 +41,11 @@
     ENDIF
     ENDIF
     IFNDEF APP_PROTO
+    IFDEF APP_PLAY
+    ORG 0x7200 ; stream producer/parser plus resident player; private buffers below
+    ELSE
     ORG 0x8000
+    ENDIF
 HEADER:
     DB "EXE",1
     DW 128,0,0,0,0,0,ENTRY,ENTRY,0xBFFE
@@ -424,6 +428,12 @@ OPTION:
     IFDEF APP_PCM
     push hl
     call PCM_OPTION
+    pop hl
+    ret nc
+    ENDIF
+    IFDEF APP_PLAY
+    push hl
+    call STREAM_OPTION
     pop hl
     ret nc
     ENDIF

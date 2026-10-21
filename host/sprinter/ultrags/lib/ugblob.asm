@@ -766,7 +766,13 @@ IO_BLOCK:
     ld a,(IOSIZE)
     ld c,a
     ld a,(FILEHANDLE)
+    IFDEF APP_PLAY
+    call STREAM_COUNT_READ
+    ENDIF
     call FILECALL
+    IFDEF APP_PLAY
+    call STREAM_COUNT_READ_RESULT
+    ENDIF
     jp c,FILE_ERROR
     ld a,d
     or e
@@ -785,6 +791,16 @@ IO_BLOCK:
     or l
     jr nz,.loop
     ret
+    IFDEF APP_PLAY
+; Read into the stream's host read-ahead cache. HL=buffer, DE=byte count.
+; Same short-read/error handling as IO_BLOCK; never called during a grant.
+IO_READ_AT:
+    ld (IOPTR),hl
+    ld (IOLEFT),de
+    ld a,0x13
+    ld (IOSIZE),a
+    jp IO_BLOCK.loop
+    ENDIF
     IFDEF APP_DUMP
 DISK_WRITE_BLOCK:
     ; DSS WRITE may flush FAT after its data path. That flush clobbers DE

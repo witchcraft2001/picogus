@@ -404,7 +404,8 @@ static __attribute__((noinline)) void mix_voice_samples(ug_mixer *m,const ug_lan
     }
 }
 
-int ug_mixer_render(ug_mixer *m, int16_t *out, uint32_t frames) {
+int ug_mixer_render_stream(ug_mixer *m,int16_t *out,uint32_t frames,
+                            const int16_t *pcm,const uint16_t voices[2]) {
     if (!m || !out) return -1;
     uint32_t done=0;
     while(done<frames) {
@@ -416,8 +417,13 @@ int ug_mixer_render(ug_mixer *m, int16_t *out, uint32_t frames) {
          * test per block; gains are invariant until the next event boundary. */
         for(unsigned i=0;i<UG_LANES;i++) {
             ug_lane *l=&m->lanes[i];
-            if(!l->active) continue;
-            render_voice_samples(m,l,count);
+            if(pcm && (i==voices[0] || i==voices[1])) {
+                unsigned ch=i==voices[1];
+                for(unsigned f=0;f<count;f++)m->voice_samples[f]=pcm[2*(done+f)+ch];
+            } else {
+                if(!l->active) continue;
+                render_voice_samples(m,l,count);
+            }
             mix_voice_samples(m,l,i,count);
         }
         for(unsigned f=0;f<count;f++) {
@@ -452,4 +458,8 @@ int ug_mixer_render(ug_mixer *m, int16_t *out, uint32_t frames) {
         done+=count;
     }
     return 0;
+}
+
+int ug_mixer_render(ug_mixer *m,int16_t *out,uint32_t frames) {
+    return ug_mixer_render_stream(m,out,frames,NULL,NULL);
 }

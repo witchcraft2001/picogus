@@ -22,6 +22,10 @@
     ]
   },
   "limits": {
+    "STREAM_FEATURE": {"value": 2048},
+    "STREAM_LOW_DEFAULT": {"value": 131072},
+    "STREAM_PREFILL_DEFAULT": {"value": 262144},
+    "STREAM_BUFFER_DEFAULT": {"value": 524288},
     "MAX_PAYLOAD": { "value": 128, "note": "frame payload_length max; len 129..255 -> FAULT/LENGTH, no reply until TRANSPORT_RESET" },
     "MAX_BLOCK": { "value": 1024, "note": "transfer block N: 1..1024" },
     "MAX_OBJECTS": { "value": 128, "note": "live objects; handle counter limit 65535/session" },
@@ -108,7 +112,8 @@
       { "value": 0, "name": "BLOB" },
       { "value": 1, "name": "RAW_PCM" },
       { "value": 2, "name": "WAV_PCM" },
-      { "value": 3, "name": "MOD" }
+      { "value": 3, "name": "MOD" },
+      { "value": 4, "name": "PCM_STREAM" }
     ],
     "states": [
       { "value": 0, "name": "UPLOADING" },
@@ -155,6 +160,10 @@
     }
   },
   "structs": {
+    "STREAM_CREATE_REQ": {"size": 20, "fields": [{"name": "rate", "type": "u32"}, {"name": "channels", "type": "u8"}, {"name": "bits", "type": "u8"}, {"name": "sample_format", "type": "u8"}, {"name": "reserved", "type": "u8"}, {"name": "buffer", "type": "u32"}, {"name": "prefill", "type": "u32"}, {"name": "low", "type": "u32"}]},
+    "STREAM_STATE": {"size": 70, "fields": [{"name": "handle", "type": "u16"}, {"name": "state", "type": "u8"}, {"name": "flags", "type": "u8"}, {"name": "buffer", "type": "u32"}, {"name": "prefill", "type": "u32"}, {"name": "low", "type": "u32"}, {"name": "fill", "type": "u32"}, {"name": "free", "type": "u32"}, {"name": "published", "type": "u64"}, {"name": "consumed", "type": "u64"}, {"name": "next_sequence", "type": "u32"}, {"name": "underruns", "type": "u32"}, {"name": "rate", "type": "u32"}, {"name": "play_id", "type": "u16"}, {"name": "channels", "type": "u8"}, {"name": "bits", "type": "u8"}, {"name": "error", "type": "u8"}, {"name": "reserved", "type": "u8"}, {"name": "fraction", "type": "u32"}, {"name": "position", "type": "u64"}]},
+    "STREAM_FEED_REQ": {"size": 9, "fields": [{"name": "handle", "type": "u16"}, {"name": "sequence", "type": "u32"}, {"name": "length", "type": "u16"}, {"name": "transport", "type": "u8"}, {"name": "crc", "type": "u32", "verifiedOnly": true}]},
+    "STREAM_FEED_RESP": {"size": 12, "fields": [{"name": "next_sequence", "type": "u32"}, {"name": "published", "type": "u64"}]},
     "INFO": {
       "size": 40,
       "fields": [
@@ -591,6 +600,12 @@
     }
   },
   "opcodes": [
+    {"hex": "0x49", "name": "STREAM_CLOSE", "req": [{"name": "handle", "type": "u16"}], "resp": []},
+    {"hex": "0x48", "name": "STREAM_EOF", "req": [{"name": "handle", "type": "u16"}], "resp": []},
+    {"hex": "0x47", "name": "STREAM_FEED", "reqStruct": "STREAM_FEED_REQ", "respStruct": "STREAM_FEED_RESP"},
+    {"hex": "0x46", "name": "STREAM_START", "req": [{"name": "handle", "type": "u16"}, {"name": "gain", "type": "u8"}, {"name": "pan", "type": "u8"}], "resp": [{"name": "play_id", "type": "u16"}]},
+    {"hex": "0x45", "name": "STREAM_STATE", "req": [{"name": "handle", "type": "u16"}], "respStruct": "STREAM_STATE"},
+    {"hex": "0x44", "name": "STREAM_CREATE", "reqStruct": "STREAM_CREATE_REQ", "resp": [{"name": "handle", "type": "u16"}]},
     {
       "hex": "0x00",
       "name": "INFO",

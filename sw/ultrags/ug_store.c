@@ -21,7 +21,7 @@ void ug_store_space(const ug_store_t *s,uint32_t *free_bytes,uint32_t *largest) 
     }
 }
 uint8_t ug_store_reserve(ug_store_t *s,uint8_t kind,uint32_t size,ug_object_t **out) {
-    if(kind>3) return UG_ERR_BAD_ARGUMENT;
+    if(kind>UG_KIND_PCM_STREAM) return UG_ERR_BAD_ARGUMENT;
     if(!size) return UG_ERR_LENGTH;
     if(size>UINT32_MAX-15) return UG_ERR_RANGE;
     if(s->count==UG_OBJECT_LIMIT || s->next_handle>65535) return UG_ERR_NO_HANDLES;

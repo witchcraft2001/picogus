@@ -42,7 +42,12 @@ function run(cmd, args, opts = {}) {
 // ---- 1. fresh generate ----
 {
   const r = run(process.execPath, [genWire, schemaPath, gen]);
-  r.code === 0 ? ok('gen-wire schema validation+emit') : bad('gen-wire schema validation+emit', r.out);
+  // The vertical EXE build also consumes the diagnostic equates. Generate
+  // them here so this standalone protocol target works in a fresh directory.
+  const diag = run('python3', [join(root, 'tools/ultrags/gen-diag.py'),
+    join(root, 'tools/ultrags/diag-schema.json'), gen]);
+  r.code === 0 && diag.code === 0 ? ok('gen-wire schema validation+emit')
+    : bad('gen-wire schema validation+emit', r.out + diag.out);
 }
 // ---- 2. vectors -> C header ----
 {

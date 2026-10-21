@@ -1,5 +1,21 @@
 # ULTRAGS: API 1.0 VLS1, 32 голоса и GS
 
+**2026-10-21: PROPLAY discovery/load/audio проверенного трека при Turbo OFF REAL_PASS.**
+Исходный плеер нашёл GS в slot0 и показал Done. Владелец подтвердил
+отключённый Turbo и последующее воспроизведение трека без искажений;
+длительность прослушивания не указана. GS STATUS в Turbo ON
+остаётся REAL_FAIL. UF2 R13 прежняя; S6/S7 IN_PROGRESS.
+Evidence: `build/gs-clock-d4-real/real-0003.json`, `audio-confirmed.json`;
+[подробности D4](GS-CLOCK-D4.md).
+Далее — история предыдущих проверок.
+
+**23:57: D4 REAL подтверждает отказ GS STATUS только в быстром столбце:**
+все16 `SLOW1=7E FAST=FF SLOW2=7E`.
+Следующий контроль исходного PROPLAY — с аппаратно запрещённым Turbo,
+после UGGSC0 со всеми тремя столбцами 7E. UF2 R13 прежняя.
+Это обходной путь; GS в Turbo ON остаётся REAL_FAIL. S6/S7 IN_PROGRESS.
+Подробности: [D4](GS-CLOCK-D4.md).
+
 **23:43: idle GS alias при Turbo OFF REAL_PASS, PROPLAY discovery REAL_FAIL.**
 Следующая проверка — [D4](GS-CLOCK-D4.md): `UGGSC0` при текущем GSALIAS ON.
 Сравнение OFF/ON/OFF только чтениями 00BB; без перепрошивки.
@@ -54,13 +70,14 @@ HOST PASS / REAL_PENDING; синий GPIO25 LED сохранён.
 
 ## Где брать комплект
 
-Единственная точка выдачи: `build/latest/` в корне репозитория PicoGUS.
-`CURRENT.ZIP` содержит текущий UF2, девять основных UG EXE,
-`CURRENT.IMG` и инструкцию. EXE пересобраны и совпадают с прежними.
+Единственная точка выдачи: `build/` в корне репозитория PicoGUS;
+`build/latest/` остаётся совместимой ссылкой на этот каталог.
+`CURRENT.ZIP` содержит UG EXE, тестовые данные и инструкцию.
+`CURRENT.UF2` и `CURRENT.IMG` выдаются отдельно и в ZIP не включаются.
 CONFIG_TRACE/CONFIG_PROBE в R12 отключены, TRC0/1 и UGCL0/1 в комплект не входят.
 Исторические `ug-full.zip`/PGMULTI.UF2
 остались в прежних каталогах; прошивать их вместо CURRENT.UF2 не следует.
-Прошивка выдаётся отдельно от дискеты. SHA-256 записаны в `HASHES.TXT`.
+SHA-256 файлов архива записаны в `HASHES.TXT`, всех компонентов — в `DELIVERY.json`.
 Внутренние каталоги сборки не являются комплектами для копирования.
 Dirty build ID содержит git revision и сам по себе не различает все сборки
 с незакоммиченными правками. Для точной идентификации используйте SHA-256 UF2

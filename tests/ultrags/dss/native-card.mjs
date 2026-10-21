@@ -11,7 +11,7 @@ export class NativeCard extends ConfigCard {
   this.gs=options.gs??false;this.syncMap();this.session=this.backend.command(0,Buffer.alloc(0))[1].readBigUInt64LE(12);
   this.nativeReads=0;this.nativeWrites=0;this.fraction=0;
  }
- get transfer(){return this.backend?.transfer()?{}:null;}
+ get transfer(){if(!this.backend?.transfer())return null;const g=this.backend.grant();return {granted:!!(g&24),bulk:!!(g&32),rd:!!(g&16)};}
  syncMap(){this.backend.map(this.base,this.alias,+this.gs);}
  owns(p){return p>=this.base&&p<this.base+32 || this.alias!==65535&&p>=this.alias&&p<this.alias+32 || this.gs&&(p===0xb3||p===0xbb);}
  tickUs(us){const session=this.session;super.tickUs(us);if(this.session!==session){this.backend.init();this.syncMap();}if(this.mode===8)this.backend.tick(us);}

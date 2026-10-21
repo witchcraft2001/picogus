@@ -19,7 +19,8 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-BUILD ?= $(ROOT)/build
+# One stable build tree for every stage. Do not create per-run output roots.
+override BUILD := $(ROOT)/build
 SW := $(ROOT)/sw
 
 PICO_SDK_PATH ?=
@@ -364,7 +365,21 @@ voices-host: test-dss fixtures
 voices-firmware:
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/voices-firmware.py --build $(BUILD)
 
-VOICES_COMPARE_BUILD ?= $(ROOT)/build/voices-b
-VOICES_DELIVERY ?= $(ROOT)/build/voices-review
+VOICES_COMPARE_BUILD ?= $(BUILD)/reproducibility
+VOICES_DELIVERY ?= $(BUILD)/voices-package
 voices-package:
 	$(NODE) $(ROOT)/tools/ultrags/package-voices.mjs $(BUILD) $(VOICES_COMPARE_BUILD) $(VOICES_DELIVERY)
+
+# Streaming PCM: production C, exact Z80 bytes and optional Turbo-write profile.
+.PHONY: s8c-host s8c-check s8c-arm
+s8c-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-host.py --build $(BUILD)/host/s8c
+
+s8c-check: dss s2-host s8c-host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-fast.py --build $(BUILD)
+	UG_STREAM_LONG=1 $(NODE) $(ROOT)/tests/ultrags/dss/run-stream.mjs $(ROOT) $(BUILD)
+	UG_STREAM_EXE=UGPF.EXE $(NODE) $(ROOT)/tests/ultrags/dss/run-stream.mjs $(ROOT) $(BUILD)
+
+s8c-arm:
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/s8c-arm.py --build $(BUILD)

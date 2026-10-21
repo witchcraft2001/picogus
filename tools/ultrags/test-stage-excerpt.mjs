@@ -24,7 +24,7 @@ const TOOL = resolve(here, '../stage-excerpt.mjs');
 const SPEC = resolve(here, '../../../ultra-gs-docs/ultra-gs.md');
 const outIdx = process.argv.indexOf('--out');
 const OUTBASE = resolve(outIdx >= 0 ? process.argv[outIdx + 1] : 'build/ultrags/excerpts');
-const STAGES = ['S0a', 'S0b', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8a', 'S8b', 'S9', 'S10', 'S11'];
+const STAGES = ['S0a', 'S0b', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8a', 'S8b', 'S8c', 'S9', 'S10', 'S11'];
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
 let pass = 0, fail = 0;
 const ok = (c, n) => c ? (pass++, console.log(`PASS ${n}`)) : (fail++, console.log(`FAIL ${n}`));

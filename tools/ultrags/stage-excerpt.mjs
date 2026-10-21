@@ -43,7 +43,7 @@ function parseArgs(argv) {
 
 const H2 = /^## (\d+)\.\s+(.*)$/;                // top-level numbered section
 const HN = /^#{3,4} (\d+(?:\.\d+)+)\.\s+(.*)$/;  // numbered subsection (### N.M / #### N.M.K)
-const HST = /^### (S\d+[ab]?)\.\s+(.*)$/;        // stage heading inside 15
+const HST = /^### (S\d+[abc]?)\.\s+(.*)$/;        // stage heading inside 15
 
 function* linesOf(text) { let s = 0; for (;;) { const e = text.indexOf('\n', s); yield e < 0 ? [text.slice(s), s, text.length] : [text.slice(s, e), s, e + 1]; if (e < 0) return; s = e + 1; } }
 
@@ -154,7 +154,7 @@ function parseReading(readText, sections, stages, text) {
     if (bare.includes('§')) fail(`malformed reference in '${itemRaw}'`);
     bare = bare.replace(/\([^)]*\)/g, ' ');
     const idTokens = bare.match(/\b[A-Z]{1,2}\d{2}\b/g) || [];
-    const stageTokens = bare.match(/\bS\d+[ab]?\b/g) || [];
+    const stageTokens = bare.match(/\bS\d+[abc]?\b/g) || [];
     const hasExplicit14 = /§14/.test(item);
     if (!secTokens.length && !idTokens.length && !stageTokens.length) continue; // prose obligation
     for (const t of secTokens) {
@@ -175,7 +175,7 @@ function parseReading(readText, sections, stages, text) {
     const residual = bare
       .replace(/\/\d+(?:\.\d+)*/g, ' ')
       .replace(/\b[A-Z]{1,2}\d{2}\b/g, ' ')
-      .replace(/\bS\d+[ab]?\b/g, ' ')
+      .replace(/\bS\d+[abc]?\b/g, ' ')
       .replace(/пункт\s*\d+/g, ' ')
       .replace(/\d+\s*[–-]\s*\d+/g, ' '); // consumed range tails
     if (/\d/.test(residual)) fail(`malformed/ambiguous reference in '${itemRaw}'`);

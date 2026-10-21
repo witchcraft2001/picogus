@@ -70,10 +70,11 @@ static napi_value command(napi_env e,napi_callback_info info) {
     assert(napi_set_element(e,result,0,integer(e,status))==napi_ok && napi_set_element(e,result,1,payload)==napi_ok);return result;
 }
 static napi_value active_transfer(napi_env e,napi_callback_info info) { (void)info;return integer(e,ug_storage_transfer()); }
+static napi_value grant(napi_env e,napi_callback_info info) { (void)info;return integer(e,ug_storage_grant()|(ug_storage_bulk()?32:0)); }
 static napi_value idle(napi_env e,napi_callback_info info) { (void)info;return integer(e,ug_minimal_idle()); }
 static napi_value module(napi_env e,napi_value exports) {
     const struct { const char *name;napi_callback callback; } functions[]={
-        {"init",init},{"transfer",active_transfer},{"idle",idle},{"map",mapping},{"read",read_port},{"write",write_port},{"tick",tick},{"command",command}};
+        {"init",init},{"grant",grant},{"transfer",active_transfer},{"idle",idle},{"map",mapping},{"read",read_port},{"write",write_port},{"tick",tick},{"command",command}};
     for(unsigned i=0;i<sizeof(functions)/sizeof(functions[0]);i++) {
         napi_value f;assert(napi_create_function(e,functions[i].name,NAPI_AUTO_LENGTH,functions[i].callback,NULL,&f)==napi_ok);
         assert(napi_set_named_property(e,exports,functions[i].name,f)==napi_ok);

@@ -1,5 +1,21 @@
 # Диагностика старта ULTRAGS — 2026-10-20
 
+**2026-10-21 00:03: PROPLAY с отключённым Turbo нашёл GS в slot0 и дошёл до Done.**
+Владелец затем подтвердил воспроизведение трека без искажений:
+обнаружение, загрузка и прослушивание этого трека при Turbo OFF REAL_PASS.
+GS STATUS при Turbo ON остаётся REAL_FAIL по D4. Для исходного PROPLAY
+рабочий режим на этом стенде — Turbo OFF / GSALIAS ON; новая UF2 не нужна.
+Evidence: `build/gs-clock-d4-real/real-0003.json` и `audio-confirmed.json`.
+Длительность прогона не указана. S6/S7 IN_PROGRESS.
+Далее сохранена история диагностики.
+
+**23:57: D4 воспроизвёл зависимость от Turbo:** все16 `7E / FF / 7E`.
+Следующий контроль: штатно запретить Turbo, выполнить `UGGSC0`;
+при всех трёх столбцах 7E — `PROPLAY C:\MEDIA\MODS\ATDT.MOD`.
+Перепрошивка не нужна. Результат загрузки и звук проверяются отдельно.
+Свидетельство: `build/gs-clock-d4-real/real-2357.json`.
+Далее — история; D4 уже выполнен, его первоначальный REAL_PENDING устарел.
+
 **Текущая проверка — [D4 GS clock](../ultrags/docs/GS-CLOCK-D4.md), без перепрошивки.**
 23:43: UGGS0 даёт все 16 ALIAS7E при Turbo OFF, но PROPLAY всё ещё not found.
 На текущем ULTRAGS / GSALIAS ON / slot0 запустить `UGGSC0` из CURRENT.ZIP.

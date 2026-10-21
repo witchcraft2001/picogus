@@ -1,7 +1,19 @@
 # R13: быстрый ответ GS STATUS через 00BBh
 
-**HOST_PASS / REAL_PASS idle alias при Turbo OFF; REAL_FAIL PROPLAY discovery.**
+**HOST_PASS / REAL_PASS PROPLAY discovery, загрузки и воспроизведения проверенного трека при Turbo OFF;
+REAL_FAIL GS STATUS при Turbo ON.**
 S6/S7 IN_PROGRESS.
+
+**2026-10-21 00:03:** исходный PROPLAY нашёл GS в slot0 и завершил загрузку
+с `Done.`. Владелец подтвердил отключённый Turbo, затем запуск трека
+и воспроизведение без искажений. Длительность прослушивания не указана.
+Evidence: `build/gs-clock-d4-real/real-0003.json`, `audio-confirmed.json` рядом.
+Далее — история предыдущих отказов и проверок.
+
+**Уточнение 23:57:** [D4](GS-CLOCK-D4.md) воспроизвёл все16
+SLOW1=7E/FAST=FF/SLOW2=7E. R13 не обеспечивает чтение низкого GS STATUS
+при Turbo ON на этом стенде. Исходный PROPLAY с аппаратно запрещённым
+Turbo ещё не проверен. Новая firmware в ответ на это фото не выпускалась.
 
 ## Аппаратный результат 23:43:13
 

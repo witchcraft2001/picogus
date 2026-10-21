@@ -227,7 +227,7 @@ for (const [grp, pfx] of [['kinds', 'UG_KIND_'], ['states', 'UG_STATE_']]) {
 const NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 // verifiedOnly fields are legal only as the single trailing suffix of these
 // three structs, and only under the name the spec assigns them.
-const VERIFIED_FIELD = { WRITE_BEGIN_REQ: 'crc', READ_BEGIN_RESP: 'crc', READ_END_REQ: 'host_crc' };
+const VERIFIED_FIELD = { STREAM_FEED_REQ: 'crc', WRITE_BEGIN_REQ: 'crc', READ_BEGIN_RESP: 'crc', READ_END_REQ: 'host_crc' };
 for (const [name, st] of Object.entries(schema.structs || {})) {
   if (!NAME_RE.test(name)) fail(`struct ${JSON.stringify(name)}: name must be UPPER_SNAKE`);
   uniq(`UG_${name}`, 'structs');

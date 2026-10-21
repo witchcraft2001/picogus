@@ -6,6 +6,7 @@
 #include "ug_store.h"
 #include "ug_memory.h"
 #include "ug_pcm.h"
+#include "ug_stream.h"
 #include "ug_render.h"
 #include "ug_mod.h"
 #include "ug_minimal.h"
@@ -17,6 +18,17 @@
 #include "ultrags_protocol.h"
 static ug_store_t store;
 static ug_mixer mixer;
+static ug_stream stream;
+static uint16_t stream_handle;
+static bool stream_closing;
+static int16_t stream_samples[256];
+static void stream_destroy(void) {
+    if(stream_handle) {
+        ug_store_pin(&store,stream_handle,false);
+        ug_store_free(&store,stream_handle);
+    }
+    stream_handle=0;stream_closing=false;memset(&stream,0,sizeof(stream));
+}
 static bool mixer_ready, audio_available;
 typedef struct {
     uint16_t id,handle,repeats;
@@ -157,7 +169,7 @@ static struct {
     unsigned phase;
     uint32_t token, next_token, offset, expected_crc, last, cursor, crc;
     uint16_t handle, length, done;
-    uint8_t direction, verified, fault, transport;
+    uint8_t direction, verified, fault, transport, streaming, buffer_index, stream_failure;
     bool cancelled_command;
 } transfer;
 static struct { bool active, parser_started; uint16_t handle; uint32_t cursor,crc,expected,started; bool verify; ug_wav_parser parser; } sealing;
@@ -177,7 +189,8 @@ bool ug_storage_transfer(void) { return phase()!=T_NONE; }
 uint8_t ug_storage_grant(void) {
     /* A0/A1 revoke permission in core0 immediately, while core1 releases the
      * pin cooperatively. Cleanup can leave the data phase after cancellation. */
-    return __atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE)==T_GRANT?(transfer.direction?16:8):0;
+    return __atomic_load_n(&transfer.phase,__ATOMIC_ACQUIRE)==T_GRANT &&
+        (!transfer.streaming || __atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)<transfer.length)?(transfer.direction?16:8):0;
 }
 void ug_storage_grant_ack(uint32_t now) {
     if(phase()==T_ACK) { __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE); set_phase(T_GRANT); }
@@ -212,9 +225,17 @@ void ug_storage_touch(uint32_t now) {
     if(phase()==T_GRANT && __atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)<transfer.length) __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE);
 }
 uint8_t ug_storage_data_write(uint8_t byte,uint32_t now) {
+    if(phase()==T_GRANT && transfer.streaming && __atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)==transfer.length) {
+        ug_storage_data_overflow();return UG_ERR_OVERFLOW;
+    }
     if(ug_storage_grant()!=8 || transfer.direction) return UG_ERR_STATE;
-    if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)==transfer.length) { __atomic_store_n(&transfer.fault,UG_ERR_OVERFLOW,__ATOMIC_RELEASE); return UG_ERR_OVERFLOW; }
-    transfer.buffers[0][__atomic_fetch_add(&transfer.done,1,__ATOMIC_ACQ_REL)]=byte; __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE); return 0;
+    if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)==transfer.length) { ug_storage_data_overflow();return UG_ERR_OVERFLOW; }
+    uint16_t done=__atomic_load_n(&transfer.done,__ATOMIC_RELAXED);
+    transfer.buffers[transfer.streaming?transfer.buffer_index:0][done]=byte;
+    /* Auto-commit may run immediately on core1: publish the completed byte,
+     * never a reservation for a byte that core0 has not stored yet. */
+    __atomic_store_n(&transfer.done,(uint16_t)(done+1),__ATOMIC_RELEASE);
+    __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE);return 0;
 }
 uint8_t ug_storage_data_read(uint8_t *byte,uint32_t now) {
     if(ug_storage_grant()!=16 || !transfer.direction) return UG_ERR_STATE;
@@ -240,7 +261,7 @@ static void make_snapshot(ug_snapshot *s) {
     if(foreground.state) {
         put16(r+20,foreground.id);r[24]=foreground.state;r[25]=foreground.kind;
         put16(r+26,foreground.channels);put16(r+28,foreground.handle);
-        ug_put32(r+32,foreground.kind==2?0:foreground.state==3?foreground.pcm.frames:
+        ug_put32(r+32,foreground.kind==4?(uint32_t)stream.position:foreground.kind==2?0:foreground.state==3?foreground.pcm.frames:
                  (uint32_t)(mixer.lanes[foreground.voice[0]].phase>>32));
         if(foreground.kind==2) { put16(r+36,mod_player.order);r[38]=mod_player.row;r[39]=mod_player.tick;r[40]=mod_player.speed;r[41]=mod_player.bpm; }
     }
@@ -255,7 +276,7 @@ static void make_snapshot(ug_snapshot *s) {
             unsigned v=in->voice[c];const ug_lane *l=&mixer.lanes[v];uint8_t *rec=s->voice[v];
             put16(rec+2,in->id);put16(rec+4,in->handle);put16(rec+6,n?UINT16_MAX:(uint16_t)c);
             ug_put32(rec+8,(uint32_t)(l->phase>>32));put16(rec+12,mixer.lane_peaks[v]);
-            rec[17]=in->gain;rec[18]=in->pan;rec[19]=8|(l->active?1:0)|(n?2:0)|(in->paused?4:0);
+            rec[17]=in->gain;rec[18]=in->pan;rec[19]=8|((in->kind==4?!in->paused && !stream.buffering && !stream.error:l->active)?1:0)|(n?2:0)|(in->paused?4:0);
             if(!n && in->kind==2) {
                 const ug_mod_channel *mc=&mod_player.channel[c];put16(rec+14,mc->period);
                 rec[16]=mc->note;rec[17]=mc->mix_volume;rec[18]=mc->pan;
@@ -312,21 +333,32 @@ static void publish_snapshot(void) {
 static uint8_t commit_step(void) {
     ug_object_t *o=ug_store_find(&store,transfer.handle);
     uint32_t start=time_us_32();
-    unsigned n=transfer.length-transfer.cursor; if(n>256) n=256;
-    if(!o || ug_psram_write(ps,o->offset+transfer.offset+transfer.cursor,transfer.buffers[0]+transfer.cursor,n)) {
-        if(o) o->state=2; ug_stat_add(10,1); release_transfer(); return UG_ERR_PSRAM;
+    unsigned n=transfer.length-transfer.cursor;if(n>256)n=256;
+    uint32_t offset=transfer.offset+transfer.cursor;
+    if(transfer.streaming) {
+        offset=(stream.write_offset+transfer.cursor)%stream.capacity;
+        if(n>stream.capacity-offset)n=stream.capacity-offset;
     }
-    uint32_t elapsed=time_us_32()-start; if(elapsed>ug_spi_slice_max_us) ug_spi_slice_max_us=elapsed;
+    if(!o || ug_psram_write(ps,o->offset+offset,
+        transfer.buffers[transfer.streaming?transfer.buffer_index:0]+transfer.cursor,n)) {
+        if(o)o->state=2;
+        if(transfer.streaming)stream.error=UG_ERR_PSRAM;
+        ug_stat_add(10,1);release_transfer();return UG_ERR_PSRAM;
+    }
+    uint32_t elapsed=time_us_32()-start;if(elapsed>ug_spi_slice_max_us)ug_spi_slice_max_us=elapsed;
     transfer.cursor+=n;
     if(transfer.cursor==transfer.length) {
-        uint32_t end=transfer.offset+transfer.length;
-        if(end>o->uploaded) o->uploaded=end;
-        ug_stat_add(2,transfer.length); ug_stat_add(4,1); release_transfer();
+        if(transfer.streaming)ug_stream_publish(&stream,transfer.length);
+        else {
+            uint32_t end=transfer.offset+transfer.length;
+            if(end>o->uploaded)o->uploaded=end;
+        }
+        ug_stat_add(2,transfer.length);ug_stat_add(4,1);release_transfer();
     }
     return 0;
 }
 bool ug_storage_abort(uint32_t now) {
-    transfer.cancelled_command=false;
+    transfer.cancelled_command=false;transfer.stream_failure=0;
     if(phase()==T_COMMIT) { uint8_t e=commit_step(); if(e) ug_minimal_error(e); if(phase()==T_COMMIT) return false; }
     else if(phase()!=T_NONE) release_transfer();
     if(sealing.active) { ug_store_pin(&store,sealing.handle,false); __atomic_store_n(&sealing.active,false,__ATOMIC_RELEASE); }
@@ -350,7 +382,7 @@ void ug_storage_tick(uint32_t now) {
          * A cancelled pending READ_BEGIN must return CANCELLED, not restart. */
         unsigned p=phase();
         if(p!=T_NONE && p!=T_COMMIT) {
-            transfer.cancelled_command=p==T_PREP || p==T_CHECK;
+            transfer.cancelled_command=p==T_PREP || p==T_CHECK || transfer.streaming;
             release_transfer();
         }
     }
@@ -361,6 +393,7 @@ void ug_storage_tick(uint32_t now) {
     if(phase()==T_GRANT) {
         uint32_t idle=now-__atomic_load_n(&transfer.last,__ATOMIC_ACQUIRE);
         if(idle>=5000000 && idle<UINT32_C(0x80000000)) {
+            if(transfer.streaming)transfer.stream_failure=UG_ERR_TIMEOUT;
             release_transfer(); ug_stat_add(8,1); ug_minimal_error(UG_ERR_TIMEOUT);
         }
     }
@@ -372,6 +405,7 @@ void ug_storage_tick(uint32_t now) {
 }
 static void boot(void) { ug_minimal_ready(audio_error?3:memory_error?1:0,store.session); }
 void ug_storage_bind(ug_psram_t *p,uint64_t session) {
+    stream_handle=0;stream_closing=false;memset(&stream,0,sizeof(stream));
     ps=p; ug_store_init(&store,0,session); memset(&job,0,sizeof(job));
     mixer_ready=audio_available=false; memset(&foreground,0,sizeof(foreground)); memset(fx,0,sizeof(fx));memset(legacy_fx,0,sizeof(legacy_fx));
     event_count=0; __atomic_store_n(&playback_busy,0,__ATOMIC_RELEASE);__atomic_store_n(&audio_active,0,__ATOMIC_RELEASE);
@@ -438,7 +472,7 @@ static uint16_t instance_id(bool is_fx) {
         bool used=false;
         for(unsigned i=0;i<event_count;i++)
             if((is_fx?events[i].op==UG_OP_PLAY_FX:
-                (events[i].op==UG_OP_PLAY_PCM || events[i].op==UG_OP_PLAY_MOD)) &&
+                (events[i].op==UG_OP_PLAY_PCM || events[i].op==UG_OP_PLAY_MOD || events[i].op==UG_OP_STREAM_START)) &&
                 events[i].instance.id==id) used=true;
         if(is_fx) for(unsigned i=0;i<4;i++) if(legacy_fx[i].active && legacy_fx[i].id==id) used=true;
         if(!used) return id;
@@ -503,7 +537,10 @@ static int instance_lanes(const ug_instance *in,bool is_fx) {
     return 0;
 }
 static void drop_instance(ug_instance *in) {
-    if(!in->active) return;
+    if(!in->active) {
+        if(in->kind==4 && in->handle==stream_handle)stream_destroy();
+        return;
+    }
     for(unsigned i=0;i<in->channels;i++) {
         unsigned v=in->voice[i];
         bool overridden=false;
@@ -516,6 +553,7 @@ static void drop_instance(ug_instance *in) {
     }
     if(in->kind==2) ug_mod_stop(&mod_player);
     ug_store_pin(&store,in->handle,false); in->active=0; in->paused=0; in->state=0;
+    if(in->kind==4)stream_destroy();
 }
 static ug_instance new_instance(const ug_object_t *o,uint16_t id,
                                 uint8_t gain,uint8_t pan,uint16_t repeats) {
@@ -631,18 +669,19 @@ static bool any_playing(void) {
 }
 static void stop_all_playback(void) {
     for(unsigned i=0;i<event_count;i++)
-        if(events[i].op==UG_OP_PLAY_PCM || events[i].op==UG_OP_PLAY_MOD || events[i].op==UG_OP_PLAY_FX) ug_store_pin(&store,events[i].instance.handle,false);
+        if(events[i].op==UG_OP_PLAY_PCM || events[i].op==UG_OP_PLAY_MOD || events[i].op==UG_OP_PLAY_FX || events[i].op==UG_OP_STREAM_START) ug_store_pin(&store,events[i].instance.handle,false);
     event_count=0;
     for(unsigned i=0;i<4;i++) drop_instance(&legacy_fx[i]);
     drop_instance(&foreground);
     for(unsigned i=0;i<UG_LANES;i++) drop_instance(&fx[i]);
     memset(&foreground,0,sizeof(foreground)); memset(fx,0,sizeof(fx));
-    update_playback_busy();
+    stream_destroy();update_playback_busy();
 }
 static void control_instance(ug_instance *in,uint8_t action) {
     if(action==0) { drop_instance(in); return; }
     in->paused=action==1; in->state=in->paused?2:1;
     if(in->kind==2) mod_player.paused=in->paused;
+    if(in->kind==4)return;
     for(unsigned channel=0;channel<in->channels;channel++) {
         ug_lane *l=in->kind==2?music_lane(channel):&mixer.lanes[in->voice[channel]];
         l->active=!in->paused && l->len_samples && !l->ended && !l->failed;
@@ -657,7 +696,16 @@ static void sync_mod_pause(void) {
 static void apply_audio_events(void) {
     for(unsigned index=0;index<event_count;index++) {
         const ug_audio_event *e=&events[index];
-        if(e->op==UG_OP_PLAY_PCM) {
+        if(e->op==UG_OP_STREAM_START) {
+            /* Old foreground can only be a different object: START is one-shot. */
+            drop_instance(&foreground);foreground=e->instance;
+            instance_lanes(&foreground,false);
+            for(unsigned ch=0;ch<foreground.channels;ch++)mixer.lanes[foreground.voice[ch]].active=0;
+        } else if(e->op==UG_OP_STREAM_CLOSE) {
+            if(foreground.kind==4 && foreground.handle==stream_handle) {
+                drop_instance(&foreground);memset(&foreground,0,sizeof(foreground));
+            } else stream_destroy();
+        } else if(e->op==UG_OP_PLAY_PCM) {
             drop_instance(&foreground); foreground=e->instance;
             if(instance_lanes(&foreground,false)) { drop_instance(&foreground); foreground.state=4; audio_error=UG_ERR_FORMAT; }
         } else if(e->op==UG_OP_PLAY_MOD) {
@@ -715,7 +763,7 @@ static uint32_t mainvol_q15(void) {
     return cubed*128u; /* the existing 20.12 taper converted to Q15 */
 }
 bool ug_storage_render(int16_t *out,uint32_t frames) {
-    if(!out) return false;
+    if(!out || frames>128) return false;
     memset(out,0,(size_t)frames*2*sizeof(*out));
     if(!mixer_ready) return false;
     uint32_t clips=mixer.stats.clips, errors=mixer.stats.fetch_errors, started=time_us_32();
@@ -742,12 +790,28 @@ bool ug_storage_render(int16_t *out,uint32_t frames) {
     } else {
         if(foreground.active && !foreground.paused && foreground.kind==2)
             for(unsigned c=0;c<4;c++) if(music_lane(c)==&hidden_music[c]) ug_lane_advance_silent(&hidden_music[c],frames);
-        ug_mixer_render(&mixer,out,frames);
+        if(foreground.active && foreground.kind==4 && !foreground.paused) {
+            uint8_t previous_error=stream.error;
+            bool ended=ug_stream_render(&stream,mixer.mem,stream_samples,frames);
+            if(!previous_error && stream.error)ug_stat_add(10,1);
+            for(unsigned ch=0;ch<foreground.channels;ch++) {
+                ug_lane *l=&mixer.lanes[foreground.voice[ch]];
+                l->phase=((uint64_t)(uint32_t)stream.position<<32)|stream.fraction;
+            }
+            uint16_t voices[2]={foreground.voice[0],foreground.channels==2?foreground.voice[1]:UINT16_MAX};
+            ug_mixer_render_stream(&mixer,out,frames,stream_samples,voices);
+            if(ended || stream.error) {
+                ug_store_pin(&store,foreground.handle,false);foreground.active=0;
+                foreground.state=stream.error?4:3;
+                if(stream.error)audio_error=stream.error;
+            }
+        } else ug_mixer_render(&mixer,out,frames);
     }
     ug_stat_add(10,mixer.stats.fetch_errors-errors);
     bool failed=false;
     for(unsigned which=0;which<=UG_LANES+4;which++) {
         ug_instance *in=!which?&foreground:which<=UG_LANES?&fx[which-1]:&legacy_fx[which-UG_LANES-1];
+        if(in->kind==4)continue;
         if(!in->active || (in->paused && !(in->kind==2 && mod_player.error))) continue;
         unsigned first=in->voice[0];
         bool fault=false;
@@ -781,6 +845,18 @@ void ug_storage_main_volume(uint8_t percent) {
 bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
                         uint8_t *len,uint8_t *status,uint32_t now) {
     *len=*status=UG_ERR_OK;
+    if(transfer.stream_failure) {
+        *status=transfer.stream_failure;transfer.stream_failure=0;return true;
+    }
+    if(transfer.streaming && phase()==T_GRANT && op==UG_OP_STREAM_FEED) {
+        uint8_t fault=__atomic_load_n(&transfer.fault,__ATOMIC_ACQUIRE);
+        if(fault) { release_transfer();*status=fault;return true; }
+        if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)!=transfer.length)return false;
+        transfer.cursor=0;
+        if(transfer.verified) { transfer.crc=UINT32_MAX;set_phase(T_CHECK); }
+        else if((*status=begin_commit()))return true;
+        return false;
+    }
     if(transfer.cancelled_command) {
         transfer.cancelled_command=false; *status=UG_ERR_CANCELLED; return true;
     }
@@ -791,7 +867,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
          * check completes. Cancellation here still leaves PSRAM untouched. */
         unsigned k=transfer.length-transfer.cursor; if(k>256) k=256;
         uint32_t start=time_us_32();
-        transfer.crc=crc_step(transfer.crc,transfer.buffers[0]+transfer.cursor,k);
+        transfer.crc=crc_step(transfer.crc,transfer.buffers[transfer.streaming?transfer.buffer_index:0]+transfer.cursor,k);
         uint32_t elapsed=time_us_32()-start; if(elapsed>ug_spi_slice_max_us) ug_spi_slice_max_us=elapsed;
         transfer.cursor+=k;
         if(transfer.cursor<transfer.length) return false;
@@ -817,7 +893,14 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         if(transfer.verified) { transfer.expected_crc^=UINT32_MAX; ug_put32(r+4,transfer.expected_crc); *len=8; }
         set_phase(T_ACK); return true;
     }
-    if(phase()==T_COMMIT) { *status=commit_step(); return phase()!=T_COMMIT; }
+    if(phase()==T_COMMIT) {
+        *status=commit_step();
+        if(phase()==T_COMMIT)return false;
+        if(!*status && transfer.streaming) {
+            ug_put32(r,stream.next_sequence);memcpy(r+4,&stream.published,8);*len=12;
+        }
+        return true;
+    }
     if(sealing.active) {
         ug_object_t *o=ug_store_find(&store,sealing.handle);
         if(sealing.cursor<o->size) {
@@ -878,6 +961,12 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
     unsigned expected;
     switch(op) {
     case UG_OP_LEGACY_INFO: case UG_OP_CAPS: case UG_OP_MEM_INFO: case UG_OP_STATS: case UG_OP_CLEAR_STATS: case UG_OP_SNAPSHOT: expected=0; break;
+    case UG_OP_STREAM_CREATE: expected=20;break;
+    case UG_OP_STREAM_STATE: case UG_OP_STREAM_EOF: case UG_OP_STREAM_CLOSE: expected=2;break;
+    case UG_OP_STREAM_START: expected=4;break;
+    case UG_OP_STREAM_FEED:
+        if(n<9) { *status=UG_ERR_LENGTH;return true; }
+        expected=(q[8]&128)?13:9;break;
     case UG_OP_WRITE_BEGIN:
         if(n<9) { *status=UG_ERR_LENGTH; return true; }
         expected=(q[8]&128)?13:9; break;
@@ -908,7 +997,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         /* Musical GS dispatcher/LOAD and native formats share this renderer.
          * Capability means implemented; physical acceptance remains REAL_PENDING. */
         ug_put32(r,(230u|(ug_cfg.settings->UltraGS.bulkAlias!=0xffff?8u:0u)|
-                    (ug_config_aliases(&ug_cfg)?512u:0u)|(mixer_ready?1281u:0u)));
+                    (ug_config_aliases(&ug_cfg)?512u:0u)|(mixer_ready?(1281u|UG_STREAM_FEATURE):0u)));
         if(mixer_ready) ug_put32(r+4,15u); /* RAW8, RAW16, WAV PCM, MOD4 */
         ug_put32(r+8,48000); put16(r+12,1024); put16(r+14,128); put16(r+16,128);
         put16(r+20,UG_LANES);put16(r+22,UG_LANES);put16(r+24,mixer_ready?UG_LANES:0);
@@ -944,6 +1033,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         uint32_t offset=ug_get32(q+2); uint16_t count=get16(q+6);
         if(!o) *status=UG_ERR_HANDLE;
         else if(!count || count>1024) *status=UG_ERR_LENGTH;
+        else if(o->kind==UG_KIND_PCM_STREAM)*status=UG_ERR_STATE;
         else if(o->state==2 || (op==UG_OP_WRITE_BEGIN && o->state!=0)) *status=UG_ERR_STATE;
         else if(op==UG_OP_WRITE_BEGIN && o->pins && !legacy_pending(o->handle)) *status=UG_ERR_PINNED;
         else if(offset>o->size || count>o->size-offset) *status=UG_ERR_RANGE;
@@ -952,6 +1042,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         else if(!transfer.next_token) *status=UG_ERR_OVERFLOW;
         else *status=ug_store_pin(&store,o->handle,true);
         if(*status) return true;
+        transfer.streaming=0;
         transfer.handle=o->handle; transfer.offset=offset; transfer.length=count;
         __atomic_store_n(&transfer.done,0,__ATOMIC_RELAXED); transfer.cursor=0; __atomic_store_n(&transfer.fault,0,__ATOMIC_RELAXED); transfer.verified=trans>>7;
         transfer.transport=trans&1; transfer.direction=op==UG_OP_READ_BEGIN; transfer.token=transfer.next_token++;
@@ -964,7 +1055,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
     if(op==UG_OP_WRITE_END || op==UG_OP_READ_END || op==UG_OP_TRANSFER_CANCEL) {
         if(phase()==T_NONE || ug_get32(q)!=transfer.token) { *status=UG_ERR_HANDLE; return true; }
         if(op==UG_OP_TRANSFER_CANCEL) { release_transfer(); return true; }
-        if(phase()!=T_GRANT || transfer.direction!=(op==UG_OP_READ_END)) { *status=UG_ERR_STATE; return true; }
+        if(transfer.streaming || phase()!=T_GRANT || transfer.direction!=(op==UG_OP_READ_END)) { *status=UG_ERR_STATE; return true; }
         uint8_t fault=__atomic_load_n(&transfer.fault,__ATOMIC_ACQUIRE);
         if(fault) *status=fault;
         else if(__atomic_load_n(&transfer.done,__ATOMIC_ACQUIRE)!=transfer.length) *status=UG_ERR_SHORT_TRANSFER;
@@ -977,6 +1068,84 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         if(transfer.verified) { transfer.crc=UINT32_MAX; set_phase(T_CHECK); }
         else if((*status=begin_commit())) return true;
         return false;
+    }
+    if(op==UG_OP_STREAM_CREATE) {
+        uint32_t capacity=ug_get32(q+8),prefill=ug_get32(q+12),low=ug_get32(q+16);
+        uint32_t rate=ug_get32(q);unsigned frame_bytes=q[4]*(q[5]/8);
+        if(stream_handle)*status=UG_ERR_BUSY;
+        else if(q[7])*status=UG_ERR_BAD_ARGUMENT;
+        else if(rate<8000 || rate>48000 || (q[4]!=1 && q[4]!=2) ||
+                (q[5]==8?q[6]>1:q[5]!=16 || q[6]!=2))*status=UG_ERR_FORMAT;
+        else if(!capacity || !prefill || prefill>capacity || low>=prefill || ((capacity|prefill|low)&(frame_bytes-1)))*status=UG_ERR_BAD_ARGUMENT;
+        else if(!mixer_ready)*status=memory_error?memory_error:UG_ERR_PSRAM;
+        else {
+            ug_object_t *o;*status=ug_store_reserve(&store,UG_KIND_PCM_STREAM,capacity,&o);
+            if(!*status) {
+                ug_stream_init(&stream,o->offset,capacity,prefill,low,rate,q[4],q[5],q[6]);stream_handle=o->handle;
+                o->pcm=(ug_pcm_info){.rate=rate,.data_length=capacity,.frames=capacity/frame_bytes,.channels=q[4],.bits=q[5],.sample_format=q[6]};
+                o->pcm_valid=1;o->pins=1;put16(r,o->handle);*len=2;
+            }
+        }
+        return true;
+    }
+    if(op>=UG_OP_STREAM_STATE && op<=UG_OP_STREAM_CLOSE) {
+        ug_object_t *o=ug_store_find(&store,get16(q));
+        if(!o || o->handle!=stream_handle) { *status=UG_ERR_HANDLE;return true; }
+        if(op==UG_OP_STREAM_STATE) {
+            memset(r,0,UG_STREAM_STATE_LEN);put16(r,stream_handle);
+            r[2]=stream.error?4:!stream.started?0:foreground.state==3?3:
+                 foreground.paused?2:stream.buffering?5:1;
+            r[3]=stream.eof | ((stream.buffering || ug_stream_fill(&stream)<=stream.low)?2:0) | (stream_closing?4:0);
+            ug_put32(r+4,stream.capacity);ug_put32(r+8,stream.prefill);ug_put32(r+12,stream.low);
+            ug_put32(r+16,ug_stream_fill(&stream));ug_put32(r+20,ug_stream_free(&stream));
+            memcpy(r+24,&stream.published,8);memcpy(r+32,&stream.consumed,8);
+            ug_put32(r+40,stream.next_sequence);ug_put32(r+44,stream.underruns);ug_put32(r+48,stream.rate);
+            put16(r+52,stream.started?pending_foreground.kind==4?pending_foreground.id:foreground.id:0);
+            r[54]=stream.channels;r[55]=stream.bits;r[56]=stream.error;ug_put32(r+58,stream.fraction);
+            memcpy(r+62,&stream.position,8);*len=UG_STREAM_STATE_LEN;return true;
+        }
+        if(stream_closing) { *status=UG_ERR_STATE;return true; }
+        if(op==UG_OP_STREAM_CLOSE) {
+            if(event_count==UG_AUDIO_EVENTS)*status=UG_ERR_BUSY;
+            else { project_playback();stream_closing=true;
+                if(pending_foreground.kind==4)pending_foreground.active=0;
+                queue_event(op,q,2,NULL);
+            }
+            return true;
+        }
+        if(stream.error) { *status=stream.error;return true; }
+        if(op==UG_OP_STREAM_EOF) { stream.eof=1;return true; }
+        if(op==UG_OP_STREAM_START) {
+            if(stream.started)*status=UG_ERR_STATE;
+            else if(q[2]>64)*status=UG_ERR_BAD_ARGUMENT;
+            else if(event_count==UG_AUDIO_EVENTS)*status=UG_ERR_BUSY;
+            else {
+                project_playback();
+                ug_instance in=new_instance(o,instance_id(false),q[2],q[3],1);in.kind=4;
+                if(!reserve_voices(&in,true,UINT16_MAX,false,0))*status=UG_ERR_NO_VOICE;
+                else {
+                    ug_store_pin(&store,o->handle,true);pending_foreground=in;stream.started=1;
+                    queue_event(op,NULL,0,&in);put16(r,in.id);*len=2;
+                }
+            }
+            return true;
+        }
+        uint16_t count=get16(q+6);
+        if(q[8]!=0 && q[8]!=128)*status=UG_ERR_BAD_ARGUMENT;
+        else if(stream.eof)*status=UG_ERR_STATE;
+        else if(!count || count>1024 || (count&(stream.frame_bytes-1)))*status=UG_ERR_LENGTH;
+        else if(!stream.next_sequence || stream.published>UINT64_MAX-count/stream.frame_bytes)*status=UG_ERR_OVERFLOW;
+        else if(ug_get32(q+2)!=stream.next_sequence)*status=UG_ERR_RANGE;
+        else if(count>ug_stream_free(&stream))*status=UG_ERR_NO_MEMORY;
+        else {
+            transfer.streaming=1;transfer.token=0;transfer.buffer_index^=1;transfer.handle=o->handle;
+            transfer.length=count;transfer.cursor=0;transfer.direction=transfer.transport=0;
+            transfer.verified=q[8]>>7;transfer.expected_crc=transfer.verified?ug_get32(q+9):0;
+            __atomic_store_n(&transfer.fault,0,__ATOMIC_RELAXED);__atomic_store_n(&transfer.done,0,__ATOMIC_RELAXED);
+            __atomic_store_n(&transfer.last,now,__ATOMIC_RELEASE);ug_store_pin(&store,o->handle,true);
+            set_phase(T_GRANT);return false;
+        }
+        return true;
     }
     if(op==UG_OP_PCM_CONFIG) {
         ug_object_t *o=ug_store_find(&store,get16(q));
@@ -1048,7 +1217,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         uint16_t id=get16(q); uint8_t action=q[2];
         project_playback();
         if(action>2) *status=UG_ERR_BAD_ARGUMENT;
-        else if(!pending_foreground.active || (id && id!=pending_foreground.id)) *status=UG_ERR_STATE;
+        else if((!pending_foreground.active && !(action==0 && pending_foreground.kind==4 && stream_handle)) || (id && id!=pending_foreground.id)) *status=UG_ERR_STATE;
         else if(action==2 && !pending_foreground.paused) *status=UG_ERR_STATE;
         else if(event_count==UG_AUDIO_EVENTS) *status=UG_ERR_BUSY;
         else {
@@ -1127,6 +1296,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         __atomic_store_n(&busy,1,__ATOMIC_RELEASE); return false;
     } else if(op==UG_OP_ALLOC) {
         if(memory_error) { *status=memory_error; return true; }
+        if(q[0]>3) { *status=UG_ERR_BAD_ARGUMENT;return true; }
         ug_object_t *o; *status=ug_store_reserve(&store,q[0],ug_get32(q+1),&o);
         if(!*status) { put16(r,o->handle); ug_put32(r+2,o->reserved); *len=6; }
     } else if(op==UG_OP_FREE) *status=ug_store_free(&store,get16(q));

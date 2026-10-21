@@ -126,6 +126,10 @@ void ug_lane_pcm_rate(ug_lane *lane, uint32_t rate, uint32_t output_rate,
 /* Render `frames` stereo frames into out[2*frames] (L,R interleaved S16).
  * Returns 0; per-lane errors are counted in stats and contribute silence. */
 int ug_mixer_render(ug_mixer *m, int16_t *out, uint32_t frames);
+/* Mix pre-resampled streaming PCM through the same voice gains, main volume,
+ * clipping and peaks as resident sources. The reserved pair is not advanced. */
+int ug_mixer_render_stream(ug_mixer *m,int16_t *out,uint32_t frames,
+                            const int16_t *pcm,const uint16_t voices[2]);
 
 #ifdef __cplusplus
 }
