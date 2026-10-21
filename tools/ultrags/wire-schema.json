@@ -22,6 +22,10 @@
     ]
   },
   "limits": {
+    "MOD_F00_POLICY_FEATURE": {"value": 4096, "note": "CAPS.features bit12; PLAY_MOD policy bits1/2"},
+    "MOD_LOOP": {"value": 1},
+    "MOD_IGNORE_F00": {"value": 2},
+    "MOD_PAUSE_F00": {"value": 4},
     "STREAM_FEATURE": {"value": 2048},
     "STREAM_LOW_DEFAULT": {"value": 131072},
     "STREAM_PREFILL_DEFAULT": {"value": 262144},

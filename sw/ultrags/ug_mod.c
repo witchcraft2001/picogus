@@ -5,10 +5,11 @@
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
- * Native Ultra GS MOD4 reader and tracker. All source bytes remain in the
+ * Native Ultra GS MOD4/MOD8 reader and tracker. All source bytes remain in the
  * immutable object store and are accessed through a bounded reader callback.
  */
 #include "ug_mod.h"
+#include "ultrags_protocol.h"
 #include <string.h>
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
@@ -20,44 +21,69 @@ static uint16_t note_period(unsigned note) {
     else if(octave<0)value<<=-octave;
     return (uint16_t)value;
 }
-int ug_mod_parse(ug_mod_info *out,ug_mod_read_fn read,void *ctx,uint32_t size) {
-    /* Core1 has a 2-KiB stack. Never materialize the 1084-byte header or a
-     * second descriptor here; output is defined only after return == 0. */
-    uint8_t h[240];
-    if(!out || !read || size<1084) return -1;
-    if(read(ctx,950,h,134)) return -2;
-    if(memcmp(h+130,"M.K.",4) && memcmp(h+130,"M!K!",4)) return -1;
-    memset(out,0,sizeof(*out));out->file_size=size;
-    out->song_length=h[0];out->restart=h[1];
-    if(!out->song_length || out->song_length>128) return -1;
-    uint8_t max_pattern=0;
-    for(unsigned i=0;i<128;i++) {
-        uint8_t order=h[i+2];out->order[i]=order;
-        if(i<out->song_length && order>=128) return -1;
-        if(order<128 && order>max_pattern) max_pattern=order;
+void ug_mod_parser_init(ug_mod_parser *p,ug_mod_info *out,uint32_t size) {
+    memset(p,0,sizeof(*p));memset(out,0,sizeof(*out));out->file_size=size;
+}
+int ug_mod_parser_step(ug_mod_parser *p,ug_mod_info *out,ug_mod_read_fn read,void *ctx) {
+    uint8_t h[256];
+    if(!p || !out || !read || out->file_size<1084) return -1;
+    if(p->stage==0) {
+        if(read(ctx,950,h,134)) return -2;
+        out->channels=!memcmp(h+130,"8CHN",4)?8:
+            (!memcmp(h+130,"M.K.",4) || !memcmp(h+130,"M!K!",4))?4:0;
+        if(!out->channels) return -1;
+        out->song_length=h[0];out->restart=h[1];
+        if(!out->song_length || out->song_length>128) return -1;
+        uint8_t max_pattern=0;
+        for(unsigned i=0;i<128;i++) {
+            uint8_t order=h[i+2];out->order[i]=order;
+            if(i<out->song_length && order>=128) return -1;
+            if(order<128 && order>max_pattern) max_pattern=order;
+        }
+        out->pattern_offset=1084;
+        uint32_t patterns=(uint32_t)(max_pattern+1)*256u*out->channels;
+        if(patterns>out->file_size-1084) return -1;
+        out->sample_offset=1084+patterns;p->stage=1;
+        return 0;
     }
-    out->pattern_offset=1084;
-    uint32_t patterns=(uint32_t)(max_pattern+1)*1024u;
-    if(patterns>size-1084) return -1;
-    out->sample_offset=1084+patterns;
-    uint32_t total=0;
-    for(unsigned first=0;first<31;) {
-        unsigned count=31-first;if(count>8)count=8;
-        if(read(ctx,20+first*30,h,count*30)) return -2;
+    if(p->stage==1) {
+        unsigned count=31-p->sample;if(count>8)count=8;
+        if(read(ctx,20+p->sample*30,h,count*30)) return -2;
         for(unsigned i=0;i<count;i++) {
-            const uint8_t *s=h+i*30;ug_mod_sample *o=&out->samples[first+i];
+            const uint8_t *s=h+i*30;ug_mod_sample *o=&out->samples[p->sample+i];
             o->length=(uint32_t)be16(s+22)*2;
             o->finetune=(int8_t)(s[24]&15);if(o->finetune>7)o->finetune-=16;
             o->volume=s[25];o->loop_start=(uint32_t)be16(s+26)*2;o->loop_length=(uint32_t)be16(s+28)*2;
             if(o->volume>64) return -1;
             if(o->loop_length<=2) { o->loop_start=0;o->loop_length=0; }
             else if(o->loop_start>=o->length || o->loop_length>o->length-o->loop_start) return -1;
-            if(o->length>UINT32_MAX-total) return -1;
-            o->sample_bytes=o->length;total+=o->length;
+            if(o->length>UINT32_MAX-p->total) return -1;
+            o->sample_bytes=o->length;p->total+=o->length;
         }
-        first+=count;
+        p->sample+=(uint8_t)count;
+        if(p->sample==31) {
+            if(p->total>out->file_size-out->sample_offset) return -1;
+            p->stage=2;p->cursor=out->pattern_offset;
+        }
+        return 0;
     }
-    return total>size-out->sample_offset?-1:0;
+    if(p->stage==2) {
+        unsigned n=out->sample_offset-p->cursor;if(n>sizeof(h))n=sizeof(h);
+        if(read(ctx,p->cursor,h,n)) return -2;
+        for(unsigned i=0;i<n;i+=4) if(((h[i]&0xf0)|(h[i+2]>>4))>31) return -1;
+        p->cursor+=n;
+        if(p->cursor<out->sample_offset) return 0;
+        p->stage=3;
+    }
+    return 1;
+}
+int ug_mod_parse(ug_mod_info *out,ug_mod_read_fn read,void *ctx,uint32_t size) {
+    if(!out || !read) return -1;
+    /* PLAY re-reads the bounded header of an immutable, already sealed object.
+     * Full pattern validation belongs to cooperative SEAL/D2, never PLAY. */
+    ug_mod_parser p;ug_mod_parser_init(&p,out,size);
+    while(p.stage<2) { int rc=ug_mod_parser_step(&p,out,read,ctx);if(rc<0)return rc; }
+    return 0;
 }
 
 /* Equal-tempered eighth-semitone ratios in Q16. Arbitrary input periods
@@ -99,11 +125,12 @@ static void volume_slide(ug_mod_channel *c,unsigned up,unsigned down) {
     c->volume=(uint8_t)(v<0?0:v>64?64:v);
 }
 static void apply_row(ug_mod_player *p) {
-    uint8_t row[16];
-    uint32_t off=p->info.pattern_offset+(uint32_t)p->info.order[p->order]*1024u+(uint32_t)p->row*16u;
-    if(p->read(p->read_ctx,off,row,sizeof(row))) { p->error=1;p->playing=0;return; }
+    uint8_t row[32];
+    unsigned row_bytes=p->info.channels*4u;
+    uint32_t off=p->info.pattern_offset+(uint32_t)p->info.order[p->order]*64u*row_bytes+(uint32_t)p->row*row_bytes;
+    if(p->read(p->read_ctx,off,row,row_bytes)) { p->error=1;p->playing=0;return; }
     p->global_jump_order=-1;p->global_break_row=-1;
-    for(unsigned i=0;i<4;i++) {
+    for(unsigned i=0;i<p->info.channels;i++) {
         const uint8_t *e=row+i*4;ug_mod_channel *c=&p->channel[i];
         uint8_t sample=(e[0]&0xf0)|(e[2]>>4);
         uint16_t period=(uint16_t)(((e[0]&15)<<8)|e[1]);
@@ -250,15 +277,17 @@ static void tick_effect(ug_mod_player *p,unsigned i) {
 static void init_channels(ug_mod_player *p) {
     static const uint8_t pans[4]={0,255,255,0};
     memset(p->channel,0,sizeof(p->channel));
-    for(unsigned i=0;i<4;i++) {
+    for(unsigned i=0;i<p->info.channels;i++) {
         ug_mod_channel *c=&p->channel[i];
-        c->pan=pans[i];c->volume=c->mix_volume=64;c->note=127;
+        c->pan=pans[i&3];c->volume=c->mix_volume=64;c->note=127;
         c->sample=c->voice_sample=255;c->random_state=i+1;
     }
 }
-void ug_mod_start(ug_mod_player *p,const ug_mod_info *info,ug_mod_read_fn read,void *ctx,bool loop,uint8_t f00) {
+void ug_mod_start(ug_mod_player *p,const ug_mod_info *info,ug_mod_read_fn read,void *ctx,uint8_t flags,uint8_t f00) {
     memset(p,0,sizeof(*p));p->info=*info;p->read=read;p->read_ctx=ctx;
-    p->speed=6;p->bpm=125;p->playing=1;p->loop_song=loop;p->f00_mode=f00;
+    p->speed=6;p->bpm=125;p->playing=1;p->loop_song=(flags&UG_MOD_LOOP)!=0;
+    p->f00_policy=flags&(UG_MOD_IGNORE_F00|UG_MOD_PAUSE_F00);
+    p->f00_mode=p->f00_policy?(p->f00_policy==UG_MOD_IGNORE_F00):f00;
     init_channels(p);apply_row(p); /* Tick zero starts at the PLAY boundary. */
 }
 void ug_mod_stop(ug_mod_player *p) { if(p)p->playing=0; }
@@ -276,12 +305,12 @@ void ug_mod_tick(ug_mod_player *p) {
         p->speed=p->pending_speed;p->bpm=p->pending_bpm;p->pending_speed=0;
     }
     if(++p->tick<p->speed) {
-        for(unsigned i=0;i<4;i++)tick_effect(p,i);
+        for(unsigned i=0;i<p->info.channels;i++)tick_effect(p,i);
         return;
     }
     if(p->pattern_delay) {
         --p->pattern_delay;p->tick=0;
-        for(unsigned i=0;i<4;i++)tick_effect(p,i);
+        for(unsigned i=0;i<p->info.channels;i++)tick_effect(p,i);
         return;
     }
     uint16_t order=p->order;uint8_t row=(uint8_t)(p->row+1);

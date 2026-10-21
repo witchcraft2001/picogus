@@ -19,6 +19,7 @@ AWATCH EQU AV+28
 AOLD EQU AV+30
 AFXERRORS EQU AV+48 ; PSRAM error counter before the accepted FX start
 AOPTS EQU AV+52 ; explicit VOICE/PRIORITY/GAIN/PAN options
+AF00 EQU AV+53 ; explicit PLAY_MOD policy, zero selects default IGNORE
 ACAPS EQU AV+64
 ASNAP EQU 0x5B00
     IFDEF APP_PLAY
@@ -54,6 +55,21 @@ AUDIO_INIT:
     ret
 AUDIO_OPTION:
     IFDEF APP_PLAY
+    push hl
+    ld de,audio_f00_options
+    call LOOKUP
+    pop hl
+    jr c,.ordinary_option
+    ld b,a
+    ld a,(AF00)
+    or a
+    scf
+    ret nz
+    ld a,b
+    ld (AF00),a
+    xor a
+    ret
+.ordinary_option:
     push hl
     ld de,audio_options
     call LOOKUP
@@ -232,7 +248,12 @@ AUDIO_PARSE:
     jp c,.file
     ld (CMD),a
     cp 11
-    jp z,STREAM_VALIDATE
+    jr nz,.not_stream
+    ld a,(AF00)
+    or a
+    jp nz,.bad
+    jp STREAM_VALIDATE
+.not_stream:
     cp 5
     jp z,.fxfile
     cp 1
@@ -278,6 +299,9 @@ AUDIO_PARSE:
     ret c
     ld (AID),de
 .control_options:
+    ld a,(AF00)
+    or a
+    jp nz,.bad
     ld a,(AOPTS)
     ld b,a
     ld a,(SLOW)
@@ -359,6 +383,16 @@ AUDIO_PARSE:
     call PCM_VALIDATE
     ret c
 .play_options:
+    ld a,(AF00)
+    or a
+    jr z,.policy_options_ok
+    ld a,(CMD)
+    cp 1 ; HANDLE type is checked by OBJECT_INFO before replacing anything.
+    jr z,.policy_options_ok
+    ld a,(PCM_KIND)
+    cp 3
+    jp nz,.bad
+.policy_options_ok:
     ld a,(PCM_KIND)
     cp 3
     jr nz,.pcm_options
@@ -452,6 +486,14 @@ AUDIO_RUN:
     and 1
     jp z,AUDIO_UNSUPPORTED
 .precheck:
+    ld a,(CMD)
+    cp 1
+    jp z,.object
+    cp 6
+    jp z,.object
+    ld a,(PCM_KIND)
+    cp 3
+    call z,AUDIO_MOD_POLICY_CAPS
     call AUDIO_SNAPSHOT
     call AUDIO_SETTLE
     call AUDIO_REPLACE_CHECK
@@ -477,6 +519,10 @@ AUDIO_RUN:
     ld a,(RESP+2)
     cp 3
     jr z,.mod_caps
+    ld a,(AF00)
+    or a
+    jp nz,SYNTAX
+    ld a,(RESP+2)
     dec a
     cp 2
     jp nc,PCM_FORMAT_ERROR
@@ -497,6 +543,7 @@ AUDIO_RUN:
     ld (ACHANNELS),a
     jr .caps_done
 .mod_caps:
+    call AUDIO_MOD_POLICY_CAPS
     ld a,(AFX)
     or a
     jp nz,AUDIO_UNSUPPORTED
@@ -504,13 +551,17 @@ AUDIO_RUN:
     or a
     jp nz,AUDIO_UNSUPPORTED
     ld a,(RESP+37)
-    cp 4
-    jp nz,PCM_FORMAT_ERROR
-    ld a,(ACAPS+4)
-    and 8
-    jp z,AUDIO_UNSUPPORTED
-    ld a,4
     ld (ACHANNELS),a
+    ld b,8
+    cp 4
+    jr z,.mod_format
+    ld b,16
+    cp 8
+    jp nz,PCM_FORMAT_ERROR
+.mod_format:
+    ld a,(ACAPS+4)
+    and b
+    jp z,AUDIO_UNSUPPORTED
 .caps_done:
     ld a,(AFX)
     or a
@@ -570,6 +621,8 @@ AUDIO_RUN:
     ; is no longer live here. Preserve the validated MOD sentinel in the
     ; normalized channel count instead.
     ld a,(ACHANNELS)
+    cp 8
+    jr z,.play_mod
     cp 4
     jr z,.play_mod
     ld a,(AFX)
@@ -619,6 +672,13 @@ AUDIO_RUN:
     ld a,(AFLAGS)
     and 2
     rrca
+    ld b,a
+    ld a,(AF00)
+    or a
+    jr nz,.policy_selected
+    ld a,UG_MOD_IGNORE_F00
+.policy_selected:
+    or b
     ld (REQ+2),a
     ld a,49
     ld bc,3
@@ -658,6 +718,18 @@ AUDIO_RUN:
     call HEX_BYTES
 .printed:
     call NL
+    ld a,(ACHANNELS)
+    cp 4
+    jr c,.policy_printed
+    ld hl,audio_f00_ignore_text
+    ld a,(AF00)
+    cp UG_MOD_PAUSE_F00
+    jr nz,.policy_text
+    ld hl,audio_f00_pause_text
+.policy_text:
+    call SHOW
+    call NL
+.policy_printed:
     ld a,(AFLAGS)
     and 1
     jp z,PASS
@@ -1500,6 +1572,15 @@ AUDIO_UNSUPPORTED:
     ld hl,audio_unsupported_text
     ld (REASON),hl
     jp PROTOCOL
+    IFDEF APP_PLAY
+AUDIO_MOD_POLICY_CAPS:
+    ld a,(ACAPS+1)
+    and UG_MOD_F00_POLICY_FEATURE/256
+    ret nz
+    ld hl,audio_f00_firmware_text
+    ld (REASON),hl
+    jp PROTOCOL
+    ENDIF
 AUDIO_TIMEOUT:
     ld hl,audio_timeout_text
     ld (REASON),hl
@@ -1516,6 +1597,10 @@ stream_word: DB "STREAM",0
 audio_commands: DB "STREAM",0,11,"HANDLE",0,1,"STOP",0,2,"PAUSE",0,3,"RESUME",0,4,"FX",0,5,"FXHANDLE",0,6,"FXSTOP",0,7,"FXPAUSE",0,8,"FXRESUME",0,9,0
 audio_extensions: DB "RAW",0,1,"WAV",0,2,"MOD",0,3,0
 audio_options: DB "/WAIT",0,1,"/LOOP",0,2,"/REPLACE",0,4,"/STEAL",0,8,0
+audio_f00_options: DB "/F00:IGNORE",0,UG_MOD_IGNORE_F00,"/F00:PAUSE",0,UG_MOD_PAUSE_F00,0
+audio_f00_ignore_text: DB "MOD F00=IGNORE",0
+audio_f00_pause_text: DB "MOD F00=PAUSE",0
+audio_f00_firmware_text: DB "MOD_F00_POLICY_REQUIRES_NEW_FIRMWARE",0
 audio_prefixes: DB "/VOICE:",0,"/PRIORITY:",0,"/GAIN:",0,"/PAN:",0
 all_word: DB "ALL",0
     ELSE
@@ -1543,6 +1628,9 @@ audio_error_reason: DB "AUDIO_PLAYBACK_ERROR",0
     ASSERT ASNAP+64 <= AMEM
     ASSERT AFXSTAT+2+256*16 <= AFXOLD
     ASSERT AFXOLD+512 < 0x8000
+    IFDEF APP_PLAY
+    ASSERT AFXOLD+512 <= HEADER
+    ENDIF
     ASSERT ASTATS+64 < 0x8000
 
 audio_mode_text: DB "mode=8 ",0

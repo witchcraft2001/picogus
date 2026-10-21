@@ -16,10 +16,10 @@ for src in sources:
         name,usage,kind=line.rsplit('\t',2);frames[name.split(':')[-1]]=int(usage)
 # Conservative parser path plus reserve for SDK/PIO callbacks, exception frame
 # and unprofiled callers. This is a static guard, not a physical stack watermark.
-chain=('ug_minimal_dispatch','ug_storage_command','ug_mod_parse','mod_object_read','ug_psram_read')
+chain=('ug_minimal_dispatch','ug_storage_command','ug_mod_parse','ug_mod_parser_step','mod_object_read','ug_psram_read')
 assert all(n in frames for n in chain), 'required stack frame missing'
 subtotal=sum(frames[n] for n in chain);reserve=768
-assert frames['ug_mod_parse']<=384, 'MOD parser stack regression'
+assert frames['ug_mod_parser_step']<=384, 'MOD parser stack regression'
 assert subtotal+reserve<=2048, 'MOD parser path exceeds core1 stack reserve'
 render_chain=('ug_storage_render','ug_mixer_render','ug_mixer_render_stream','render_voice_samples','ug_fetch_byte','audio_mem_read','ug_psram_read')
 render_frames={n:max((v for k,v in frames.items() if k==n or k.startswith(n+'.')),default=0) for n in render_chain}

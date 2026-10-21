@@ -1,3 +1,11 @@
+MOD F00 extension (2026-10-21): PLAY_MOD opcode31/request3 bytes unchanged.
+CAPS.features bit12=MOD_F00_POLICY; CAPS44/SNAPSHOT64 bytes unchanged.
+Flags: bit0=LOOP, bit1=IGNORE_F00, bit2=PAUSE_F00; no policy bits follows live
+GS6A. Both policy bits or unknown bits return BAD_ARGUMENT without replacement.
+Explicit policy survives PAUSE/RESUME, SEEK, LOOP and later GS6A commands.
+Historical GS PLAY/6A/66 retain their rules. UGPLAY/UGPF MOD file/HANDLE default
+IGNORE, `/F00:IGNORE|PAUSE` selects explicitly; see [F00 notes](F00-README.md).
+
 # ULTRAGS: API 1.0 VLS1, 32 голоса и GS
 
 **2026-10-21: PROPLAY discovery/load/audio проверенного трека при Turbo OFF REAL_PASS.**

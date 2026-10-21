@@ -2,7 +2,7 @@
 ; Private standalone transport. Does not call UG_OPEN or bypass its mode8 gate.
 ; DSS IX entry ABI: length-prefixed command line. All DSS calls use closed windows.
     IFDEF UGTEST_S4
-    ORG 0x7600 ; combined BUS/PROTO/PCM/FX/MIX code, below B800 workspace
+    ORG 0x6000 ; combined BUS/PROTO/PCM/FX/MIX code, below B800 workspace
     ELSE
     ORG 0x8000
     ENDIF
@@ -121,76 +121,98 @@ ENTRY:
     ld l,e
     ld a,c
     cp 2
-    jr z,.suite_fx
+    jp z,.suite_fx
     cp 3
-    jr z,.suite_pcm
+    jp z,.suite_pcm
+    cp 4
+    jp z,.suite_mod8
     cp 5
-    jr nz,.suite_other
+    jp nz,.suite_other
     ld a,(hl)
     and 0xDF
     cp 'P'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'R'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'O'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'T'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'O'
-    jr z,.suite_native
-    jr .suite_other
+    jp z,.suite_native
+    jp .suite_other
+.suite_mod8:
+    ld a,(hl)
+    and 0xDF
+    cp 'M'
+    jp nz,.suite_other
+    inc hl
+    ld a,(hl)
+    and 0xDF
+    cp 'O'
+    jp nz,.suite_other
+    inc hl
+    ld a,(hl)
+    and 0xDF
+    cp 'D'
+    jp nz,.suite_other
+    inc hl
+    ld a,(hl)
+    cp '8'
+    jp z,.suite_native
+    jp .suite_other
 .suite_pcm:
     ld a,(hl)
     and 0xDF
     cp 'M'
-    jr z,.suite_mix
+    jp z,.suite_mix
     cp 'P'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'C'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'M'
-    jr z,.suite_native
-    jr .suite_other
+    jp z,.suite_native
+    jp .suite_other
 .suite_mix:
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'I'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'X'
-    jr z,.suite_native
-    jr .suite_other
+    jp z,.suite_native
+    jp .suite_other
 .suite_fx:
     ld a,(hl)
     and 0xDF
     cp 'F'
-    jr nz,.suite_other
+    jp nz,.suite_other
     inc hl
     ld a,(hl)
     and 0xDF
     cp 'X'
-    jr nz,.suite_other
+    jp nz,.suite_other
 .suite_native:
     pop hl
     jp S4TEST.ENTRY
@@ -2165,7 +2187,7 @@ short_text: DB "SPEED=INSUFFICIENT_INTERVAL resolution_seconds=1",13,10,0
 skip_text: DB "SKIP SLOW reason=S1_SRAM_FIXED_ONLY",13,10,"SKIP ALIAS reason=S5_PENDING",13,10,"SKIP STACK reason=UNSAFE_NMI",13,10,0
 help_text:
     IFDEF UGTEST_S4
-    DB "UGTEST PROTO|PCM|FX|MIX [/VOICES:N /SECONDS:N] [/REAL] (ULTRAGS firmware)",13,10
+    DB "UGTEST PROTO|PCM|FX|MIX|MOD8 [/VOICES:N /SECONDS:N] [/REAL] (ULTRAGS firmware)",13,10
     ENDIF
     DB "UGTEST BUS /REAL [/MIRROR] | UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024",13,10
 	DB "/METHOD:ALL|FIXED /DIRECTION:BOTH|WRITE|READ /CHECK:NONE|CRC|BOTH /SOAK:seconds",13,10

@@ -76,7 +76,7 @@ test('file read error cleans upload','UGPLAY','FOUR.MOD',5,{files:{'FOUR.MOD':mo
 test('lost PLAY_MOD reply reconciled once','UGPLAY','FOUR.MOD /LOOP',0,{files:{'FOUR.MOD':mod4()},noReplyOp:49,check:c=>c.calls.filter(op=>op===49).length===1&&c.foreground?.tracker});
 test('WAIT ESC stops own MOD','UGPLAY','FOUR.MOD /WAIT /LOOP',10,{files:{'FOUR.MOD':mod4()},onDss:(st,c,m)=>{if(st.c===0x31&&c.foreground)m.escAfter=0;},check:c=>!c.foreground&&c.objects.get(1).state===1&&!c.objects.get(1).pins});
 const f00=mod4();f00[1086]|=15;f00[1087]=0;
-({card}=test('F00 becomes foreground PAUSE','UGPLAY','FOUR.MOD',0,{files:{'FOUR.MOD':f00},check:c=>c.foreground?.paused}));
+({card}=test('F00 becomes foreground PAUSE','UGPLAY','FOUR.MOD /F00:PAUSE',0,{files:{'FOUR.MOD':f00},check:c=>c.foreground?.paused}));
 test('F00 RESUME is accepted','UGPLAY','RESUME',0,{card,check:c=>c.foreground&&!c.foreground.paused});
 for(const slot of [0,1])for(const iff of [0,1])for(const turbo of [false,true])for(const hardware of [false,true]){
  const o={slot,iff,turbo,hardware,page3:0x71+slot},tag=`${slot}/${iff}/${turbo}/${hardware}`;

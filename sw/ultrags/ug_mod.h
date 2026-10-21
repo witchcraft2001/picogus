@@ -5,7 +5,7 @@
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
- * Native Ultra GS MOD4 reader and tracker. All source bytes remain in the
+ * Native Ultra GS MOD4/MOD8 reader and tracker. All source bytes remain in the
  * immutable object store and are accessed through a bounded reader callback.
  */
 #pragma once
@@ -24,7 +24,7 @@ typedef struct {
 typedef struct {
     uint32_t pattern_offset, sample_offset, file_size;
     ug_mod_sample samples[31];
-    uint8_t song_length, restart, order[128];
+    uint8_t song_length, restart, order[128], channels;
 } ug_mod_info;
 
 typedef struct {
@@ -42,9 +42,10 @@ typedef struct {
 
 typedef struct {
     ug_mod_info info;
-    ug_mod_channel channel[4];
+    ug_mod_channel channel[8];
     uint16_t order;
     uint8_t row, tick, speed, bpm, paused, playing, loop_song, f00_mode, pattern_delay;
+    uint8_t f00_policy; /* PLAY_MOD explicit bits; zero follows legacy 6A. */
     uint8_t dirty_note, dirty_volume;
     uint32_t tempo_fraction;
     uint8_t pending_speed, pending_bpm, error;
@@ -54,10 +55,16 @@ typedef struct {
     void *read_ctx;
 } ug_mod_player;
 
-/* Validate a 31-instrument M.K./M!K! layout. -1=format, -2=backend read error. */
+/* Cooperative SEAL validation: one <=256-byte read per step, including events.
+ * The caller owns the descriptor and cursor until completion. */
+typedef struct { uint32_t cursor,total; uint8_t stage,sample; } ug_mod_parser;
+void ug_mod_parser_init(ug_mod_parser *p, ug_mod_info *out, uint32_t size);
+/* 0=pending, 1=done, -1=format, -2=read error. */
+int ug_mod_parser_step(ug_mod_parser *p, ug_mod_info *out, ug_mod_read_fn read, void *ctx);
+/* Validate a 31-instrument M.K./M!K!/8CHN header/layout. -1=format, -2=backend read error. */
 int ug_mod_parse(ug_mod_info *out, ug_mod_read_fn read, void *ctx, uint32_t size);
 void ug_mod_start(ug_mod_player *p, const ug_mod_info *info, ug_mod_read_fn read,
-                  void *ctx, bool loop, uint8_t f00_mode);
+                  void *ctx, uint8_t flags, uint8_t legacy_f00_mode);
 void ug_mod_stop(ug_mod_player *p);
 void ug_mod_tick(ug_mod_player *p);
 /* Stage an atomic speed/BPM update at the next tick boundary. */

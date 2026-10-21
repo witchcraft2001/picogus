@@ -1,3 +1,12 @@
+MOD F00 (2026-10-21): UGPLAY/UGPF default to IGNORE; `/F00:PAUSE` is explicit.
+New firmware capability bit12 required; [Tester Notes](docs/F00-README.md).
+HOST_PASS / REAL_PENDING; current kit: `build/CURRENT.*`.
+
+S8a (2026-10-21): MOD8/8CHN, independent FX and background storage are implemented.
+HOST_PASS / REAL_PENDING; new firmware required. [Tester Notes](docs/S8A-README.md).
+Current kit: build/CURRENT.ZIP, build/CURRENT.UF2, build/CURRENT.IMG.
+S8c streaming optimization is deferred; confirmed 44100/S16/stereo REAL_FAIL remains open.
+
 # Утилиты ULTRAGS для Sprinter
 
 Сборка и готовый комплект всегда находятся в **`build/`** от корня репозитория.

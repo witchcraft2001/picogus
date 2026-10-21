@@ -33,7 +33,7 @@ function run(app,cli,o={}){
 }
 const opts='/TYPE:RAW /RATE:48000 /CH:1 /BITS:8 /FMT:U8';
 for(const app of ['UGCFG','UGMEM','UGLOAD','UGDUMP','UGPLAY','UGMON','UGTEST'])run(app,'/?');
-for(const cli of ['PCM /VOICES:32','FX /SECONDS:1','MIX /VOICES:0','MIX /VOICES:257','MIX /SECONDS:0','MIX /VOICES:2 /VOICES:3'])run('UGTEST',cli,{expected:1});
+for(const cli of ['PCM /VOICES:32','MIX /VOICES:0','MIX /VOICES:257','MIX /SECONDS:0','MIX /VOICES:2 /VOICES:3'])run('UGTEST',cli,{expected:1});
 for(const slot of [0,1])for(const iff of [0,1])for(const turbo of [false,true]){
  const c=card({mode:1});run('UGCFG',`ULTRAGS /GSALIAS ON /SLOT:${slot}`,{card:c,slot,iff,turbo});assert(c.gs);
  run('UGCFG',`/GSALIAS OFF /SLOT:${slot}`,{card:c,slot,iff,turbo});assert(!c.gs);

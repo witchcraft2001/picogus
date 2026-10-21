@@ -318,7 +318,7 @@ int main(int argc,char **argv) {
     transport=0;
     ug_storage_gs_reset(false,time_us_32());
     settings.UltraGS.bulkAlias=0x280;
-    rpc(1,0,0,44);CHECK(ug_get32(r)==(1519|UG_STREAM_FEATURE) && ug_get32(r+4)==15 && (r[24]|r[25]<<8)==32);
+    rpc(1,0,0,44);CHECK(ug_get32(r)==(1519|UG_STREAM_FEATURE|UG_MOD_F00_POLICY_FEATURE) && ug_get32(r+4)==31 && (r[24]|r[25]<<8)==32);
     const unsigned sizes[]={1,2,31,32,33,255,256,257,1023,1024};
     for(unsigned capacity=1u<<20;capacity<=8u<<20;capacity*=2) {
         ug_storage_publish(capacity,0,0);

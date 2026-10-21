@@ -101,6 +101,12 @@ S6TEST_VALIDATE:
     ld a,(CMD)
     cp 10
     ret z
+    cp 9
+    jr nz,.bad
+    ld a,(S6OPTS)
+    cp 2
+    ret z
+.bad:
     scf
     ret
 S6TEST_RUN:
@@ -129,6 +135,16 @@ S6TEST_RUN:
     jp nz,PROTOCOL
     call S6TEST_SNAPSHOT
     jp c,RPC_ERROR
+    ld a,(CMD)
+    cp 9
+    jr nz,.idle_test
+    ld a,(RESP+24)
+    cp 1
+    jp z,S8TEST_FX
+    ld a,(S6OPTS)
+    or a
+    jp nz,S6TEST_BUSY
+.idle_test:
     ld a,(RESP+24)
     dec a
     cp 2
@@ -256,7 +272,12 @@ S6TEST_PLAY_FX:
     ld a,128
     ld (REQ+4),a
     ld (REQ+6),a
-    ld a,1                    ; test assets deliberately avoid32-voice clipping
+    ld a,(S8MODE)
+    or a
+    ld a,1                    ; full-pool test avoids32-voice clipping
+    jr z,.gain
+    ld a,64                   ; four quiet S16 S8a tones must be audible
+.gain:
     ld (REQ+5),a
     ld a,2
     ld (REQ+7),a
@@ -388,9 +409,16 @@ S6TEST_MIX:
 .more:
     ; A repeated verified read of our playing asset exercises the background
     ; transfer without altering another object or restarting playback.
+    ld a,(S8MODE)
+    or a
+    jr z,.plain_read
+    call S8TEST_BACKGROUND
+    jr .stats
+.plain_read:
     ld a,1
     ld (VERIFY),a
     call READ_BLOCK
+.stats:
     ld a,3
     ld bc,0
     ld e,64
@@ -441,6 +469,9 @@ S6TEST_MIX:
     djnz .same
     ret
 .done:
+    ld a,(S8MODE)
+    or a
+    jp nz,S8TEST_NEXT_PHASE
     ld hl,s6_mix_pass
     call SHOW
     jp PASS

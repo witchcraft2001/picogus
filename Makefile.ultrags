@@ -383,3 +383,27 @@ s8c-check: dss s2-host s8c-host
 
 s8c-arm:
 	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/s8c-arm.py --build $(BUILD)
+
+# S8a native MOD8 and concurrent storage; physical acceptance remains separate.
+.PHONY: s8a-host s8a-fixtures s8a-exe s8a-package
+s8a-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8a-host.py --build $(BUILD)/host/s8a
+s8a-fixtures:
+	$(NODE) $(ROOT)/tools/ultrags/gen-s8a.mjs $(BUILD)/s8a-test-audio
+s8a-exe: dss s8a-fixtures
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-s8a.mjs $(ROOT) $(BUILD)
+s8a-package:
+	$(NODE) $(ROOT)/tools/ultrags/package-s8a.mjs
+
+# Explicit MOD F00 policy: immutable originals are private inputs, not payload.
+.PHONY: f00-host f00-bruno f00-exe
+f00-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/f00-host.py --build $(BUILD)/host/f00
+f00-bruno: f00-host
+	@test -n "$(UG_F00_MOD)" || { echo "Set UG_F00_MOD to the original bruno_-_bst.mod"; exit 2; }
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/f00-bruno.py --build $(BUILD)/host/f00 --mod "$(UG_F00_MOD)"
+f00-exe: dss f00-bruno
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-fast.py --build $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
+	UG_F00_MOD="$(UG_F00_MOD)" $(NODE) $(ROOT)/tests/ultrags/dss/run-f00.mjs $(ROOT) $(BUILD)

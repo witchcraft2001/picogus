@@ -28,6 +28,8 @@ static struct {
     uint32_t crc,cursor;
     uint8_t buffer[256];
 } legacy;
+static ug_mod_info legacy_mod_info;
+static ug_mod_parser legacy_mod_parser;
 static unsigned legacy_busy;
 static void legacy_publish(void) {
     __atomic_store_n(&legacy_busy,(legacy.loading || legacy.post_need || legacy.reply_size?1u:0u)|(legacy.loading?2u:0u),__ATOMIC_RELEASE);
@@ -103,6 +105,7 @@ static bool legacy_close(uint8_t *out,uint8_t *error) {
         if(legacy.stream_error) legacy.buffered=0;
         else { uint8_t e=legacy_flush();if(e && !legacy.stream_error) legacy.stream_error=e; }
         legacy.closing=true;legacy.cursor=0;legacy.crc=UINT32_MAX;
+        ug_mod_parser_init(&legacy_mod_parser,&legacy_mod_info,o?o->uploaded:0);
         if(!o || !o->uploaded) { if(!legacy.stream_error) legacy.stream_error=UG_ERR_FORMAT; }
         if(o) { o->size=o->uploaded;o->reserved=(o->size+15)&~15u; }
     }
@@ -114,9 +117,10 @@ static bool legacy_close(uint8_t *out,uint8_t *error) {
     }
     if(o && !legacy.stream_error) {
         if(legacy.kind==3) {
-            int parsed=ug_mod_parse(&seal_mod_info,mod_object_read,o,o->size);
-            if(parsed) legacy.stream_error=parsed==-2?UG_ERR_PSRAM:UG_ERR_FORMAT;
-            else o->mod_valid=1;
+            int parsed=ug_mod_parser_step(&legacy_mod_parser,&legacy_mod_info,mod_object_read,o);
+            if(!parsed) return false;
+            if(parsed<0) legacy.stream_error=parsed==-2?UG_ERR_PSRAM:UG_ERR_FORMAT;
+            else { o->mod_valid=1;o->mod_channels=legacy_mod_info.channels; }
         } else {
             o->pcm=(ug_pcm_info){.rate=16574,.channels=1,.bits=8,.sample_format=legacy.sign?0:1,
                 .data_offset=0,.data_length=o->size,.frames=o->size};o->pcm_valid=1;
@@ -292,7 +296,10 @@ bool ug_legacy_command(uint8_t cmd,bool has_pre,uint8_t pre,uint8_t *out,bool *d
         break;
     case 0x67:case 0x68:legacy.reply[0]=cmd==0x67?mod_player.speed:mod_player.bpm;legacy.reply_size=1;break;
     case 0x69:if(legacy_ticks==UG_AUDIO_EVENTS)e=UG_ERR_BUSY;else if(foreground.active && foreground.kind==2)++legacy_ticks;break;
-    case 0x6a:*out=legacy_f00;legacy_f00=pre!=0;mod_player.f00_mode=legacy_f00;break;
+    case 0x6a:
+        *out=legacy_f00;legacy_f00=pre!=0;
+        if(!mod_player.f00_policy) mod_player.f00_mode=legacy_f00;
+        break;
     case 0x6b:legacy.post_op=cmd;legacy.post[0]=has_pre?pre:0;legacy.post_used=1;legacy.post_need=2;break;
     case 0xd2:e=UG_ERR_STATE;*out=0;break;
     case 0xf5:legacy_automatic=false;break;
