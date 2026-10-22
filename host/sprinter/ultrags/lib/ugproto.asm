@@ -1540,11 +1540,29 @@ UG_SNAPSHOT:
 ; WC/WN sits between short independent ISA accesses).
 ;
 ; UG_GS_POLL_CB: out CF=0 -> A=GS_CMDSTAT; CF=1 window error
+    IFDEF UG_GS_TURBO_SLOT
+; Only these four GS primitives request Turbo. Preserve the native BASE.
+UG_GS_WIN_OPEN:
+    ld a,1
+    ld (UG_GS_TURBO_WINDOW),a
+    call UG_WIN_OPEN
+    push af
+    xor a
+    ld (UG_GS_TURBO_WINDOW),a
+    pop af
+    ret
+    ELSE
+UG_GS_WIN_OPEN EQU UG_WIN_OPEN
+    ENDIF
 UG_GS_POLL_CB:
-	call	UG_WIN_OPEN
+	call	UG_GS_WIN_OPEN
 	ret	c
-	ld	a,UG_REG_GS_CMDSTAT
-	call	UG_REG_R
+	IFDEF UG_GS_TURBO_SLOT
+    ld a,(0xC0BB)
+    ELSE
+    ld a,UG_REG_GS_CMDSTAT
+    call UG_REG_R
+    ENDIF
 	push	af
 	call	UG_ISA_CLOSE
 	pop	af
@@ -1669,11 +1687,15 @@ UG_GS_WAIT_ERROR:
 ; UG_GS_SD: in A=byte -> GS_DATA write (bounded window)
 UG_GS_SD:
 	ld	(UGREQ.GPRE),a		; keep the data byte across WIN_OPEN
-	call	UG_WIN_OPEN
+	call	UG_GS_WIN_OPEN
 	ret	c			; propagate CF=1/A=err
 	ld	a,(UGREQ.GPRE)
-	ld	e,UG_REG_GS_DATA
-	call	UG_REG_W
+	IFDEF UG_GS_TURBO_SLOT
+    ld (0xC0B3),a
+    ELSE
+    ld e,UG_REG_GS_DATA
+    call UG_REG_W
+    ENDIF
 	call	UG_ISA_CLOSE
 	or	a
 	ret
@@ -1681,21 +1703,29 @@ UG_GS_SD:
 ; UG_GS_SC: in A=command -> GS_CMDSTAT write (bounded window)
 UG_GS_SC:
 	ld	(UGREQ.GPRE),a
-	call	UG_WIN_OPEN
+	call	UG_GS_WIN_OPEN
 	ret	c
 	ld	a,(UGREQ.GPRE)
-	ld	e,UG_REG_GS_CMDSTAT
-	call	UG_REG_W
+	IFDEF UG_GS_TURBO_SLOT
+    ld (0xC0BB),a
+    ELSE
+    ld e,UG_REG_GS_CMDSTAT
+    call UG_REG_W
+    ENDIF
 	call	UG_ISA_CLOSE
 	or	a
 	ret
 ;
 ; UG_GS_GD: out CF=0 -> A=GS_DATA byte (bounded window)
 UG_GS_GD:
-	call	UG_WIN_OPEN
+	call	UG_GS_WIN_OPEN
 	ret	c
-	ld	a,UG_REG_GS_DATA
-	call	UG_REG_R
+	IFDEF UG_GS_TURBO_SLOT
+    ld a,(0xC0B3)
+    ELSE
+    ld a,UG_REG_GS_DATA
+    call UG_REG_R
+    ENDIF
 	push	af
 	call	UG_ISA_CLOSE
 	pop	af

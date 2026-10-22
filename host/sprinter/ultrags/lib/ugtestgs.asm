@@ -8,6 +8,7 @@ GTROW EQU GSV+21
 GTICK EQU GSV+22
 GTPCM_HANDLE EQU GSV+23 ; ownership survives a lost PLAY_PCM acknowledgement
 GTCLEAN_TICKS EQU GSV+25
+GTPCM_STOP_SENT EQU GSV+26
 GT_OPTION:
     ld de,gt_reset_option
     call EQUAL
@@ -101,6 +102,11 @@ GT_RUN:
     ld a,127
     call GT_SD
     call GT_CLOSE
+    IFDEF UG_GS_TURBO_SLOT
+    ld hl,gt_fx_signed
+    ld bc,3
+    call GT_READBACK
+    ENDIF
     ld hl,(GTHANDLE)
     ld (REQ),hl
     ld a,18
@@ -265,6 +271,11 @@ GT_RUN:
     ld a,192
     call GT_SD
     call GT_CLOSE
+    IFDEF UG_GS_TURBO_SLOT
+    ld hl,gt_fx_pause
+    ld bc,2
+    call GT_READBACK
+    ENDIF
     call GT_PASS
     call GT_FREE_LEGACY
     jp GT_MOD4
@@ -314,6 +325,11 @@ GT_MOD4:
     or c
     jr nz,.upload
     call GT_CLOSE
+    IFDEF UG_GS_TURBO_SLOT
+    ld hl,S8MOD_DATA
+    ld bc,2140
+    call GT_READBACK
+    ENDIF
     ld a,0x31
     ld bc,0x0100
     ld e,1
@@ -398,6 +414,11 @@ GT_MOD4:
     call GS_INFO
     ld hl,(RESP+2)
     ld (GTHANDLE),hl
+    IFDEF UG_GS_TURBO_SLOT
+    ld hl,gt_fx_pcm
+    ld bc,2
+    call GT_READBACK
+    ENDIF
     ld a,0x48
     ld bc,0x0100
     ld e,0
@@ -485,6 +506,75 @@ GT_FOUR:
     call GS_CALL
     jp c,GS_RPC_ERROR
     ret
+    IFDEF UG_GS_TURBO_SLOT
+; Compare every uploaded byte through the native read API (Turbo OFF).
+; Expected bytes remain in application RAM/code; never touch DSS resident RAM.
+GT_READBACK:
+    push hl
+    ld hl,(REASON)
+    ex (sp),hl
+    push hl
+    push bc
+    ld hl,gt_readback_text
+    call GT_BEGIN
+    ld hl,0
+    ld (UG_OFFSET),hl
+    ld (UG_OFFSET+2),hl
+    pop bc
+    pop hl
+.block:
+    push bc
+    push hl
+    ld a,b
+    or a
+    jr z,.short
+    ld bc,256
+.short:
+    push bc
+    ld hl,(GTHANDLE)
+    ld de,BACK
+    xor a
+    call UG_READ
+    jp c,GS_RPC_ERROR
+    pop bc
+    pop hl
+    push bc
+    ld de,BACK
+.compare:
+    ld a,(de)
+    cp (hl)
+    jp nz,VERIFY_ERROR
+    inc hl
+    inc de
+    dec bc
+    ld a,b
+    or c
+    jr nz,.compare
+    pop de
+    pop bc
+    push hl
+    ld hl,(UG_OFFSET)
+    add hl,de
+    ld (UG_OFFSET),hl
+    ld h,b
+    ld l,c
+    or a
+    sbc hl,de
+    ld b,h
+    ld c,l
+    pop hl
+    ld a,b
+    or c
+    jr nz,.block
+    call GT_PASS
+    pop hl
+    ld (REASON),hl
+    ret
+gt_readback_text: DB "FULL_READBACK",0
+gt_fx_signed: DB 128,0,127
+gt_fx_pause: DB 128,192
+gt_fx_pcm: DB 64,192
+    ENDIF
 GT_PENDING:
     call GS_INFO
     ld hl,(RESP+4)
@@ -534,6 +624,8 @@ GT_CLEANUP:
     ; Reconcile by session + object, never stop an unrelated play_id.
     ld a,32
     ld (GTCLEAN_TICKS),a
+    xor a
+    ld (GTPCM_STOP_SENT),a
 .settle_pcm:
     ld a,UG_OP_SNAPSHOT
     ld bc,0
@@ -551,6 +643,15 @@ GT_CLEANUP:
     or a
     sbc hl,de
     jr nz,.next_pcm
+    ; CONTROL acknowledges enqueueing. A following SNAPSHOT may still show
+    ; this same instance until core1 applies STOP. Submit STOP only once;
+    ; a duplicate can return STATE after the first one has completed and
+    ; would abort cleanup before freeing our legacy fixtures.
+    ld a,(GTPCM_STOP_SENT)
+    or a
+    jr nz,.next_pcm
+    inc a
+    ld (GTPCM_STOP_SENT),a
     ld hl,(RESP+20)
     ld (REQ),hl
     xor a

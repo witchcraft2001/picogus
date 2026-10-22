@@ -29,7 +29,7 @@ for build in (a.build_a, a.build_b):
     gs_fast = 'UG_GS_STATUS_FAST:BOOL=ON' in cache
     assert not (fast and probe)
     assert not gs_fast or fast
-    identity = ('pg-ultrags-gsfast-r13' if gs_fast else 'pg-ultrags-cfgfast-r12' if fast else
+    identity = ('pg-ultrags-gsturbo-r17' if gs_fast else 'pg-ultrags-cfgfast-r12' if fast else
                 'pg-ultrags-cfgprobe-r11' if probe else 'pg-ultrags-compat-r10' + ('-led' if led else '')) + ' v4.1.1'
     assert ('UG_CONFIG_CATALOG_FAST=1' in defines) == fast
     assert ('UG_GS_STATUS_FAST=1' in defines) == gs_fast
@@ -71,7 +71,16 @@ for build in (a.build_a, a.build_b):
         assert read(found[0], n * 2) == struct.pack('<' + 'H' * n, *values)
         words[name] = n
         inputs[str(path)] = digest(path)
-        if probe or fast:
+        if gs_fast and header == 'ug_compat_ior.pio.h':
+            # R17 classifies the GS alias block in PIO: the IOR words differ
+            # from R10 by design. Require the header to match a fresh pioasm run.
+            fresh = fw / 'compat-linked-fresh.pio.h'
+            subprocess.run([str(fw / 'pioasm-install/pioasm/pioasm'), '-o', 'c-sdk', '-v', '0',
+                            'sw/ultrags/ug_compat_ior.pio', str(fresh)], check=True)
+            fresh_array = re.search(name + r'\[\] = \{(.*?)\};', fresh.read_text(), re.S)[1]
+            assert values == [int(v, 16) for v in re.findall(r'^\s*(0x[0-9a-fA-F]+),', fresh_array, re.M)]
+            inputs['sw/ultrags/ug_compat_ior.pio'] = digest(Path('sw/ultrags/ug_compat_ior.pio'))
+        elif probe or fast:
             prior = Path('build/config-r10-delivery/evidence/build-a') / header
             old_array = re.search(name + r'\[\] = \{(.*?)\};', prior.read_text(), re.S)[1]
             old_values = [int(v, 16) for v in re.findall(r'^\s*(0x[0-9a-fA-F]+),', old_array, re.M)]
@@ -112,7 +121,7 @@ for build in (a.build_a, a.build_b):
         probe_check = {'sampleLabel': hex(start), 'submittedLabel': hex(end),
                        'gpioAddress': '0xd0000004', 'fifoAddress': '0x50200014',
                        'dataCases': 256, 'adjacentLoadStore': True,
-                       'pioIdenticalToR10': True, 'words': list(insns)}
+                       'pioIdenticalToR10': not gs_fast, 'words': list(insns)}
     for name in ('guard_irq', 'ug_compat_note_write', 'ug_compat_sync_ports',
                  'ug_handshake_guard_core1', 'firmware_string'):
         assert 0x20000000 <= symbols[name] < 0x20042000, name

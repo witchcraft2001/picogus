@@ -20,20 +20,20 @@ pio=module('pio_model',ROOT/'tools/ultrags/pio-isa-check.py')
 def digest(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
 class ConfigRead(audio.Machine):
-    def __init__(self,elf,nm,header,port,deadline=128):
+    def __init__(self,elf,nm,header,port,deadline=128,gs=False):
         super().__init__(elf,nm)
         self.uc.mem_map(0x50200000,0x4000)
         words,self.labels,wrap=pio.program(header,'ug_handshake_ior')
         linked=next(v for k,v in self.sym.items() if k.endswith('ug_handshake_ior_program_instructions'))
         assert bytes(self.uc.mem_read(linked,64))==struct.pack('<32H',*words),'PIO header does not match the linked ARM peer'
-        self.sm=pio.native(words,self.labels,wrap,0x2a0,0xffff)
+        self.sm=pio.native(words,self.labels,wrap,0x2a0,0xffff,gs=gs)
         self.sm.port=port;self.sm.ior=0
         for _ in range(64):
             self.sm.step()
             if self.sm.pc==self.labels['parked']:break
-        assert len(self.sm.rx)==(1 if 'address_only' in self.labels else 2) and not self.sm.hold and not self.sm.ads
+        assert len(self.sm.rx)==(1 if 'address_only' in self.labels else 2) and bool(self.sm.hold)==gs and not self.sm.ads
         self.sm.rx.clear() # production caller drained the address-only or legacy pair
-        self.now=0;self.deadline=deadline;self.sample=None;self.first_hold=None
+        self.now=0;self.deadline=deadline;self.sample=None;self.first_hold=None;self.iow=1
         self.counting=True
         self.uc.hook_add(UC_HOOK_CODE,self.step_arm)
         self.uc.hook_add(UC_HOOK_MEM_READ,self.mmio_read,begin=0xd0000000,end=0xd00001ff)
@@ -50,7 +50,7 @@ class ConfigRead(audio.Machine):
         for _ in range(n):self.tick()
     def mmio_read(self,uc,access,address,size,value,_):
         if address==0xd0000004:
-            pins=(self.sm.port<<6)|(self.sm.ior<<5)|(1<<4)
+            pins=(self.sm.port<<6)|(self.sm.ior<<5)|(self.iow<<4)
             uc.mem_write(address,struct.pack('<I',pins))
         if 0xd0000100<=address<0xd0000180:uc.mem_write(address,struct.pack('<I',1))
     def mmio_write(self,uc,access,address,size,value,_):

@@ -89,6 +89,10 @@ UG_ISA_OPEN:
 	ld	(UGCTX.PAGE3SAVE),a
 	ld	bc,UG_PORT_SYS_RAM
 	ld	a,2
+    IFDEF UG_GS_TURBO_SLOT
+    ld a,(UG_GS_TURBO_WINDOW)
+    add a,2
+    ENDIF
 	out	(c),a
 	ld	bc,UG_PORT_SYSTEM
 	; switch SYSTEM to the ISA mapping mode
@@ -110,6 +114,9 @@ UG_ISA_OPEN:
 	ret
 
 ; ----------------------------------------------------------- UG_ISA_CLOSE
+    IFDEF UG_GS_TURBO_SLOT
+UG_GS_TURBO_WINDOW: DB 0
+    ENDIF
 ; Restores PAGE3/IFF and the canonical DSS mapping and Turbo permission.
 ; in : - ; out: CF=0 closed; CF=1 A=UG_ERR_STATE was not open
 ; clobbers AF,BC

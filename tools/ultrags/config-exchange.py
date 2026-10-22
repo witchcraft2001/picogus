@@ -12,11 +12,11 @@ evidence, not a PIO or hardware timing measurement.
 """
 import argparse, json, subprocess, hashlib, shlex
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--catalog',type=Path,required=True);p.add_argument('--trace',action='store_true');p.add_argument('--compat',action='store_true');p.add_argument('--probe',action='store_true');p.add_argument('--fast',action='store_true');p.add_argument('--gs-fast',action='store_true');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--catalog',type=Path,required=True);p.add_argument('--trace',action='store_true');p.add_argument('--compat',action='store_true');p.add_argument('--probe',action='store_true');p.add_argument('--fast',action='store_true');p.add_argument('--gs-fast',action='store_true');p.add_argument('--turbo',action='store_true');a=p.parse_args()
 assert not (a.trace and a.compat), 'COMPAT has no CONFIG trace registers'
 assert not a.probe or a.compat, 'probe requires COMPAT'
-assert not a.fast or (a.compat and not a.probe), 'fast requires COMPAT without probe'
-assert not a.gs_fast or (a.compat and a.fast and not a.probe), 'GS fast requires COMPAT catalogue fast'
+assert not a.fast or ((a.compat or a.turbo) and not a.probe), 'fast requires COMPAT without probe'
+assert not a.gs_fast or ((a.compat or a.turbo) and a.fast and not a.probe), 'GS fast requires COMPAT catalogue fast'
 r=Path(__file__).resolve().parents[2];a.build=a.build.resolve();a.build.mkdir(parents=True,exist_ok=True)
 subprocess.run(['node',str(r/'tools/ultrags/gen-wire.mjs'),str(r/'tools/ultrags/wire-schema.json'),str(a.build/'gen')],check=True,stdout=subprocess.DEVNULL)
 s=(r/'sw/picogus.cpp').read_text()
@@ -65,7 +65,7 @@ static unsigned pending_write,queued_iow,queued_ior,early_wait_enabled=1,force_f
 static unsigned write_waited,write_done,inject_write_loss,native_byte=~0u,second_byte_only;
 static unsigned inject_config_expired,inject_config_iow_delay,inject_config_expire_on_write;
 static unsigned gs_fast_watch,gs_fast_stores,gs_fast_accounts;
-#if defined(UG_CONFIG_TRACE) || defined(UG_ISA_COMPAT_READ)
+#if defined(UG_CONFIG_TRACE) || defined(UG_ISA_COMPAT_READ) || defined(UG_ISA_EARLY_READ)
 static unsigned gpio_get_all(void){
  unsigned pins=(pending_port<<6)|16|(inject_config_expired?32:0);
 #ifdef UG_CONFIG_PROBE
@@ -94,6 +94,13 @@ static unsigned pio_sm_get_blocking(int p,int sm){(void)p;unsigned port=sm==IOW_
 bool ug_handshake_capture(unsigned sm,uint16_t port,bool owned){if(sm==IOW_PIO_SM){write_waited=owned;return owned;}if(port>=0x1d0&&port<=0x1d2&&inject_config_expired){late=1;return false;}waited=owned||(port>=0x1d0&&port<=0x1d2);return waited;}
 bool ug_handshake_read_active(void){return !inject_config_expired;}
 void ug_handshake_poll(void){}
+bool ug_handshake_faulted;
+static unsigned prefetched_read,prefetched_word;
+static bool pio_sm_is_rx_fifo_empty(int p,int sm){(void)p;return sm==1?!queued_ior:!queued_iow;}
+static unsigned pio_encode_nop(void){return 0xa042;}
+static unsigned pio_encode_sideset_opt(unsigned n,unsigned b){assert(n==2&&b==1);return 0x1400;}
+static void pio_sm_exec(int p,int sm,unsigned word){(void)p;assert(sm==1&&word==0xb442);waited=1;}
+void ug_handshake_prefetch_read(uint32_t raw,bool held){(void)held;assert(!prefetched_read);prefetched_word=raw;prefetched_read=1;}
 #define ISA_PIO_PUT pio_sm_put
 
 static void pio_sm_put(int p,int sm,unsigned v){(void)p;(void)sm;if(v==IO_WAIT||v==ug_compat_read_entry)waited=1;else if(v&IOR_SET_VALUE){
@@ -107,7 +114,7 @@ static void pio_sm_put(int p,int sm,unsigned v){(void)p;(void)sm;if(v==IO_WAIT||
   assert(ug_cfg.index==fast_expected_index);fast_stores++;
   if(fast_end_after_store)inject_config_expired=1;
  }
- read_value=late?255:v&255;}}
+ read_value=late?255:v&255;}else if(v==IO_END)waited=0;}
 static void ug_iow_verdict(unsigned v){if(inject_config_expire_on_write&&v==IO_END)inject_config_expired=1;if(inject_config_iow_delay&&!waited)late=1;if(v==IO_WAIT)write_waited=1;else write_done=1;}
 /* Finite failure injection: the host samples before a delayed native
  * decoder returns. No value is replayed; the card still consumes its byte.
@@ -128,9 +135,12 @@ static void write_picogus_high(uint8_t v){ug_config_write(&ug_cfg,true,v,true);}
 '''
 code+='static void apply_iow(uint32_t iow_read){'+iow.replace('ug_minimal_write_decoded(', 'checked_native_write_decoded(')+'\n}\n'
 code+='static void bus_write(unsigned port,unsigned value){write_waited=write_done=0;apply_iow((port<<8)|value);assert(write_done);}\n'
-code+='static uint16_t ug_ior_port;static bool ug_ior_pending,ug_ior_owned,ug_ior_service;\n'
+code+='uint32_t ug_handshake_take_write(uint32_t *data){uint32_t raw=pio_sm_get(pio0,0);*data=pio_sm_get_blocking(pio0,0);return raw;}\n'
+code+='uint32_t ug_handshake_take_read(int *reg,bool *service){*reg=ug_native_reg(pending_port);uint32_t raw=prefetched_read?prefetched_word:pio_sm_get(pio0,1);prefetched_read=0;*service=ug_handshake_capture(1,pending_port,ug_handshake_native(1,raw));return raw; }\n'
+code+='bool ug_handshake_reply(uint32_t value){if(!ug_handshake_read_active())return false;pio_sm_put(pio0,1,value);return true;}\n'
+code+='static int ug_ior_reg;static uint16_t ug_ior_port;static bool ug_ior_pending,ug_ior_owned,ug_ior_service;\n'
 code+='static void prepare_ior(void){'+prepare+'}\n'
-code+='static void handle_ior(void){'+ior.replace('ug_native_reg(port)','timed_native_decode(port)').replace('ug_stat_add(0, 1)','checked_gs_stat(0, 1)')+'\n}\n'
+code+='static void handle_ior(void){'+ior.replace('ug_native_reg(port)','timed_native_decode(port)').replace('native_reg=ug_ior_reg;', 'native_reg=ug_ior_reg; (void)timed_native_decode(port);').replace('ug_stat_add(0, 1)','checked_gs_stat(0, 1)')+'\n}\n'
 code+='static void handle_iow(void){'+handle_iow+'\n}\n'
 code+='static int iow_has_data(void){return queued_iow;}\nstatic int ior_has_data(void){return queued_ior;}\n'
 code+='static void poll_once(void){'+poll+'}\n'
@@ -336,6 +346,15 @@ if a.fast:
 if a.gs_fast:
     marker=' ug_minimal_init();ug_minimal_ready(0,123);\n assert(bus_read(settings.UltraGS.basePort+1)'
     gs_cases="""
+ /* Poll the real simultaneous-FIFO branch: each low GS write must become
+  * visible in the immediately following STATUS, before core1 dispatch. */
+ ug_minimal_init();ug_minimal_ready(0,123);ug_cfg.aliases=true;
+ pending_write=(0xb3<<8)|42;pending_port=0xbb;
+ queued_iow=queued_ior=1;read_value=255;waited=late=0;poll_once();
+ assert(read_value==0xfe && !queued_iow && !queued_ior);
+ pending_write=(0xbb<<8)|0;pending_port=0xbb;
+ queued_iow=queued_ior=1;read_value=0;waited=late=0;poll_once();
+ assert((read_value&0x81)==0x81 && !queued_iow && !queued_ior);
  for(unsigned bits=0;bits<4;bits++) {
   ug_minimal_init();ug_minimal_ready(0,123);ug_cfg.aliases=true;
   if(bits&2)ug_minimal_write_decoded(0x13,42,0);
@@ -395,10 +414,10 @@ if not a.compat:
      ('native-late',code.replace('early_wait_enabled=1','early_wait_enabled=0').replace(foreign_guard,'/* legacy PIO had no ownership tag */'),87),
      ('native-write',code.replace('ug_iow_verdict(IO_WAIT);\n        checked_native_write_decoded(', '/* old IO_END-only native write */\n        checked_native_write_decoded('),88),
      ('read-before-write',code.replace(poll,'if(ior_has_data())handle_ior();else if(iow_has_data())handle_iow();'),89),
-     ('retroactive-native',code.replace(foreign_guard,'/* ignored captured ownership */'),90),
+     ('retroactive-native',code.replace(foreign_guard,'/* ignored captured ownership */').replace('!ug_ior_service || !ug_handshake_read_active()', '!ug_handshake_read_active()'),90),
      ('config-prefetch-late',code.replace(poll,poll.replace('if(!ug_ior_pending && ior_has_data()) prepare_ior();','/* old acquisition after IOW */').replace('if (ug_ior_pending) handle_ior();','if (ior_has_data()) handle_ior();')),91),
-     ('config-stale-consume',code.replace('(!ug_ior_service || (!native_capture && !ug_handshake_read_active())) && (native_capture || (port>=CONTROL_PORT && port<=DATA_PORT_HIGH))','false'),92),
-     ('config-expire-after-write',code.replace('!ug_ior_service || (!native_capture && !ug_handshake_read_active())','!ug_ior_service'),100),
+     ('config-stale-consume',code.replace('!ug_ior_service || !ug_handshake_read_active()','false').replace('if(!ug_handshake_read_active())return false;', ''),92),
+     ('config-expire-after-write',code.replace('!ug_ior_service || !ug_handshake_read_active()','!ug_ior_service').replace('if(!ug_handshake_read_active())return false;', ''),100),
     ]:
         assert body!=code
         mutant=a.build/(name+'.c');mutant.write_text(body)
@@ -415,14 +434,14 @@ else:
     ]:
         assert body!=code
         src=a.build/(name+'.c');src.write_text(body);obj=a.build/(name+'.o');binary=a.build/name
-        subprocess.run(['cc','-std=c11',*flags,'-DSOUND_ULTRAGS=1','-DUG_ISA_COMPAT_READ=1',
+        subprocess.run(['cc','-std=c11',*flags,'-DSOUND_ULTRAGS=1','-DUG_ISA_EARLY_READ=1' if a.turbo else '-DUG_ISA_COMPAT_READ=1',
                         '-c',str(src),'-o',str(obj)],check=True)
         subprocess.run(['c++','-fsanitize=undefined',str(obj),*objects[1:],'-o',str(binary)],check=True)
         assert subprocess.run([str(binary),str(a.catalog.resolve())],capture_output=True).returncode==expected,name
     print('COMPAT: stale consuming-read, retroactive ownership and read-before-write mutations rejected')
 if a.fast:
     commit='if (index < sizeof(ug_cfg.snapshot)) ug_cfg.index = index + 1;'
-    submit='ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | value);'
+    submit='if (!ug_handshake_reply(IOR_SET_VALUE | value)) return;' if a.turbo else 'ISA_PIO_PUT(pio0, IOR_PIO_SM, IOR_SET_VALUE | value);'
     start=code.index('#ifdef UG_CONFIG_CATALOG_FAST\n')
     # Locate the actual branch (the define may also occur in a later build).
     start=code.index('if (port == DATA_PORT_HIGH && sel_reg == CMD_FW_CATALOG)',start)
@@ -439,7 +458,7 @@ if a.fast:
     for name,replacement,error in variants:
         body=code[:start]+replacement+code[end:]
         src=a.build/(name+'.c');src.write_text(body);obj=a.build/(name+'.o');binary=a.build/name
-        subprocess.run(['cc','-std=c11',*flags,'-DSOUND_ULTRAGS=1','-DUG_ISA_COMPAT_READ=1',
+        subprocess.run(['cc','-std=c11',*flags,'-DSOUND_ULTRAGS=1','-DUG_ISA_EARLY_READ=1' if a.turbo else '-DUG_ISA_COMPAT_READ=1',
                         '-c',str(src),'-o',str(obj)],check=True)
         subprocess.run(['c++','-fsanitize=undefined',str(obj),*objects[1:],'-o',str(binary)],check=True)
         failed=subprocess.run([str(binary),str(a.catalog.resolve())],capture_output=True)
@@ -451,7 +470,7 @@ if a.gs_fast:
     assert code.count(before)==code.count(account)==1
     body=code.replace(account,'').replace(before,account+'\n'+before)
     src=a.build/'gs-stat-before.c';src.write_text(body);obj=src.with_suffix('.o');binary=a.build/'gs-stat-before'
-    subprocess.run(['cc','-std=c11',*flags,'-DSOUND_ULTRAGS=1','-DUG_ISA_COMPAT_READ=1','-c',str(src),'-o',str(obj)],check=True)
+    subprocess.run(['cc','-std=c11',*flags,'-DSOUND_ULTRAGS=1','-DUG_ISA_EARLY_READ=1' if a.turbo else '-DUG_ISA_COMPAT_READ=1','-c',str(src),'-o',str(obj)],check=True)
     subprocess.run(['c++','-fsanitize=undefined',str(obj),*objects[1:],'-o',str(binary)],check=True)
     failed=subprocess.run([str(binary),str(a.catalog.resolve())],capture_output=True)
     assert failed.returncode!=0 and b'gs_fast_stores==gs_fast_accounts+1' in failed.stderr
@@ -463,7 +482,7 @@ for dependency in dependencies:
         path=Path(name);inputs.add(path.resolve())
 (a.build/'config-exchange-inputs.json').write_text(json.dumps({str(p.relative_to(r)) if p.is_relative_to(r) else str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(inputs)},indent=2)+'\n')
 (a.build/'config-exchange-profile.json').write_text(json.dumps({
-    'status':'HOST_PASS / REAL_PENDING','compat':a.compat,'probe':a.probe,'fast':a.fast,'gsFast':a.gs_fast,
+    'status':'HOST_PASS / REAL_PENDING','compat':a.compat,'turbo':a.turbo,'probe':a.probe,'fast':a.fast,'gsFast':a.gs_fast,
     'fastOrderedBytes':148 if a.fast else 0,'fastMutationsRejected':2 if a.fast else 0,
     'traceSha256':hashlib.sha256(trace).hexdigest(),
     'inputsSha256':hashlib.sha256((a.build/'config-exchange-inputs.json').read_bytes()).hexdigest(),

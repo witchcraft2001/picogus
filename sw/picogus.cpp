@@ -246,7 +246,7 @@ static void wtvol_from_mixer(uint8_t volume) {
 #define IOR_PIO_SM 1
 
 #ifdef UG_GS_STATUS_FAST
-const char* firmware_string = PICO_PROGRAM_NAME "-gsfast-r13 v" PICO_PROGRAM_VERSION_STRING;
+const char* firmware_string = PICO_PROGRAM_NAME "-gsturbo-r17 v" PICO_PROGRAM_VERSION_STRING;
 #elif defined(UG_CONFIG_CATALOG_FAST)
 const char* firmware_string = PICO_PROGRAM_NAME "-cfgfast-r12 v" PICO_PROGRAM_VERSION_STRING;
 #elif defined(UG_CONFIG_PROBE)
@@ -874,6 +874,9 @@ static constexpr uint32_t IOR_SET_VALUE = 0x0000ff00u;
 
 #ifdef UG_ISA_EARLY_READ
 #define ISA_PIO_PUT(pio,sm,value) ug_handshake_put(sm,value)
+#elif defined(UG_ISA_COMPAT_READ)
+// IOR verdicts become relocated PCs for the classifier (see ug_compat.h).
+#define ISA_PIO_PUT(pio,sm,value) ug_compat_put(pio,sm,value)
 #else
 #define ISA_PIO_PUT(pio,sm,value) pio_sm_put(pio,sm,value)
 #endif
@@ -884,7 +887,7 @@ static inline void ug_iow_verdict(uint32_t value) {
     // Publish a changed native map to PIO before acknowledging the write.
     if (value==IO_END && !ug_handshake_sync_ports(settings.UltraGS.basePort,settings.UltraGS.bulkAlias,ug_config_aliases(&ug_cfg))) return;
 #elif defined(UG_ISA_COMPAT_READ)
-    if (value==IO_END && !ug_compat_sync_ports(settings.UltraGS.basePort,settings.UltraGS.bulkAlias)) return;
+    if (value==IO_END && !ug_compat_sync_ports(settings.UltraGS.basePort,settings.UltraGS.bulkAlias,ug_config_aliases(&ug_cfg))) return;
 #endif
     ISA_PIO_PUT(pio0,IOW_PIO_SM,value);
 #ifdef UG_ISA_COMPAT_READ
@@ -1305,9 +1308,10 @@ __force_inline void handle_ior(void) {
     return;
 #endif
 #ifdef SOUND_ULTRAGS
-    // Low GS STATUS has no early PIO hold in COMPAT. Avoid the general
-    // decoder and its atomic statistics update before the host samples.
-    // The COMPAT live-address check above still rejects ended/foreign reads.
+    // GS STATUS: the PIO already holds IOCHRDY for 00BBh while GS aliases
+    // are on; still avoid the general decoder and its atomic statistics
+    // update before the data word. The live-address check above rejects
+    // ended/foreign reads for the (aliases-off) software path.
 #ifdef UG_GS_STATUS_FAST
     if (port == 0xbb && ug_config_aliases(&ug_cfg)) {
         ISA_PIO_PUT(pio0, IOR_PIO_SM, IO_WAIT);
@@ -1339,8 +1343,8 @@ __force_inline void handle_ior(void) {
     native_reg=ug_native_reg(port);
     if (native_reg>=0) {
 #ifdef UG_ISA_COMPAT_READ
-        // PIO-owned native reads jump straight to the data tail. Low GS
-        // aliases retain the ordinary IO_WAIT word (software ownership).
+        // PIO-owned reads (BASE/ALIAS/GS block) jump straight to the data
+        // tail; a software-owned capture gets the same entry via IO_WAIT.
         ISA_PIO_PUT(pio0,IOR_PIO_SM,native_capture ? ug_compat_read_entry : IO_WAIT);
 #else
         ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_WAIT);
@@ -1872,7 +1876,7 @@ extern void PIC_DeActivateIRQ(void);
     ior_program_init(pio0, IOR_PIO_SM, ior_offset);
 #ifdef UG_ISA_COMPAT_READ
     static_assert(sizeof(iow_program_instructions)+sizeof(ug_compat_ior_program_instructions)<=64,"compat ISA PIO budget");
-    ug_compat_init(ior_offset,settings.UltraGS.basePort,settings.UltraGS.bulkAlias);
+    ug_compat_init(ior_offset,settings.UltraGS.basePort,settings.UltraGS.bulkAlias,ug_config_aliases(&ug_cfg));
 #endif
 #ifdef SOUND_ULTRAGS
     ug_hw_note_program(pio0,iow_offset,iow_program.length,"iow");

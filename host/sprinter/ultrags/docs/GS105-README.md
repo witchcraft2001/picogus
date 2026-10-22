@@ -1,5 +1,9 @@
 # GS 1.05 / UGS-GS105/1
 
+Для нового кандидата R17 (GS в Turbo) сначала читать `GS-TURBO-README.md`. Ниже описана принятая ранее серия GS105 при Turbo OFF и её
+регрессионные проверки; утверждение «прошивка не меняется» относится к тому
+исправлению DSS RAM, а не к новой поставке GS Turbo.
+
 Исправление DSS RAM: прежний UGTEST MOD4/MOD8 размещал fixture по3000h,
 в resident DSS. Владелец подтвердил зависание после RESULT PASS code=0
 при Turbo OFF. Новый fixture —4000h; UGPLAY FX/stream table также перенесён

@@ -109,6 +109,10 @@ ENTRY:
     call PRINT
     jp PASS
 .run:
+    IFDEF UG_GS_TURBO_SLOT
+    ld hl,turbo_test_text
+    call PRINT
+    ENDIF
     IFDEF APP_S6TEST
     call S6TEST_VALIDATE
     jp c,SYNTAX
@@ -249,6 +253,12 @@ INIT:
     ENDIF
     ld hl,0x2A0
     ld (BASE),hl
+    IFDEF UG_GS_TURBO_SLOT
+    ld a,UG_GS_TURBO_SLOT
+    ld (SLOT),a
+    ld a,1
+    ld (VERIFY),a
+    ENDIF
     ld hl,generic_reason
     ld (REASON),hl
     ld hl,0
@@ -316,6 +326,15 @@ PARSE:
     ld a,(HELP)
     or a
     ret nz
+    IFDEF UG_GS_TURBO_SLOT
+    ld a,(ARGC)
+    or a
+    jp nz,.bad
+    ld a,12
+    ld (CMD),a
+    xor a
+    ret
+    ENDIF
     IFDEF APP_BENCH
     ld a,(ARGC)
     or a
@@ -418,6 +437,20 @@ PARSE:
     scf
     ret
 OPTION:
+    IFDEF UG_GS_TURBO_SLOT
+    push hl
+    call GT_OPTION
+    pop hl
+    ret nc
+    ld de,turbo_help_option
+    call EQUAL
+    scf
+    ret nz
+    ld a,1
+    ld (HELP),a
+    xor a
+    ret
+    ENDIF
     IFDEF APP_S6TEST
     push hl
     call GT_OPTION
@@ -1297,7 +1330,14 @@ help_text: DB "UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024 /METHOD:ALL|SLOW|FIXED|A
 help_text: INCLUDE "ugaudio_help.inc"
     ELSE
     IFDEF APP_PROTO
-help_text: DB "UGTEST PROTO|PCM|FX|MIX|MOD8|GS|MOD4 [/RESET] [/VOICES:N /SECONDS:N] [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
+help_text:
+    IFDEF UG_GS_TURBO_SLOT
+    DB "UGGST",'0'+UG_GS_TURBO_SLOT," [/RESET] /? - fixed slot, empty store required",13,10,0
+turbo_test_text: DB "GS TURBO ON slot=",'0'+UG_GS_TURBO_SLOT," aliases=00B3/00BB; GSALIAS must be ON",13,10,0
+turbo_help_option: DB "/?",0
+    ELSE
+    DB "UGTEST PROTO|PCM|FX|MIX|MOD8|GS|MOD4 [/RESET] [/VOICES:N /SECONDS:N] [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
+    ENDIF
     ELSE
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
     DB "ROUNDTRIP bytes /SLOW /VERIFY /SLOT:0|1 /BASE:hex /QUIET /?",13,10

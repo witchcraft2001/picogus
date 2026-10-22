@@ -22,7 +22,7 @@ mock.mkdir(exist_ok=True)
 #include <stdint.h>
 #include <assert.h>
 #include <string.h>
-typedef struct {uint32_t instr_mem[32],irq,dbg_padout,pc[2],enabled,rx[2],gets[2],tx[2],restarts[2],forced_out[2];} mock_pio;
+typedef struct {uint32_t instr_mem[32],irq,dbg_padout,pc[2],enabled,ctrl,rx[2],rx_data[2],rx_count[2],gets[2],tx[2],restarts[2],forced_out[2];} mock_pio;
 static mock_pio bus;
 #define pio0 (&bus)
 typedef struct {uint32_t intr,inte,alarm[4];} mock_timer;
@@ -34,6 +34,11 @@ static void (*callback)(void);
 enum {pio_pins=0,pio_pindirs=4,pio_y=2,GPIO_IN=0,GPIO_OUT=1,GPIO_FUNC_SIO=5,TIMER_IRQ_2=2};
 static uint32_t time_us_32(void){return now;}
 static unsigned pio_sm_get_pc(mock_pio *p,unsigned sm){assert(sm<2);return p->pc[sm];}
+static bool pio_sm_is_rx_fifo_empty(mock_pio *p,unsigned sm){return !p->rx_count[sm];}
+static uint32_t pio_sm_get(mock_pio *p,unsigned sm){assert(p->rx_count[sm]);p->rx_count[sm]--;p->gets[sm]++;return sm==0&&p->rx_count[sm]==0?p->rx_data[sm]:p->rx[sm];}
+static unsigned pio_sm_get_rx_fifo_level(mock_pio *p,unsigned sm){return p->rx_count[sm];}
+static uint32_t pio_sm_get_blocking(mock_pio *p,unsigned sm){return pio_sm_get(p,sm);}
+static void pio_sm_set_enabled(mock_pio *p,unsigned sm,bool enabled){if(enabled)p->ctrl|=1u<<sm;else p->ctrl&=~(1u<<sm);}
 static unsigned pio_encode_jmp(unsigned pc){return pc;}
 static unsigned pio_encode_nop(void){return 0xa042;}
 static unsigned pio_encode_sideset_opt(unsigned n,unsigned bits){assert(n==2);return 0x1000|(bits<<10);}
@@ -72,12 +77,13 @@ source = out / 'guard-test.c'
 source.write_text('#include "' + str(r / 'sw/ultrags/ug_handshake.c') + '''"
 #include <stdio.h>
 static void reset(void){
- ready=failed=tracking=false;completions=0;configured=false;read_ignored=false;steps_to_park=0;
+ ready=ug_handshake_faulted=tracking=false;completions=0;configured=false;ug_handshake_read_ignored=false;steps_to_park=0;
  now=0;memset(&bus,0,sizeof(bus));memset(values,0,sizeof(values));
  park_pc=ug_handshake_ior_offset_parked;
- bus.enabled=3;bus.pc[0]=ug_handshake_ior_offset_write_restart;bus.pc[1]=ug_handshake_ior_offset_restart;values[5]=values[4]=1;claimed=0;
+ bus.enabled=bus.ctrl=3;bus.pc[0]=ug_handshake_ior_offset_write_restart;bus.pc[1]=ug_handshake_ior_offset_restart;values[5]=values[4]=1;claimed=0;
  waiting[0]=waiting[1]=false;ug_handshake_init(0,0x2a0,0xffff,false);
 }
+static void read_pins(unsigned port){values[5]=0;for(unsigned bit=0;bit<10;bit++)values[6+bit]=(port>>bit)&1;}
 static void tick(uint32_t us,bool complete){now+=us;if(complete)++completions;callback();}
 int main(void){
  reset();ug_handshake_guard_core1();assert(ready&&claimed==1&&priority==0);
@@ -117,44 +123,45 @@ int main(void){
   ug_handshake_capture(0,0x123,false);ug_handshake_put(0,IO_END);
   tick(100,false);
  }
- if(!failed||bus.enabled)return 77;
+ if(!ug_handshake_faulted||bus.enabled)return 77;
  /* Explicit branch tag survives the same zero feedback input. */
  reset();ug_handshake_guard_core1();bus.dbg_padout=1u<<26;values[5]=0;
  uint32_t native_snapshot=~((1u<<27)|(0x2a1u>>5)); /* active /IOR = 0 */
+ read_pins(0x2a1);
  assert(ug_handshake_native(1,native_snapshot));
  assert(ug_handshake_capture(1,ug_handshake_port(1,native_snapshot),true));
  ug_handshake_put(1,0xff01);
  assert(bus.forced_out[1]==2&&bus.tx[1]==0xff01);
  bus.dbg_padout=0; /* autonomous read tail */
  for(unsigned i=0;i<101;i++)tick(100,false);
- assert(!failed&&bus.enabled==3);
+ assert(!ug_handshake_faulted&&bus.enabled==3);
  /* Both directions: a stopped core0 cannot prevent the independent fuse. */
  for(unsigned sm=0;sm<2;sm++){
   reset();bus.pc[sm]=ug_handshake_ior_offset_parked;bus.dbg_padout=1u<<26;
-  for(unsigned i=0;i<100;i++){tick(100,false);assert(!failed);}
-  tick(100,false);assert(failed&&!bus.enabled);
+  for(unsigned i=0;i<100;i++){tick(100,false);assert(!ug_handshake_faulted);}
+  tick(100,false);assert(ug_handshake_faulted&&!bus.enabled);
   for(unsigned p=6;p<16;p++)assert(!dirs[p]&&functions[p]==GPIO_FUNC_SIO);
   assert(!values[26]&&!values[27]&&dirs[26]&&dirs[27]);
   assert(!ug_handshake_sync_ports(0x300,0xffff,false));
   assert(!ug_handshake_capture(1,0x2a1,true));
  }
  reset();bus.dbg_padout=1u<<26;
- for(unsigned i=0;i<1000;i++){tick(100,true);assert(!failed);}
+ for(unsigned i=0;i<1000;i++){tick(100,true);assert(!ug_handshake_faulted);}
  tracking=false;now=0xfffff000;
- for(unsigned i=0;i<100;i++){tick(100,false);assert(!failed);}tick(100,false);assert(failed);
+ for(unsigned i=0;i<100;i++){tick(100,false);assert(!ug_handshake_faulted);}tick(100,false);assert(ug_handshake_faulted);
  reset();bus.pc[1]=ug_handshake_ior_offset_value;
- assert(!ug_handshake_sync_ports(0x300,0xffff,false)&&failed);
- reset();assert(!ug_handshake_sync_ports(0x301,0xffff,false)&&failed);
+ assert(!ug_handshake_sync_ports(0x300,0xffff,false)&&ug_handshake_faulted);
+ reset();assert(!ug_handshake_sync_ports(0x301,0xffff,false)&&ug_handshake_faulted);
  /* A parked read keeps its immutable capture across a map publication.
   * core0 may already have prefetched it to hold CONFIG before this IOW. */
  reset();bus.pc[1]=ug_handshake_ior_offset_parked;bus.rx[1]=2;
  assert(ug_handshake_sync_ports(0x300,0x280,true));assert(!bus.gets[1]&&bus.rx[1]==2);
  reset();bus.pc[1]=ug_handshake_ior_offset_parked;
- assert(ug_handshake_sync_ports(0x300,0x280,true)&&!failed);
+ assert(ug_handshake_sync_ports(0x300,0x280,true)&&!ug_handshake_faulted);
  reset();bus.pc[1]=ug_handshake_ior_offset_idle;
- assert(ug_handshake_sync_ports(0x300,0x280,true)&&!failed);
+ assert(ug_handshake_sync_ports(0x300,0x280,true)&&!ug_handshake_faulted);
  reset();bus.pc[1]=ug_handshake_ior_offset_decode;steps_to_park=8;
- assert(ug_handshake_sync_ports(0x300,0x280,true)&&!failed&&!steps_to_park);
+ assert(ug_handshake_sync_ports(0x300,0x280,true)&&!ug_handshake_faulted&&!steps_to_park);
  /* All three CONFIG reads acquire wait immediately at capture. No read
   * handler is allowed to consume a stale CONFIG byte or a foreign port. */
  for(unsigned port=0;port<1024;port++) {
@@ -181,11 +188,67 @@ int main(void){
  bus.dbg_padout=1u<<26;values[5]=1;ug_handshake_poll();assert(bus.dbg_padout==(1u<<26));
  ug_handshake_capture(0,0x2a3,true);ug_handshake_put(0,IO_END);assert(!bus.dbg_padout&&bus.pc[0]==ug_handshake_ior_offset_write_restart);
  /* Read verdict is a single empty-OSR data delivery, then autonomous PIO. */
- reset();ug_handshake_capture(1,0x2a3,true);ug_handshake_put(1,0xff24);
+ reset();read_pins(0x2a3);ug_handshake_capture(1,0x2a3,true);ug_handshake_put(1,0xff24);
  assert(bus.forced_out[1]==2&&bus.restarts[1]==1&&bus.tx[1]==0xff24&&bus.pc[1]==ug_handshake_ior_offset_value);
  /* A stale CONFIG read never drives data or asserts wait on another port. */
  reset();ug_handshake_capture(1,0x1d1,false);ug_handshake_put(1,IO_WAIT);assert(!bus.dbg_padout);
  ug_handshake_put(1,0xff24);assert(!bus.restarts[1]&&!bus.dbg_padout);
+ /* A stale held read must not release the next autonomous write. Check
+  * all addresses, both GS maps, and exact once-only saved-pair delivery. */
+ for(unsigned gs=0;gs<2;gs++)for(unsigned port=0;port<1024;port++) {
+  reset();assert(ug_handshake_sync_ports(0x2a0,0x300,gs));
+  read_pins(0x1d2);assert(ug_handshake_capture(1,0x1d2,false));
+  read_pins(port);values[5]=1;values[4]=0;
+  bool owned=(port&~31u)==0x2a0 || (port&~31u)==0x300 || (gs&&(port==0xb3||port==0xbb));
+  uint32_t snapshot=((port&31u)<<27)|(port>>5)|(1u<<26);
+  if(owned)snapshot=~snapshot;
+  bus.pc[0]=ug_handshake_ior_offset_parked;bus.rx[0]=snapshot;bus.rx_data[0]=0x12345678;bus.rx_count[0]=2;
+  bus.dbg_padout=1u<<26;ug_handshake_put(1,IO_END);
+  assert(!!bus.dbg_padout==owned && ug_handshake_has_write());
+  uint32_t data;assert(ug_handshake_take_write(&data)==snapshot && data==0x12345678);
+  assert(!ug_handshake_has_write() && bus.gets[0]==2 && !ug_handshake_faulted);
+ }
+ /* Fused RXF-to-capture path: exact CONFIG matching, all old/current
+  * address pairs, both strobe phases, no consumption beyond the snapshot. */
+ reset();
+ for(unsigned old=0;old<1024;old++)for(unsigned live=0;live<1024;live++)for(unsigned high=0;high<2;high++) {
+  read_pins(live);values[5]=high;bus.dbg_padout=0;waiting[1]=false;
+  bus.rx[1]=((old&31u)<<27)|(old>>5)|(1u<<25);bus.rx_count[1]=1;
+  int reg;bool service;unsigned gets=bus.gets[1];
+  uint32_t raw=ug_handshake_take_read(&reg,&service);
+  bool expected=old>=0x1d0&&old<=0x1d2&&old==live&&!high;
+  assert(raw==bus.rx[1]&&reg==-1&&service==expected);
+  assert(!!bus.dbg_padout==expected&&waiting[1]==expected&&bus.gets[1]==gets+1&&!bus.rx_count[1]);
+ }
+ reset();ug_handshake_faulted=true;read_pins(0x1d0);bus.rx[1]=(16u<<27)|14u|(1u<<25);bus.rx_count[1]=1;
+ int failed_reg;bool failed_service;
+ ug_handshake_take_read(&failed_reg,&failed_service);assert(!failed_service&&!bus.dbg_padout);
+ /* GS and native captures retain their old register across map changes,
+  * including a capture still in the PIO FIFO at CONFIG acknowledgement. */
+ for(unsigned gs=0;gs<2;gs++)for(unsigned port=0;port<1024;port++) {
+  reset();assert(ug_handshake_sync_ports(0x2a0,0x300,gs));
+  int expected=(port&~31u)==0x2a0?(int)(port-0x2a0):
+    (port&~31u)==0x300?0:gs&&port==0xb3?0x13:gs&&port==0xbb?0x1b:-1;
+  uint32_t capture=((port&31)<<27)|(port>>5);
+  if(expected>=0)capture=~capture;
+  bus.pc[1]=ug_handshake_ior_offset_parked;bus.rx[1]=capture;bus.rx_count[1]=1;
+  assert(ug_handshake_sync_ports(0x280,0xffff,!gs));
+  assert(ug_handshake_read_queued&&bus.gets[1]==1&&ug_handshake_has_read());
+  int reg=-2;bool service;assert(ug_handshake_take_read(&reg,&service)==capture&&reg==expected);
+  assert(!ug_handshake_has_read()&&!ug_handshake_read_queued);
+ }
+ /* A late CONFIG write must not drop an already captured GS read WAIT. */
+ for(unsigned port=0xb3;port<=0xbb;port+=8)for(unsigned prepared=0;prepared<2;prepared++) {
+  reset();assert(ug_handshake_sync_ports(0x2a0,0xffff,true));read_pins(port);
+  bus.pc[1]=ug_handshake_ior_offset_parked;bus.dbg_padout=1u<<26;
+  if(prepared)assert(ug_handshake_capture(1,port,true));
+  else {bus.rx[1]=~(((port&31)<<27)|(port>>5));bus.rx_count[1]=1;}
+  waiting[0]=true;ug_handshake_put(0,IO_END);
+  assert(bus.dbg_padout==(1u<<26)&&bus.ctrl==3&&!waiting[0]);
+ }
+ /* Even an early-owned read is rejected if the host has already ended it. */
+ reset();read_pins(0xbb);assert(ug_handshake_capture(1,0xbb,true));values[5]=1;
+ assert(!ug_handshake_reply(0xff7e)&&!bus.forced_out[1]&&!bus.tx[1]);
  puts("HANDSHAKE production C: all maps/GS toggles, read+write fuse, stopped core0, stale/foreign passivity, OSR delivery PASS");
 }
 
@@ -202,19 +265,32 @@ void ug_led_diag_fault(unsigned reason) {
 }
 '''
     text=prefix+text
-    text=text.replace('ready=failed=tracking=false;', 'fault_reason=fault_enabled=ug_led_guard_beats=0;ready=failed=tracking=false;')
-    text=text.replace('tick(100,false);assert(failed&&!bus.enabled);',
-                      'tick(100,false);assert(failed&&!bus.enabled);assert(fault_reason==5&&fault_enabled==3&&ug_led_guard_beats==101);')
-    text=text.replace('assert(!ug_handshake_sync_ports(0x300,0xffff,false)&&failed);',
-                      'assert(!ug_handshake_sync_ports(0x300,0xffff,false)&&failed);assert(fault_reason==6&&fault_enabled==3);')
-    text=text.replace('reset();assert(!ug_handshake_sync_ports(0x301,0xffff,false)&&failed);',
-                      'reset();assert(!ug_handshake_sync_ports(0x301,0xffff,false)&&failed);assert(fault_reason==7&&fault_enabled==3);')
+    text=text.replace('ready=ug_handshake_faulted=tracking=false;', 'fault_reason=fault_enabled=ug_led_guard_beats=0;ready=ug_handshake_faulted=tracking=false;')
+    text=text.replace('tick(100,false);assert(ug_handshake_faulted&&!bus.enabled);',
+                      'tick(100,false);assert(ug_handshake_faulted&&!bus.enabled);assert(fault_reason==5&&fault_enabled==3&&ug_led_guard_beats==101);')
+    text=text.replace('assert(!ug_handshake_sync_ports(0x300,0xffff,false)&&ug_handshake_faulted);',
+                      'assert(!ug_handshake_sync_ports(0x300,0xffff,false)&&ug_handshake_faulted);assert(fault_reason==6&&fault_enabled==3);')
+    text=text.replace('reset();assert(!ug_handshake_sync_ports(0x301,0xffff,false)&&ug_handshake_faulted);',
+                      'reset();assert(!ug_handshake_sync_ports(0x301,0xffff,false)&&ug_handshake_faulted);assert(fault_reason==7&&fault_enabled==3);')
     source.write_text(text)
 exe = out / 'guard-test'
 subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-Wno-unused-const-variable',
                 '-fsanitize=undefined', '-fno-sanitize-recover=all', '-DPICO_NO_HARDWARE=1',
                 '-I' + str(mock), '-I' + str(a.build.resolve()), str(source), '-o', str(exe)], check=True)
 subprocess.run([str(exe)], check=True)
+# Restore the just-reproduced unconditional IOR release. The new matrix must
+# reject it when a following owned IOW already holds the shared WAIT output.
+production = (r/'sw/ultrags/ug_handshake.c').read_text()
+start = production.index('        if(waiting[1]) {')
+end = production.index('        /* Passive cleanup', start)
+old_release = production[:start] + '        if(waiting[1]) {side(1,0);waiting[1]=false;completed();}\n' + production[end:]
+old_impl=out/'read-release-mutant.c';old_impl.write_text(old_release)
+old_test=out/'read-release-test.c';old_test.write_text(source.read_text().replace(str(r/'sw/ultrags/ug_handshake.c'),str(old_impl)))
+old_exe=out/'read-release-test'
+subprocess.run(['cc','-std=c11','-DPICO_NO_HARDWARE=1','-I'+str(mock),'-I'+str(a.build.resolve()),'-I'+str(r/'sw/ultrags'),str(old_test),'-o',str(old_exe)],check=True)
+old_result=subprocess.run([str(old_exe)],capture_output=True)
+assert old_result.returncode!=0 and b'bus.dbg_padout' in old_result.stderr,'unconditional read release mutation survived'
+print('Stale-read/next-write overlap: 2048 cases PASS; unconditional release mutation rejected')
 # Restore the R7 unconditional "completion" to prove this regression check
 # rejects the old masking behaviour, rather than only testing the happy path.
 production = (r/'sw/ultrags/ug_handshake.c').read_text()
@@ -269,5 +345,5 @@ inputs = [r / 'sw/ultrags/ug_handshake.c', r / 'sw/ultrags/ug_handshake.h',
           r / 'sw/ultrags/ug_led_diag.h',
           a.build.resolve() / 'ug_handshake_ior.pio.h', Path(__file__).resolve()]
 (out / 'guard.json').write_text(json.dumps(dict(status='HOST_GUARD_PASS / REAL_PENDING',
-    addressOnlyInit='PASS',ignoredProgressMutationRejected=True,ledDiagHooks=a.led_diag,
+    addressOnlyInit='PASS',configEntryAddressPairs=2097152,readReleaseOverlapCases=2048,readReleaseMutationRejected=True,ignoredProgressMutationRejected=True,ledDiagHooks=a.led_diag,
     inputs={str(f): hashlib.sha256(f.read_bytes()).hexdigest() for f in inputs}), indent=2) + '\n')

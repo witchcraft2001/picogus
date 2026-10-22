@@ -20,7 +20,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 # One stable build tree for every stage. Do not create per-run output roots.
-override BUILD := $(ROOT)/build
+override BUILD := $(ROOT)/build$(if $(filter 1,$(REPRODUCIBILITY)),/reproducibility)
 SW := $(ROOT)/sw
 
 PICO_SDK_PATH ?=
@@ -429,3 +429,23 @@ gs105-check: gs105-host gs105-exe s7-host s8a-host f00-host
 	$(UG_PYTHON) $(ROOT)/tests/ultrags/unit/test_gs105_evidence.py --build $(BUILD)
 gs105-package:
 	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs
+
+# Pre-fix negative control only: success reproduces the known missing early
+# GS hold. This target does not accept Turbo ON or publish a firmware bundle.
+.PHONY: gs-turbo-control
+gs-turbo-control:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/gs-turbo-control.py --build $(ROOT)/build --frozen
+
+# REPRODUCIBILITY=1 uses only the fixed build/reproducibility directory.
+# R17 keeps the COMPAT profile (IOW10/IOR22 + direct CONFIG/GS handlers);
+# the GS alias block is classified in PIO, so the COMPAT gates apply.
+.PHONY: gs-turbo-check gs-turbo-package
+gs-turbo-check: test-dss gs105-check s8c-host s8a-fixtures
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/compat-check.py --build $(BUILD)/multifw-release --out $(BUILD)/host/gs-turbo/compat
+	$(NODE) $(ROOT)/tools/ultrags/compat-independent.cjs $(BUILD)/multifw-release/ug_compat_ior.pio.h $(BUILD)/host/gs-turbo/independent-pio.json
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/config-exchange.py --build $(BUILD)/host/gs-turbo/config --catalog $(BUILD)/multifw-release/generated/multifw/catalog.bin --compat --fast --gs-fast
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-gs-turbo.mjs $(ROOT) $(BUILD)
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-stream.mjs $(ROOT) $(BUILD)
+	UG_STREAM_EXE=UGPF.EXE $(NODE) $(ROOT)/tests/ultrags/dss/run-stream.mjs $(ROOT) $(BUILD)
+gs-turbo-package:
+	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --gs-turbo

@@ -17,6 +17,8 @@ for(const offset of [0,5,10])for(const gs of [false,true])for(const feedback of 
  r.gpio[5].padValue|=0x40;
  r.gpio[15].padValue|=0x40;
  words.forEach((w,i)=>p.instructions[offset+i]=(w>>>13)===0?(w&~31)|((w&31)+offset):w);
+ // GS aliases: SET Y,5 owns 00A0h..00BFh; off: unconditional JMP to the software path.
+ p.instructions[offset+labels.gs_compare]=gs?0xe045:(offset+labels.foreign);
  s.execCtrl=((1<<30)|(15<<24)|((top+offset)<<12)|((bottom+offset)<<7))>>>0;
  s.pinCtrl=((3<<29)|(8<<20)|(11<<15)|(26<<10)|6)>>>0;
  s.shiftCtrl=((24<<25)|(1<<17)|(1<<19))>>>0;
@@ -26,13 +28,14 @@ for(const offset of [0,5,10])for(const gs of [false,true])for(const feedback of 
   ior=0;r.gpio[5].setInputValue(false);r.gpio[15].setInputValue(!!(port&512));
   for(let i=0;i<32&&s.rxFIFO.empty;i++)s.step();
   assert(!s.rxFIFO.empty);
-  const raw=s.readFIFO()>>>0,own=!!(raw&(1<<26)),expected=(port>>5)===(0x2a0>>5);
+  const raw=s.readFIFO()>>>0,own=!!(raw&(1<<26)),expected=(port>>5)===(0x2a0>>5)||(gs&&(port>>5)===5);
   assert.equal(own,expected);const normalized=own?(~raw>>>0):raw;
   assert.equal(((normalized>>>27)&31)|((normalized&31)<<5),port);
   assert.equal(!!(p.pinValues&(1<<26)),own);
   const reply=own||(port>=0x1d0&&port<=0x1d2)||(gs&&[0xb3,0xbb].includes(port));
   const value=(port*73)&255;
-  s.writeFIFO(own?offset+labels.value:reply?0xffffffff:0);
+  // Every verdict is a relocated PC: value entry (stretch) or restart (ignore).
+  s.writeFIFO(reply?offset+labels.value:offset+labels.restart);
   if(reply){
    for(let i=0;i<8;i++)s.step();
    assert.equal((p.pinValues>>>26)&1,1);
