@@ -65,10 +65,10 @@ static void concurrency(unsigned channels,bool verified) {
 }
 static void transport(void) {
     bind();make_eight();unsigned h=upload(3,eight,sizeof(eight));seal(h);uint8_t q[8]={0};put16(q,h);
-    assert(!call(UG_OP_OBJECT_INFO,q,2)&&r[37]==8);assert(!call(UG_OP_CAPS,NULL,0)&&(ug_get32(r+4)&48)==16);
+    assert(!call(UG_OP_OBJECT_INFO,q,2)&&r[37]==8);assert(!call(UG_OP_CAPS,NULL,0)&&(ug_get32(r+4)&48)==48);
     unsigned four=mod(0,0,0);play(four,1);render(0);play(h,1);
     put16(q,four);q[2]=1;assert(call(UG_OP_PLAY_MOD,q,3)==UG_ERR_BUSY);render(1);
-    assert(audio[0]==18*256 && audio[1]==18*256);voice(7);assert(v[16]!=127);
+    assert(audio[0]==9*256 && audio[1]==9*256);voice(7);assert(v[16]!=127);
     q[0]=7;q[1]=0;q[2]=211;assert(!call(UG_OP_SET_PAN,q,3));render(0);voice(7);assert(v[18]==211);
     q[0]=8;assert(call(UG_OP_SET_PAN,q,3)==UG_ERR_RANGE);
     play(four,1);q[0]=7;assert(call(UG_OP_SET_PAN,q,3)==UG_ERR_RANGE);render(0);snapshot();assert(r[26]==4 && get16(r+52)==4);
@@ -89,9 +89,9 @@ static void legacy_mapping(void) {
     uint8_t notes[4];notes[0]=gs(0x63,0);for(unsigned c=1;c<4;c++)assert(ug_legacy_reply(notes+c));ug_legacy_reply_consumed();
     for(unsigned c=0;c<4;c++){voice(c);assert((notes[c]&127)==v[16]);}
     assert(gs(0x38,0)==1);for(unsigned i=0;i<256;i++){uint8_t e=0;ug_legacy_data(178,&e);assert(!e);}
-    assert(gs(0xd2,0)==1);gs(0x81,1);render(1);assert(audio[0]==16384 && audio[1]==18*256);
+    assert(gs(0xd2,0)==1);gs(0x81,1);render(1);assert(audio[0]==12800+7*256 && audio[1]==9*256);
     for(unsigned c=4;c<8;c++){voice(c);assert(get16(v+14)==856-30*c && !(v[19]&2));}
-    gs(0x3a,0x40);render(1);assert(audio[0]==18*256 && audio[1]==18*256);
+    gs(0x3a,0x40);render(1);assert(audio[0]==9*256 && audio[1]==9*256);
     gs(0x32,0);render(1);for(unsigned i=0;i<2;i++)assert(!audio[i]);gs(0x33,0);render(1);assert(audio[0] && audio[1]);
     stop();gs(0x37,0);assert(!call(UG_OP_MEM_INFO,NULL,0) && !get16(r+16));
     puts("S8a legacy LOAD/D2/PLAY, GS63 natural first4, GS1 overrides MOD3 only, high4 untouched, restore/pause/free PASS");
@@ -107,7 +107,10 @@ static void allocation(void) {
     memset(q,0,2);assert(!call(UG_OP_STOP_FX,q,2));render(0);stop();free_obj(h);free_obj(mono);free_obj(stereo);
     puts("S8a full shared32 pool, atomic stereo NO_VOICE, music-protected preferred ID/FX-only steal/pins PASS");
 }
-int main(void) {
+#ifndef S8A_MAIN
+#define S8A_MAIN main
+#endif
+int S8A_MAIN(void) {
     s7_reference_main();transport();legacy_mapping();allocation();
     for(unsigned ch=1;ch<=2;ch++)for(unsigned verified=0;verified<2;verified++)concurrency(ch,verified);
     return 0;

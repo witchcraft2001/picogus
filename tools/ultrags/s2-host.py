@@ -24,4 +24,5 @@ subprocess.run(['c++','-pthread','-fsanitize=undefined',*map(str,bundle_objects)
 subprocess.run([str(bundle_exe)],check=True,timeout=60)
 print('S2 runtime entry: standalone + bundled modes 1..6/8 HOST_PASS')
 
-subprocess.run([__import__('sys').executable,str(r/'tools/ultrags/config-exchange.py'),'--build',str(a.build),'--catalog',str(a.build/'s2-catalog.bin')],check=True)
+# Current R17 uses COMPAT with direct CONFIG/GS; SHARED is a historical profile.
+subprocess.run([__import__('sys').executable,str(r/'tools/ultrags/config-exchange.py'),'--build',str(a.build),'--catalog',str(a.build/'s2-catalog.bin'),'--compat','--fast','--gs-fast'],check=True)

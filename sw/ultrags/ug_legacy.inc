@@ -172,7 +172,7 @@ static uint8_t legacy_play(unsigned channel,ug_legacy_sample *s,uint8_t note,uin
     if(note>95) return UG_ERR_RANGE;
     apply_audio_events();
     unsigned logical=(unsigned[]){0,3,1,2}[channel],voice;
-    bool overrides=foreground.active && foreground.kind==2;
+    bool overrides=foreground.active && foreground.kind==2 && logical<foreground.channels;
     if(overrides) voice=foreground.voice[logical];
     else if(legacy_fx[channel].active) voice=legacy_fx[channel].voice[0];
     else {
@@ -294,10 +294,10 @@ bool ug_legacy_command(uint8_t cmd,bool has_pre,uint8_t pre,uint8_t *out,bool *d
     case 0x60:case 0x61:case 0x62:
         legacy.reply[0]=!foreground.active || foreground.kind!=2?0:cmd==0x60?(uint8_t)mod_player.order:cmd==0x61?mod_player.row:(uint8_t)(((mod_player.order&3)<<6)|mod_player.row);legacy.reply_size=1;break;
     case 0x63:case 0x64: {
-        uint8_t *dirty=cmd==0x63?&mod_player.dirty_note:&mod_player.dirty_volume;
+        uint32_t *dirty=cmd==0x63?&mod_player.dirty_note:&mod_player.dirty_volume;
         for(unsigned c=0;c<4;c++) {
             uint8_t value=cmd==0x63?mod_player.channel[c].note:mod_player.channel[c].mix_volume;
-            if(!foreground.active || foreground.kind!=2)value=cmd==0x63?127:0;
+            if(!foreground.active || foreground.kind!=2 || c>=foreground.channels)value=cmd==0x63?127:0;
             legacy.reply[c]=value|((*dirty&(1u<<c))?0:128);
         }
         *dirty=0;legacy.reply_size=4;break;

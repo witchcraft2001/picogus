@@ -25,7 +25,7 @@ int main(void) {
     ug_mod_info info;assert(!ug_mod_parse(&info,read_mem,&m,size));
     assert(info.song_length==65 && info.sample_offset==1084+65*2048);
     memcpy(b+1080,"8CHN",4);assert(!ug_mod_parse(&info,read_mem,&m,size));
-    memcpy(b+1080,"FLT8",4);assert(ug_mod_parse(&info,read_mem,&m,size)==-1);
+    memcpy(b+1080,"FLT9",4);assert(ug_mod_parse(&info,read_mem,&m,size)==-1);
     memcpy(b+1080,"8CHN",4);b[952]=128;assert(ug_mod_parse(&info,read_mem,&m,size)==-1);
     b[952]=0;b[45]=65;assert(ug_mod_parse(&info,read_mem,&m,size)==-1);b[45]=64;
     m.fail=1;assert(ug_mod_parse(&info,read_mem,&m,size)==-2);m.fail=0;

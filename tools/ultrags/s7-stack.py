@@ -30,8 +30,13 @@ stream_chain=('ug_storage_render','ug_stream_render','take_frame','audio_mem_rea
 stream_frames={n:max((v for k,v in frames.items() if k==n or k.startswith(n+'.')),default=0) for n in stream_chain}
 stream_total=sum(stream_frames.values())+reserve
 assert stream_frames['ug_stream_render'] and stream_total<=2048,'stream renderer stack reserve'
+# MOD rows now contain up to32 events. Check both tick and initial PLAY paths.
+row_chains=(('ug_storage_render','ug_mod_advance_frames','ug_mod_tick','apply_row','mod_player_read','ug_psram_read'),
+            ('ug_storage_render','apply_audio_events','ug_mod_start','apply_row','mod_player_read','ug_psram_read'))
+row_totals=[sum(frames[n] for n in chain)+reserve for chain in row_chains]
+assert max(row_totals)<=2048,'MOD32 row/PLAY stack reserve'
 h=lambda f:hashlib.sha256(f.read_bytes()).hexdigest()
 result={'status':'PASS','scope':'static ARM parser call-path guard; REAL stack watermark remains pending',
- 'stream_frames':stream_frames,'stream_with_reserve':stream_total,'render_frames':render_frames,'render_with_reserve':render_total,'frames':{n:frames[n] for n in chain},'subtotal':subtotal,'unprofiled_and_irq_reserve':reserve,'core1_stack':2048,
+ 'mod_row_with_reserve':row_totals,'stream_frames':stream_frames,'stream_with_reserve':stream_total,'render_frames':render_frames,'render_with_reserve':render_total,'frames':{n:frames[n] for n in chain},'subtotal':subtotal,'unprofiled_and_irq_reserve':reserve,'core1_stack':2048,
  'inputs':{str(x):h(x) for x in [*sources,*(root/'sw/ultrags').glob('*.h'),*(root/'sw/ultrags').glob('*.inc'),Path(__file__).resolve(),flags]}}
 (a.build/'s7-stack.json').write_text(json.dumps(result,indent=2)+'\n');print('S7 ARM static stack PASS:',result['frames'],'+',reserve,'reserve =',subtotal+reserve,'/2048')

@@ -29,14 +29,23 @@ int ug_mod_parser_step(ug_mod_parser *p,ug_mod_info *out,ug_mod_read_fn read,voi
     if(!p || !out || !read || out->file_size<1084) return -1;
     if(p->stage==0) {
         if(read(ctx,950,h,134)) return -2;
-        out->channels=!memcmp(h+130,"8CHN",4)?8:
-            (!memcmp(h+130,"M.K.",4) || !memcmp(h+130,"M!K!",4))?4:0;
-        if(!out->channels) return -1;
+        out->flt8=!memcmp(h+130,"FLT8",4);
+        out->channels=(out->flt8 || !memcmp(h+130,"8CHN",4))?8:
+            (!memcmp(h+130,"M.K.",4) || !memcmp(h+130,"M!K!",4) || !memcmp(h+130,"FLT4",4))?4:0;
+        if(!out->channels) {
+            const uint8_t *tag=h+130;
+            if(tag[0]>='1' && tag[0]<='9' && !memcmp(tag+1,"CHN",3))
+                out->channels=tag[0]-'0';
+            else if(tag[0]>='1' && tag[0]<='3' && tag[1]>='0' && tag[1]<='9' && !memcmp(tag+2,"CH",2))
+                out->channels=(tag[0]-'0')*10+tag[1]-'0';
+        }
+        if(!out->channels || out->channels>UG_MOD_CHANNELS) return -1;
         out->song_length=h[0];out->restart=h[1];
         if(!out->song_length || out->song_length>128) return -1;
         uint8_t max_pattern=0;
         for(unsigned i=0;i<128;i++) {
-            uint8_t order=h[i+2];out->order[i]=order;
+            /* FLT8 normalizes even inactive FF to pair127 before sizing. */
+            uint8_t order=out->flt8?h[i+2]>>1:h[i+2];out->order[i]=order;
             if(i<out->song_length && order>=128) return -1;
             if(order<128 && order>max_pattern) max_pattern=order;
         }
@@ -125,10 +134,18 @@ static void volume_slide(ug_mod_channel *c,unsigned up,unsigned down) {
     c->volume=(uint8_t)(v<0?0:v>64?64:v);
 }
 static void apply_row(ug_mod_player *p) {
-    uint8_t row[32];
+    uint8_t row[UG_MOD_CHANNELS*4];
     unsigned row_bytes=p->info.channels*4u;
     uint32_t off=p->info.pattern_offset+(uint32_t)p->info.order[p->order]*64u*row_bytes+(uint32_t)p->row*row_bytes;
-    if(p->read(p->read_ctx,off,row,row_bytes)) { p->error=1;p->playing=0;return; }
+    if(p->info.flt8) {
+        off=p->info.pattern_offset+(uint32_t)p->info.order[p->order]*2048u+(uint32_t)p->row*16u;
+        /* Read both halves before applying any event: a failed second read
+         * cannot leave half of a row applied to the tracker. */
+        if(p->read(p->read_ctx,off,row,16) ||
+           p->read(p->read_ctx,off+1024,row+16,16)) {
+            p->error=1;p->playing=0;return;
+        }
+    } else if(p->read(p->read_ctx,off,row,row_bytes)) { p->error=1;p->playing=0;return; }
     p->global_jump_order=-1;p->global_break_row=-1;
     for(unsigned i=0;i<p->info.channels;i++) {
         const uint8_t *e=row+i*4;ug_mod_channel *c=&p->channel[i];

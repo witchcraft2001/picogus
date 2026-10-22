@@ -2,9 +2,11 @@
 // Independent structural/timing oracle for the native MOD4/MOD8 DSS tests.
 // No sample mixer or full tracker-effect/audio conformance is claimed here.
 export function parseMod4(data) {
- if(data.length<1084||!['M.K.','M!K!','8CHN'].includes(data.toString('ascii',1080,1084)))throw Error('signature');
- const channels=data.toString('ascii',1080,1084)==='8CHN'?8:4;
- const song=data[950],restart=data[951],orders=[...data.subarray(952,1080)];
+ const tag=data.toString('ascii',1080,1084),flt8=tag==='FLT8';
+ const numbered=/^[1-9]CHN$/.test(tag)?Number(tag[0]):/^[1-3][0-9]CH$/.test(tag)?Number(tag.slice(0,2)):0;
+ const channels=flt8?8:['M.K.','M!K!','FLT4'].includes(tag)?4:numbered;
+ if(data.length<1084||channels<1||channels>32)throw Error('signature');
+ const song=data[950],restart=data[951],orders=[...data.subarray(952,1080)].map(n=>flt8?Math.floor(n/2):n);
  if(!song||song>128||orders.slice(0,song).some(n=>n>=128))throw Error('orders');
  const patterns=1+Math.max(...orders.filter(n=>n<128)),sampleOffset=1084+patterns*256*channels;
  if(sampleOffset>data.length)throw Error('patterns');
@@ -15,7 +17,7 @@ export function parseMod4(data) {
   samples.push({length,volume,start,loop:loop>2?loop:0});sampleBytes+=length;
  }
  if(sampleOffset+sampleBytes>data.length)throw Error('sample bytes');
- return {channels,song,restart,orders,patterns,sampleOffset,sampleBytes,samples,data};
+ return {flt8,channels,song,restart,orders,patterns,sampleOffset,sampleBytes,samples,data};
 }
 export class ModClock {
  constructor(info,loop=false,ignoreF00=false){this.ignoreF00=ignoreF00;this.info=info;this.loop=loop;this.paused=false;this.ended=false;this.seek(0,0);}
@@ -28,7 +30,7 @@ export class ModClock {
   this.jump=null;this.break=null;
   const base=1084+(this.info.orders[this.order]*64+this.row)*this.info.channels*4;
   this.channel.forEach((c,i)=>{
-   const at=base+i*4,b=this.info.data,sample=(b[at]&240)|(b[at+2]>>4),period=((b[at]&15)<<8)|b[at+1],fx=b[at+2]&15,param=b[at+3];
+   const at=this.info.flt8?1084+(this.info.orders[this.order]*2+Math.floor(i/4))*1024+this.row*16+(i%4)*4:base+i*4,b=this.info.data,sample=(b[at]&240)|(b[at+2]>>4),period=((b[at]&15)<<8)|b[at+1],fx=b[at+2]&15,param=b[at+3];
    if(sample>31)throw Error('pattern sample');
    if(sample){c.sample=sample-1;c.volume=this.info.samples[c.sample].volume;}
    if(period){c.period=period;c.note=Math.max(0,Math.min(95,Math.round(36+12*Math.log2(856/period))));c.active=c.sample>=0&&this.info.samples[c.sample].length>0;}

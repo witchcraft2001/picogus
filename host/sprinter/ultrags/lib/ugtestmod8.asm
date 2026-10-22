@@ -12,15 +12,32 @@ S8ELAPSED EQU S8MODE+20
 S8SOURCE EQU S8MODE+24
 S8CLEAN EQU S8MODE+26
 S8PERIOD EQU S8MODE+27
+S8FLT EQU S8MODE+28
+S8ORDER EQU S8MODE+29
+S8WAIT EQU S8MODE+30
 S8TEST_INIT:
     xor a
     ld (S8MODE),a
     ld (S8COUNT),a
+    ld (S8FLT),a
     ret
+S8BTEST_MOD:
+    ld a,1
+    ld (S8FLT),a
 S8TEST_MOD:
     call S8TEST_BUILD
+    ld a,(S8FLT)
+    or a
+    call nz,S8B_BUILD
+    ld a,(S8FLT)
+    or a
     ld a,(RESP+4)
+    jr z,.mod8_cap
+    and 32
+    jr .cap_done
+.mod8_cap:
     and 16
+.cap_done:
     jp z,PROTOCOL
     ld hl,(RESP+20)
     ld (S6CAP),hl
@@ -39,7 +56,12 @@ S8TEST_MOD:
     ld (S8MODE),a
     ld a,3
     ld (PCM_KIND),a
+    ld a,(S8FLT)
+    or a
     ld hl,S8MOD_END-S8MOD_DATA
+    jr z,.size
+    ld hl,7484
+.size:
     ld (SIZE32),hl
     ld hl,0
     ld (SIZE32+2),hl
@@ -50,11 +72,18 @@ S8TEST_MOD:
 .upload:
     call NEXT_BLOCK
     jr z,.sealed
+    ld a,(S8FLT)
+    or a
+    jr z,.copy
+    call S8B_FILL
+    jr .filled
+.copy:
     ld hl,(S8SOURCE)
     ld de,BUF
     ld bc,(BLOCK)
     ldir
     ld (S8SOURCE),hl
+.filled:
     call FOLD_FILE
     call WRITE_BLOCK
     call ADVANCE
@@ -109,6 +138,9 @@ S8TEST_MOD:
     and 9
     cp 9
     jp nz,VERIFY_ERROR
+    ld a,(S8FLT)
+    or a
+    call nz,S8B_CHECK_VOICE
     ld hl,S8INDEX
     inc (hl)
     ld a,(hl)
@@ -124,6 +156,9 @@ S8TEST_MOD:
     call S8TEST_CONTROL
     call S6TEST_DRAIN
     call S8TEST_CHECK_MUSIC
+    ld a,(S8FLT)
+    or a
+    jp nz,S8B_FINISH
     ld hl,s8_mod_pass
     call SHOW
     jp PASS
@@ -417,3 +452,5 @@ S8TEST_CLEANUP:
 s8_mod_pass: DB "MOD8 eight channels/pause/resume PASS; audio REAL_PENDING",13,10,0
 s8_phase_pass: DB "MOD8+FX/background PASS channels_per_FX=",0
     INCLUDE "ugtestmod8_data.inc"
+
+    INCLUDE "ugtestflt8.asm"

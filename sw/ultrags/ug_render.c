@@ -380,12 +380,21 @@ static __attribute__((noinline)) void render_voice_samples(ug_mixer *m,ug_lane *
     }
     if(done<count)memset(m->voice_samples+done,0,(count-done)*sizeof(m->voice_samples[0]));
 }
+/* The decoded/gain-scaled voice is bounded to signed16-bit magnitude.
+ * MOD headroom uses native32-bit shifts, retaining half-away rounding. */
+static inline int32_t headroom(int32_t sample,unsigned shift) {
+    uint32_t magnitude=(uint32_t)(sample<0?-sample:sample);
+    int32_t rounded=(int32_t)((magnitude+(1u<<(shift-1)))>>shift);
+    return sample<0?-rounded:rounded;
+}
 static __attribute__((noinline)) void mix_voice_samples(ug_mixer *m,const ug_lane *l,unsigned voice,unsigned count) {
     uint32_t gain=(uint32_t)l->gain*l->class_gain*l->class_master;
     uint32_t peak=m->lane_peak_current[voice];
     for(unsigned f=0;f<count;f++) {
         int32_t sample=m->voice_samples[f];
-        if(gain!=262144u) { sample=scale_gain(sample,gain);m->voice_samples[f]=sample; }
+        if(gain!=262144u) sample=scale_gain(sample,gain);
+        if(l->mix_shift) sample=headroom(sample,l->mix_shift);
+        m->voice_samples[f]=sample;
         uint32_t magnitude=(uint32_t)(sample<0?-sample:sample);if(magnitude>peak)peak=magnitude;
     }
     m->lane_peak_current[voice]=(uint16_t)peak;

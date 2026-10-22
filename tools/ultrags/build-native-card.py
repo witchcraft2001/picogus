@@ -20,6 +20,15 @@ for folder in ('sw/ultrags','tests/ultrags/unit/sdk_mock','common','sw/system','
     files.update((ROOT/folder).rglob('*.h'))
 files.update((ROOT/'sw/ultrags').glob('*.inc'));files.update(gen.glob('*'))
 before={str(f):digest(f) for f in sorted(files)}
+# Mach-O debug links include temporary object paths. Rebuilding an unchanged
+# adapter would invalidate earlier executed proofs in the same make invocation.
+# Reuse only an exact command/source/artifact match, independently per tree.
+manifest=a.build/'native-card-build.json';binary=a.build/'native-card.node'
+if manifest.is_file() and binary.is_file():
+    old=json.loads(manifest.read_text())
+    if old.get('inputs')==before and old.get('command')==cmd and old.get('artifact')==digest(binary):
+        print('Current production-C adapter reused (all inputs/command/artifact verified)')
+        raise SystemExit(0)
 subprocess.run(cmd,check=True)
 assert before=={str(f):digest(f) for f in sorted(files)},'sources changed during adapter build'
 (a.build/'native-card-build.json').write_text(json.dumps(dict(command=cmd,inputs=before,artifact=digest(a.build/'native-card.node'),scope='Production C and functional SDK model; no peripheral timing proof'),indent=2)+'\n')

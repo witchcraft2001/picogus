@@ -94,7 +94,7 @@ export class PcmCard extends SlowCard {
   const err=e=>[e,Buffer.alloc(0)],ok=(r=Buffer.alloc(0))=>[0,r];
   if(op===19&&q.length!==7||op===18&&q.length!==2)return err(3);
   if(this.transfer&&[19,20].includes(op))return err(5);
-  if(op===1){const result=super.command(op,q,defer);if(!result[0]){if(!this.o.noCaps)result[1].writeUInt32LE(31,4);result[1].writeUInt32LE(8000,32);result[1].writeUInt32LE(48000,36);}return result;}
+  if(op===1){const result=super.command(op,q,defer);if(!result[0]){if(!this.o.noCaps)result[1].writeUInt32LE(127,4);result[1].writeUInt32LE(8000,32);result[1].writeUInt32LE(48000,36);}return result;}
   if(op===6){for(const x of [this.foreground,...this.fx,...this.events.filter(e=>e.instance).map(e=>e.instance)])if(x)this.release(x);this.foreground=null;this.fx=[];this.events=[];this.lastPlay=this.lastHandle=this.state=0;}
   if(op===20){this.trace.push({op,q:q.toString('hex')});if(q.length!==26)return err(3);const o=this.objects.get(q.readUInt16LE());if(!o)return err(7);if(o.kind!==1||o.state||o.pins)return err(6);try{o.pcm=rawInfo(q.subarray(2),o.size);}catch{return err(11);}return ok();}
   if(op===19&&this.objects.get(q.readUInt16LE())?.kind){

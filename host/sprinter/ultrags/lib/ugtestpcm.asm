@@ -100,7 +100,9 @@ S6TEST_VALIDATE:
     jr z,.ordinary
     ld a,(CMD)
     cp 12
-    jr nc,.ordinary
+    jr z,.ordinary
+    cp 13
+    jr z,.ordinary
     scf
     ret
 .ordinary:

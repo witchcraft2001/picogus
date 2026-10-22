@@ -74,6 +74,7 @@ typedef struct {
     uint16_t cache_peer;     /* FFFF=own cache; stereo right may share left */
     uint32_t cache_tag[UG_CACHE_LINES]; /* byte window base, tag INVALID = empty */
     uint8_t  cache[UG_CACHE_LINES][UG_CACHE_LINE];
+    uint8_t  mix_shift;     /* MOD headroom: 0=unity, 1..3=divide by2/4/8 */
 } ug_lane;
 
 typedef struct {

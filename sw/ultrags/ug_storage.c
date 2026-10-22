@@ -53,7 +53,7 @@ static uint8_t legacy_f00;
 static uint16_t legacy_relooper;
 static ug_mod_info pending_mod_info, seal_mod_info;
 static struct { uint32_t offset,size; } mod_object;
-static uint32_t mod_lane_trigger[8];
+static uint32_t mod_lane_trigger[UG_MOD_CHANNELS];
 /* Commands run on core1 between renders. Project accepted events so the next
  * command validates the ownership that will exist at the quantum boundary. */
 static ug_instance pending_foreground, pending_fx[UG_LANES];
@@ -500,8 +500,8 @@ static void mod_lane_sync(unsigned i,bool force) {
     ug_mod_channel *c=&mod_player.channel[i]; ug_lane *l=music_lane(i);
     if(l->failed && !force) { mod_player.error=1;mod_player.playing=0;l->active=0;return; }
     bool retrigger=force || mod_lane_trigger[i]!=c->trigger;
-    if(retrigger) mod_player.dirty_note|=(uint8_t)(1u<<i);
-    if(l->gain!=c->mix_volume) mod_player.dirty_volume|=(uint8_t)(1u<<i);
+    if(retrigger) mod_player.dirty_note|=(1u<<i);
+    if(l->gain!=c->mix_volume) mod_player.dirty_volume|=(1u<<i);
     if(retrigger) {
         mod_lane_trigger[i]=c->trigger;
         if(!c->period || c->voice_sample>=31 ||
@@ -521,6 +521,11 @@ static void mod_lane_sync(unsigned i,bool force) {
     l->step=mod_step(c->period);l->gain=c->mix_volume;l->pan=c->pan;
     if(mod_player.paused || foreground.paused) l->active=0;
     mod_lane_trigger[i]=c->trigger;l->class_gain=music_gain;l->class_master=music_master;
+    /* Calibrate a module to the four-channel mix before pan/accumulation.
+     * Round channel count up to4/8/16/32: bounded shifts keep the sample path
+     * free of division. Independent PCM/FX lanes retain unity headroom. */
+    unsigned channels=mod_player.info.channels;
+    l->mix_shift=channels>16?3:channels>8?2:channels>4?1:0;
 }
 static void mod_sync_all(bool force) { for(unsigned i=0;i<foreground.channels;i++)mod_lane_sync(i,force); }
 static int instance_lanes(const ug_instance *in,bool is_fx) {
@@ -551,7 +556,7 @@ static void drop_instance(ug_instance *in) {
         /* Restore hidden music only when an overriding FX ends. A legacy
          * foreground itself must never resurrect stale hidden voices. */
         if(in!=&foreground && in->legacy && foreground.active && foreground.kind==2)
-            for(unsigned c=0;c<4;c++) if(foreground.voice[c]==v) mixer.lanes[v]=hidden_music[c];
+            for(unsigned c=0;c<4 && c<foreground.channels;c++) if(foreground.voice[c]==v) mixer.lanes[v]=hidden_music[c];
     }
     if(in->kind==2) ug_mod_stop(&mod_player);
     ug_store_pin(&store,in->handle,false); in->active=0; in->paused=0; in->state=0;
@@ -1006,7 +1011,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
          * Capability means implemented; physical acceptance remains REAL_PENDING. */
         ug_put32(r,(230u|(ug_cfg.settings->UltraGS.bulkAlias!=0xffff?8u:0u)|
                     (ug_config_aliases(&ug_cfg)?512u:0u)|(mixer_ready?(1281u|UG_STREAM_FEATURE|UG_MOD_F00_POLICY_FEATURE):0u)));
-        if(mixer_ready) ug_put32(r+4,31u); /* RAW8, RAW16, WAV PCM, MOD4, MOD8/8CHN */
+        if(mixer_ready) ug_put32(r+4,127u); /* RAW8/16, WAV, MOD4, 8CHN, FLT8, MOD 1..32 */
         ug_put32(r+8,48000); put16(r+12,1024); put16(r+14,128); put16(r+16,128);
         put16(r+20,UG_LANES);put16(r+22,UG_LANES);put16(r+24,mixer_ready?UG_LANES:0);
         r[26]=1;r[27]=1;

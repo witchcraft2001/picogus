@@ -449,3 +449,28 @@ gs-turbo-check: test-dss gs105-check s8c-host s8a-fixtures
 	UG_STREAM_EXE=UGPF.EXE $(NODE) $(ROOT)/tests/ultrags/dss/run-stream.mjs $(ROOT) $(BUILD)
 gs-turbo-package:
 	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --gs-turbo
+
+# S8b FLT8, FLT4 and MOD1..32; UG_MULTIMOD optionally tests an original file.
+.PHONY: s8b-host s8b-fixtures s8b-exe s8b-arm s8b-check s8b-package
+s8b-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8b-host.py --build $(BUILD)/host/s8b $(if $(UG_MULTIMOD),--mod "$(UG_MULTIMOD)")
+	$(if $(UG_MULTIMOD),$(UG_PYTHON) $(ROOT)/tools/ultrags/multimod-reference.py --build $(BUILD)/host/s8b --mod "$(UG_MULTIMOD)",@true)
+s8b-fixtures:
+	$(NODE) $(ROOT)/tools/ultrags/gen-s8b.mjs $(BUILD)/host/s8b/fixtures
+s8b-exe: dss s8b-fixtures
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
+	UG_MULTIMOD="$(UG_MULTIMOD)" $(NODE) $(ROOT)/tests/ultrags/dss/run-s8b.mjs $(ROOT) $(BUILD)
+# Pin the accepted R17 frontend even when the fixed CMake tree is empty.
+s8b-arm: CMAKE_COMMON += -DUG_ISA_FRONTEND=COMPAT -DUG_CONFIG_CATALOG_FAST=ON -DUG_GS_STATUS_FAST=ON -DUG_LED_DIAG=OFF -DUG_CONFIG_PROBE=OFF -DUG_CONFIG_TRACE=OFF
+s8b-arm: firmware
+	UG_MULTIMOD="$(UG_MULTIMOD)" $(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/s8b-arm.py --build $(BUILD)
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/s8c-arm.py --build $(BUILD)
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/audio-render-check.py --build $(BUILD)
+s8b-check: s8b-arm gs-turbo-check s8b-host s8b-exe
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s7-stack.py --build $(BUILD)
+	@echo "S8b HOST_PASS / REAL_PENDING; Sprinter audio/return must be confirmed"
+s8b-package:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/compat-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/catalog-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/gs-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --s8b

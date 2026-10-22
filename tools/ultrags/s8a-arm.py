@@ -63,13 +63,13 @@ for fx_channels in (1,2):
    else:left+=value
   m.counting=True;output=bytearray()
   for _ in range(24):
-   samples=m.render();assert samples==(18*256+left,18*256+right)*128
+   samples=m.render();assert samples==(9*256+left,9*256+right)*128
    output.extend(m.uc.mem_read(m.OUT,512))
   snap=m.command(80);assert struct.unpack_from('<H',snap,26)[0]==8 and struct.unpack_from('<H',snap,52)[0]==12
   m.command(50,b'\0\0\1');assert m.render()==(left,right)*128
-  m.command(50,b'\0\0\2');assert m.render()==(18*256+left,18*256+right)*128
+  m.command(50,b'\0\0\2');assert m.render()==(9*256+left,9*256+right)*128
   for ident in fx:m.command(57,struct.pack('<HB',ident,1))
-  assert m.render()==(18*256,18*256)*128
+  assert m.render()==(9*256,9*256)*128
   for ident in fx:m.command(57,struct.pack('<HB',ident,2))
   m.command(50,b'\0\0\0');assert m.render()==(left,right)*128
   m.command(55,b'\0\0');assert m.render()==(0,0)*128

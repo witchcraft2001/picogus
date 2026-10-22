@@ -156,6 +156,8 @@ ENTRY:
 .suite_mod8:
     ld a,(hl)
     and 0xDF
+    cp 'F'
+    jr z,.suite_flt8
     cp 'M'
     jp nz,.suite_other
     inc hl
@@ -172,6 +174,22 @@ ENTRY:
     ld a,(hl)
     cp '4'
     jp z,.suite_native
+    cp '8'
+    jp z,.suite_native
+    jp .suite_other
+.suite_flt8:
+    inc hl
+    ld a,(hl)
+    and 0xDF
+    cp 'L'
+    jp nz,.suite_other
+    inc hl
+    ld a,(hl)
+    and 0xDF
+    cp 'T'
+    jp nz,.suite_other
+    inc hl
+    ld a,(hl)
     cp '8'
     jp z,.suite_native
     jp .suite_other
@@ -2200,7 +2218,7 @@ short_text: DB "SPEED=INSUFFICIENT_INTERVAL resolution_seconds=1",13,10,0
 skip_text: DB "SKIP SLOW reason=S1_SRAM_FIXED_ONLY",13,10,"SKIP ALIAS reason=S5_PENDING",13,10,"SKIP STACK reason=UNSAFE_NMI",13,10,0
 help_text:
     IFDEF UGTEST_S4
-    DB "UGTEST PROTO|PCM|FX|MIX|MOD8|GS|MOD4 [/RESET] [/VOICES:N /SECONDS:N] [/REAL] (ULTRAGS firmware)",13,10
+    DB "UGTEST PROTO|PCM|FX|MIX|MOD8|FLT8|GS|MOD4 [/RESET] [/VOICES:N /SECONDS:N] [/REAL] (ULTRAGS firmware)",13,10
     ENDIF
     DB "UGTEST BUS /REAL [/MIRROR] | UGBENCH /BYTES:N /LOOPS:N /BLOCK:1..1024",13,10
 	DB "/METHOD:ALL|FIXED /DIRECTION:BOTH|WRITE|READ /CHECK:NONE|CRC|BOTH /SOAK:seconds",13,10

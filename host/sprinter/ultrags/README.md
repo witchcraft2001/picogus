@@ -1,3 +1,9 @@
+DOPE audio fix: MOD5..8/9..16/17..32 now use /2,/4,/8 headroom before pan; full DOPE has0 digital clips. Previous owner grating report is REAL_FAIL; corrected firmware awaits physical retest.
+
+FLT4 PCM and interleaved MOD1..32 (including 28CH DOPE.MOD) are supported; shared pool32, formats bit6. Physical acceptance remains REAL_PENDING. See docs/S8B-README.md.
+
+S8b: PCM FLT8, UGTEST FLT8 and CAPS.formats bit5 are implemented; physical acceptance remains REAL_PENDING. See docs/S8B-README.md.
+
 MOD F00 (2026-10-21): UGPLAY/UGPF default to IGNORE; `/F00:PAUSE` is explicit.
 New firmware capability bit12 required; [Tester Notes](docs/F00-README.md).
 HOST_PASS / REAL_PENDING; current kit: `build/CURRENT.*`.

@@ -3,6 +3,7 @@
 AV EQU 0x5A00
 AFLAGS EQU AV
 AFX EQU AV+1
+AKIND EQU AV+2 ; validated object type survives RESP reuse
 AVOICE EQU AV+54 ; u16 preferred physical voice, FFFF=automatic
 APRI EQU AV+3
 AGAIN EQU AV+4
@@ -554,6 +555,7 @@ AUDIO_RUN:
     cp 1
     jp nz,PCM_FORMAT_ERROR
     ld a,(RESP+2)
+    ld (AKIND),a
     cp 3
     jr z,.mod_caps
     ld a,(AF00)
@@ -594,7 +596,12 @@ AUDIO_RUN:
     jr z,.mod_format
     ld b,16
     cp 8
-    jp nz,PCM_FORMAT_ERROR
+    jr z,.mod_format
+    ld b,64 ; formats bit6: interleaved MOD 1..32 channels
+    or a
+    jp z,PCM_FORMAT_ERROR
+    cp 33
+    jp nc,PCM_FORMAT_ERROR
 .mod_format:
     ld a,(ACAPS+4)
     and b
@@ -654,13 +661,9 @@ AUDIO_RUN:
 .old_saved:
     ld hl,(HANDLE)
     ld (REQ),hl
-    ; AUDIO_REPLACE_CHECK and FX_STATUS use RESP, so the object-info kind
-    ; is no longer live here. Preserve the validated MOD sentinel in the
-    ; normalized channel count instead.
-    ld a,(ACHANNELS)
-    cp 8
-    jr z,.play_mod
-    cp 4
+    ; RESP is reused by replacement/FX checks; retain the validated kind.
+    ld a,(AKIND)
+    cp 3
     jr z,.play_mod
     ld a,(AFX)
     or a
@@ -755,9 +758,9 @@ AUDIO_RUN:
     call HEX_BYTES
 .printed:
     call NL
-    ld a,(ACHANNELS)
-    cp 4
-    jr c,.policy_printed
+    ld a,(AKIND)
+    cp 3
+    jr nz,.policy_printed
     ld hl,audio_f00_ignore_text
     ld a,(AF00)
     cp UG_MOD_PAUSE_F00

@@ -14,6 +14,8 @@ int main(void) {
         if(p<=127) assert(balance127(s,p)==ug_rdiv((int64_t)s*p,127));
         if(p<=128) assert(balance128(s,p)==ug_rdiv((int64_t)s*p,128));
     }
+    for(int32_t s=-32768;s<=32767;s++)for(unsigned shift=1;shift<=3;shift++)
+        assert(headroom(s,shift)==ug_rdiv(s,1u<<shift));
     uint32_t seed=0x13579bdf;
     for(unsigned i=0;i<1000000;i++) {
         seed=seed*1664525+1013904223;int32_t s=(int16_t)seed;

@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+enum { UG_MOD_CHANNELS=32 };
+
 typedef int (*ug_mod_read_fn)(void *ctx, uint32_t offset, uint8_t *dst, uint32_t len);
 
 typedef struct {
@@ -24,7 +26,7 @@ typedef struct {
 typedef struct {
     uint32_t pattern_offset, sample_offset, file_size;
     ug_mod_sample samples[31];
-    uint8_t song_length, restart, order[128], channels;
+    uint8_t song_length, restart, order[128], channels, flt8; /* paired four-channel blocks */
 } ug_mod_info;
 
 typedef struct {
@@ -42,11 +44,11 @@ typedef struct {
 
 typedef struct {
     ug_mod_info info;
-    ug_mod_channel channel[8];
+    ug_mod_channel channel[UG_MOD_CHANNELS];
     uint16_t order;
     uint8_t row, tick, speed, bpm, paused, playing, loop_song, f00_mode, pattern_delay;
     uint8_t f00_policy; /* PLAY_MOD explicit bits; zero follows legacy 6A. */
-    uint8_t dirty_note, dirty_volume;
+    uint32_t dirty_note, dirty_volume;
     uint32_t tempo_fraction;
     uint8_t pending_speed, pending_bpm, error;
     int16_t global_jump_order;
@@ -61,7 +63,7 @@ typedef struct { uint32_t cursor,total; uint8_t stage,sample; } ug_mod_parser;
 void ug_mod_parser_init(ug_mod_parser *p, ug_mod_info *out, uint32_t size);
 /* 0=pending, 1=done, -1=format, -2=read error. */
 int ug_mod_parser_step(ug_mod_parser *p, ug_mod_info *out, ug_mod_read_fn read, void *ctx);
-/* Validate a 31-instrument M.K./M!K!/8CHN header/layout. -1=format, -2=backend read error. */
+/* Validate a 31-instrument M.K./M!K!/FLT4/FLT8 and 1CHN..9CHN/10CH..32CH header/layout. -1=format, -2=backend read error. */
 int ug_mod_parse(ug_mod_info *out, ug_mod_read_fn read, void *ctx, uint32_t size);
 void ug_mod_start(ug_mod_player *p, const ug_mod_info *info, ug_mod_read_fn read,
                   void *ctx, uint8_t flags, uint8_t legacy_f00_mode);
