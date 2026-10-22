@@ -5,6 +5,50 @@
 ; DSS reports whole seconds: the first tick can occur immediately after
 ; START. Expire only when elapsed ticks EXCEED the budget, so N seconds
 ; cannot expire before N real seconds (quantization adds <1 second).
+UG_WAIT_RPC_START:
+    IFDEF APP_PLAY
+    ld a,(UGREQ.OP)
+    cp UG_OP_STREAM_FEED
+    jp nz,UG_WAIT_START
+    xor a
+    ld (UGTM.STARTED),a
+    jp UG_WAIT_PHASE
+    ELSE
+    jp UG_WAIT_START
+    ENDIF
+
+; At most four status reads before falling back to the original deadline.
+; Reset only the short-poll allowance on READY/grant/commit transitions;
+; an active deadline and the stagnant-clock watchdog are never restarted.
+UG_WAIT_PHASE:
+    ld a,4
+    ld (UGTM.FASTPOLLS),a
+    ret
+UG_WAIT_RPC_NEXT:
+    IFDEF APP_PLAY
+    ld a,(UGREQ.OP)
+    cp UG_OP_STREAM_FEED
+    jp nz,UG_WAIT_NEXT
+    ld a,(UGTM.FASTPOLLS)
+    or a
+    jr z,.timed
+    dec a
+    ld (UGTM.FASTPOLLS),a
+    or a
+    ret nz
+.timed:
+    ld a,(UGTM.STARTED)
+    or a
+    jp nz,UG_WAIT_NEXT
+    inc a
+    ld (UGTM.STARTED),a
+    call UG_WAIT_START
+    xor a
+    ret
+    ELSE
+    jp UG_WAIT_NEXT
+    ENDIF
+
 UG_WAIT_START:
     push af
     push bc

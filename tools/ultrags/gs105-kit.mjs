@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {sha256} from './build-evidence.mjs';
 import {makeZip,makeImg} from './disk-formats.mjs';
 import {readZip,readFat12} from './verify-package.mjs';
-export function buildKit(root,b,assembly,{turbo=false,s8b=false}={}){
+export function buildKit(root,b,assembly,{turbo=false,s8b=false,s8c=false}={}){
  const json=p=>JSON.parse(readFileSync(p)),payload=new Map();
  function add(name,path,expected){
   assert(/^[A-Z0-9_-]{1,8}\.[A-Z0-9]{1,3}$/.test(name),'invalid kit name '+name);assert(!payload.has(name),'duplicate kit entry '+name);
@@ -15,7 +15,7 @@ export function buildKit(root,b,assembly,{turbo=false,s8b=false}={}){
  }
  for(const f of assembly.files.filter(f=>!f.name.startsWith('ST-')))add(f.name,join(b,'ultrags/dss',f.name),f.sha256);
  const fast=json(join(b,'ultrags/dss/fast-asm.json'));add('UGPF.EXE',join(b,'ultrags/dss/UGPF.EXE'),fast.sha256);
- for(const [name,source]of [['TESTER',s8b?'S8B':turbo?'GS-TURBO':'GS105'],['GS105','GS105'],['S8A','S8A'],['S8C','S8C'],['F00','F00']])add(name+'.TXT',join(root,'host/sprinter/ultrags/docs',source+'-README.md'));
+ for(const [name,source]of [['TESTER',s8c?'S8C':s8b?'S8B':turbo?'GS-TURBO':'GS105'],['GS105','GS105'],['S8A','S8A'],['S8C','S8C'],['F00','F00']])add(name+'.TXT',join(root,'host/sprinter/ultrags/docs',source+'-README.md'));
  if(s8b){
   add('S8B.TXT',join(root,'host/sprinter/ultrags/docs/S8B-README.md'));
   const f=json(join(b,'host/s8b/fixtures/fixtures.json'));assert.equal(f.generatorSha256,sha256(readFileSync(join(root,'tools/ultrags/gen-s8b.mjs'))));

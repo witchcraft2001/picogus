@@ -364,7 +364,7 @@ UG_RPC:
 	jp	c,.badframe
 	push	bc			; frame len across the window open
     IFDEF UG_DSS_TIMED
-    call UG_WAIT_START
+    call UG_WAIT_RPC_START
     ENDIF
 	; READY is required before the FIRST byte. An old response must not
 	; be mistaken for this call's result or replay a non-idempotent RPC.
@@ -388,7 +388,7 @@ UG_RPC:
 	bit	5,a
 	jr	nz,.ready_fault
     IFDEF UG_DSS_TIMED
-    call UG_WAIT_NEXT
+    call UG_WAIT_RPC_NEXT
     jr nc,.ready_wait
     pop bc
     ld b,1
@@ -427,6 +427,9 @@ UG_RPC:
 	pop	bc
 	call	UG_REQ_WRITE
 	call	UG_ISA_CLOSE
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_PHASE
+    ENDIF
 	; ---- wait: a loop of independently opened/closed status reads ----
 	ld	hl,UG_WAIT_BUDGET
 .wait:	push	hl
@@ -444,11 +447,13 @@ UG_RPC:
     jr nz,.not_stream
     call STREAM_BULK
     jr c,.stream_failed
-    ; The old status preceded the payload. Re-poll once immediately after
-    ; completing it, before paying a DSS timeout-clock call. Subsequent
-    ; BUSY polls still use the normal timed deadline (SSENT is now set).
+    ; The old status preceded the payload. Start the short commit polls;
+    ; a deadline already started before grant must not be restarted.
     pop af
     pop hl
+    IFDEF UG_DSS_TIMED
+    call UG_WAIT_PHASE
+    ENDIF
     jr .wait
 .not_stream:
     pop af
@@ -466,7 +471,7 @@ UG_RPC:
 .executing:
 	pop	hl
     IFDEF UG_DSS_TIMED
-    call UG_WAIT_NEXT
+    call UG_WAIT_RPC_NEXT
     jr nc,.wait
     push af
     ld a,UG_XC_TRANSPORT_RESET

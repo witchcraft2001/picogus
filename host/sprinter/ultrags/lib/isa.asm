@@ -62,7 +62,16 @@ UG_ISA_OPEN:
 	ret	nz			; refuse nested open
 	ld	a,b
 	ld	(UGCTX.SLOT),a
+    IFDEF APP_PLAY
+    ld a,(UGREQ.OP)
+    cp UG_OP_STREAM_FEED
+    ld a,8
+    jr nz,.framecap
+    ld a,32
+.framecap:
+    ELSE
     xor a
+    ENDIF
     ld (UGTM.CHUNK),a
 	ld	a,l
 	ld	(UGCTX.BASE),a
@@ -145,12 +154,19 @@ UG_ISA_CLOSE:
 	ei
 	ret
 
-; Yield before the ninth frame byte; register values and flags preserved.
+; STREAM_FEED permits 32 service bytes; other commands retain eight.
+; Register values and flags preserved. All service windows use Turbo OFF.
 UG_FRAME_YIELD:
     push af
+    IFDEF APP_PLAY
+    ld a,(UGTM.CHUNK)
+    or a
+    jr nz,.count
+    ELSE
     ld a,(UGTM.CHUNK)
     cp 8
     jr c,.count
+    ENDIF
     push bc
     push de
     push hl
@@ -161,9 +177,17 @@ UG_FRAME_YIELD:
     pop hl
     pop de
     pop bc
+    IFDEF APP_PLAY
+    ld a,(UGTM.CHUNK)
+    ELSE
     xor a
+    ENDIF
 .count:
+    IFDEF APP_PLAY
+    dec a
+    ELSE
     inc a
+    ENDIF
     ld (UGTM.CHUNK),a
     pop af
     ret

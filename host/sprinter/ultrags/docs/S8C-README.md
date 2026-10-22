@@ -1,13 +1,34 @@
-# S8c: source PCM formats and producer measurements
+# S8c: WAV/RAW throughput and PIPE benchmark
 
-**HOST_PASS / REAL_PENDING for this extension; S8c IN_PROGRESS.**
+**REAL_FAIL — owner result2026-10-22 21:26; further optimization deferred.**
+The owner confirmed these commands in photograph order:
+
+| Command | Source bytes | Underruns |
+|---|---:|---:|
+| UGPF STREAM SHORT.WAV /BUFFER:128 /PREFILL:64 |2646000|17|
+| UGPF STREAM SHORT.WAV /BUFFER:256 /PREFILL:128 |2646000|7|
+| UGPF STREAM SHORT.WAV /BUFFER:192 /PREFILL:96 /LOW:32 |2646000|15|
+
+All three are44100/S16LE/stereo (15 source seconds), EOF, RESULT PASS code=0.
+The owner heard interruptions roughly every1.5-2 seconds lasting about1 second.
+Command completion does not meet the continuous-playback requirement. The host
+model result below does not establish real producer throughput. This photo
+contains no DISK/FEED/PIPE timing or installed binary hashes;512/256 was not
+retested. Evidence: `build/host/s8c/real-20261022-212630.json` and its photo.
+Further throughput work is deferred at the owner's request. S8c remains an
+open MVP requirement. S9 (autonomous preloaded PCM queues) is the next functional
+stage; its playback does not need continuous disk feeding. CURRENT archives
+remain unchanged; the remainder describes their original host validation.
+
+
+**Historical release status: HOST_PASS / REAL_PENDING; now REAL_FAIL as above.**
 The preceding SHORT.WAV result remains **REAL_FAIL**: 10 underruns at
 BUFFER/PREFILL 256/128 KiB, 5 at 512/256 KiB. The required
 44100/S16LE/stereo consumption is 176400 B/s; minimum useful producer speed
-220500 B/s, optimization target 352800 B/s. Accepting lighter source formats
-will not close that failure. Sustained 44100 optimization is the next step.
+220500 B/s, optimization target 352800 B/s. This delivery accelerates the producer; new physical measurements are still
+required. Lighter formats do not close the 44100/S16LE/stereo failure.
 
-REAL 2026-10-21 13:16 update: the supplied screen shows stereo U8/22050
+Historical REAL 2026-10-21 13:16 update: the supplied screen shows stereo U8/22050
 EOF with661500 bytes and0 underruns (15 source seconds). The 44100/S16LE/stereo
 control has176400 bytes and1 underrun (only1 source second); its command,
 filename and buffer are not shown. This does not establish improvement over
@@ -34,16 +55,17 @@ rates. FEED includes host/protocol/commit costs; their individual shares are
 not isolated. `RESULT PASS` reports command completion, not zero underruns or
 meeting the speed gate. Hardware optimization of44100 remains open.
 Evidence and copied photos: `build/real/s8c/real-20261021-1316.json`.
-The issued UF2/EXEs/ZIP/IMG remain unchanged; this is a result update.
+These figures describe the preceding delivery, before the optimizations below.
 
-Install the **new `build/CURRENT.UF2`**, then replace the EXEs together from
-`build/CURRENT.ZIP`. The decoder changed: replacing only EXEs is insufficient.
-Use the normal BOOTSEL procedure, then `UGCFG ULTRAGS` and `UGMEM INFO`.
-Builds and current delivery stay in `build/`; independent reproduction stays
-in `build/reproducibility/`. `build/latest/` points to `build/`.
-ZIP contains tools, instructions and WAV tests; UF2 and IMG are separate.
-The 1.44 MiB IMG contains tools and PCM441.WAV smoke audio; copy the two
-15-second original-format WAVs from the ZIP to the Sprinter disk.
+Replace the EXEs together from `build/CURRENT.ZIP`; `build/CURRENT.UF2`
+is the matching COMPAT R17 firmware with the existing FLT8/FLT4/MOD1..32 and
+Gidion fixes. This S8c change does not alter firmware, gain, ring logic or
+resampling. Configuration protocol4/API1.0, opcodes and response sizes stay
+unchanged. Use the normal BOOTSEL procedure if needed, then `UGCFG ULTRAGS`
+and `UGMEM INFO`. Independent copies are in `build/reproducibility/`;
+`build/latest/` points to `build/`. UF2 and IMG are separate from the ZIP.
+The ZIP also contains two 15-second source-format WAV clips; these large clips
+are omitted from the 1.44 MiB IMG. Supply your own 44100/S16LE/stereo WAV.
 
 Every integer rate 8000..48000 Hz, mono/stereo, 8/16-bit is supported.
 WAV is ordinary RIFF PCM: U8 or S16LE. Compressed/float/24/32-bit/extensible
@@ -76,24 +98,39 @@ phase and taps and resumes at PREFILL. CLOSE/STOP release the ring.
 `UGPLAY.EXE`: Turbo OFF, ISA data windows <=256 bytes.
 `UGPF.EXE`: experimental Turbo only during BULK writes, <=1024-byte packet
 per window. Commands/reads remain Turbo OFF; no alternate stack writer.
-Both retain 4 KiB disk read-ahead and single-RPC FEED, preserve PAGE3/IFF/SP,
+Both use 6 KiB disk read-ahead at 4000h..57FFh after WAV parsing, retain
+single-RPC FEED, preserve PAGE3/IFF/SP,
 and keep all file/keyboard calls between packets. Physical Turbo-write
-stability and ISA wait-state/DI measurements remain pending.
+stability and ISA wait-state/DI measurements remain pending. Ordinary UGPLAY
+at 3.5 MHz has a payload-loop ceiling around162000 B/s before protocol costs;
+use UGPF for the 220500 B/s acceptance requirement.
+
+STREAM_FEED allows at most four short status polls per READY/grant/commit
+phase before using the existing DSS timer. Once started, that timer is never
+restarted; timeout, stopped-clock watchdog and lost-ACK recovery remain.
+Only STREAM_FEED service frames use windows up to32 bytes, at Turbo OFF.
+Other commands keep their previous eight-byte limit. A packet is acknowledged
+only after PSRAM commit; recovery checks next_sequence and never blindly retries.
 
 ## Benchmarks
 
 ```
-UGPF STREAM MONO22.WAV /BENCH:ALL /BUFFER:512
-UGPF STREAM MONO22.WAV /BENCH:DISK
-UGPF STREAM MONO22.WAV /BENCH:FEED /BUFFER:512
-UGPLAY STREAM MONO22.WAV /BENCH:ALL /BUFFER:512
+UGPF STREAM TRACK.WAV /BENCH:DISK
+UGPF STREAM TRACK.WAV /BENCH:FEED /BUFFER:512
+UGPF STREAM TRACK.WAV /BENCH:PIPE /BUFFER:512
+UGPF STREAM TRACK.WAV /BENCH:ALL /BUFFER:512
+UGPLAY STREAM TRACK.WAV /BENCH:ALL /BUFFER:512
 ```
 
 DISK reads/discards the first min(PCM data length, 1 MiB), using the same
-4 KiB buffer and complete-short-read handling. FEED creates without START,
+6 KiB buffer and complete-short-read handling. FEED creates without START,
 feeds min(BUFFER, 1 MiB) from SRAM with the production STREAM_FEED path,
-and closes. No file reading occurs in the measured FEED interval. ALL
-runs DISK then FEED. `/VERIFY` with any benchmark is a syntax error; FAST
+and closes. No file reading occurs in the measured FEED interval. PIPE reads
+and feeds min(data_length, BUFFER, 1 MiB) through the production disk/FEED path
+without START; it measures disk plus submission/commit with a free ring.
+ALL runs DISK, FEED, PIPE, seeking back to PCM data before each file phase.
+An unconfirmed CLOSE stops ALL with an error before the next CREATE; it is
+never overwritten by a later successful phase. `/VERIFY` with any benchmark is a syntax error; FAST
 is the principal measurement. ESC prints the partial benchmark then closes.
 
 Each line prints `bytes`, `delta_frames`, `READ_calls`, `packet_count`, `Bps`.
@@ -101,7 +138,10 @@ Elapsed seconds are delta SNAPSHOT.output_frames / CAPS.output_hz (48000).
 Bps uses unsigned 64-bit multiplication/division after the end snapshot.
 Below 125 ms, on stopped/unavailable counters, or an invalid interval, speed
 is `unknown INSUFFICIENT_INTERVAL`; it is not a valid throughput result.
-DISK counts actual READ calls including short reads; FEED READ_calls must be0.
+DISK and PIPE count actual READ calls including short reads; FEED READ_calls
+must be0. PIPE bytes/packets count acknowledged payload, not speculative
+read-ahead. `RESULT PASS` means command completion; speed acceptance requires
+a known PIPE rate >=220500 B/s, with352800 B/s as the target.
 Report the complete lines, buffer values, file format, BIOS/DSS and hashes.
 
 The supplied WAVPLAY EXE (SHA256
@@ -117,29 +157,79 @@ instruction model cannot establish their real costs or disk headroom.
 MONO22.WAV and STEREO22.WAV are 15-second prefixes of the user's original
 mono16/22050 and stereo8/22050 GorkyPrk.wav. PCM bytes and formats are unchanged;
 provenance/hashes are in `build/s8c-test-audio/original-clips.json`.
-For each file run all four configurations:
+First run DISK, FEED, PIPE on a 44100/S16LE/stereo file large enough to
+fill the benchmark interval; record all complete lines. Then test that same
+format in all four configurations:
 
 ```
-UGPF STREAM MONO22.WAV /BUFFER:128 /PREFILL:64
-UGPF STREAM MONO22.WAV /BUFFER:256 /PREFILL:128
-UGPF STREAM MONO22.WAV /BUFFER:512 /PREFILL:256
-UGPF STREAM MONO22.WAV /BUFFER:192 /PREFILL:96 /LOW:32
+UGPF STREAM TRACK.WAV /BUFFER:128 /PREFILL:64
+UGPF STREAM TRACK.WAV /BUFFER:256 /PREFILL:128
+UGPF STREAM TRACK.WAV /BUFFER:512 /PREFILL:256
+UGPF STREAM TRACK.WAV /BUFFER:192 /PREFILL:96 /LOW:32
 ```
 
-Repeat with STEREO22.WAV. Expected: `required_Bps=44100`, continuous sound,
-correct 15-second duration, EOF underruns=0, bytes=661500, RESULT PASS.
-Then play the original files larger than PSRAM without conversion; repeat
-with four mono FX and two stereo FX. ESC is enough to report a stall.
-44100/S16LE/stereo SHORT.WAV remains a separate failing control, not accepted
-by these tests. Thirty-minute FX/stability, measured latency headroom, I2S
-capture/listening and S10 two-hour/leak tests remain REAL_PENDING.
+Expected: required_Bps=176400, correct duration, no data errors, no unplanned
+underruns, clean EOF/ESC and DSS return. Also repeat with a file larger than
+8 MiB PSRAM, then30 minutes with four mono FX and separately two stereo FX.
+Exercise both slots and FAST/VERIFY; record BIOS/DSS, file and firmware hashes,
+ring sizes and the maximum disk stall. The supplied lighter clips are extra
+regressions, not replacements for this control. Historical SHORT.WAV failures
+remain REAL_FAIL until the owner supplies new results. Physical timing/DI,
+I2S capture/listening, latency headroom and S10 two-hour/leak tests are pending.
+After S8c the next functional stage is S9: autonomous PCM sequences.
+
+## Current host result (2026-10-22)
+
+Both independent builds pass:1914 general DSS checks,220 UGPLAY streaming
+cases (including9 MiB),219 UGPF cases,400 S8b cases,56 GS Turbo cases,
+C/UBSan streaming and12 exact linked ARM streaming/FX profiles. R17 and S8b
+negative evidence checks plus S8c reject27 stale/incomplete/corrupt cases per
+build. No gain, resampling or firmware code changed: the seven mode images
+match the previous delivery except Ultra GS's build-identity string.
+
+For the same131072 RAW bytes with3 ms added to each READ and50 us added to
+SYSTIME/key services, baseline94447e0 versus current UGPF gives:
+
+| Host model counter | Before | After |
+|---|---:|---:|
+| READ calls |32|22|
+| SYSTIME calls |298|171|
+| All DSS calls |666|530|
+| ISA windows |2985|2741|
+| Z80 T-states, excluding injected service delays |8808833|8696310|
+| Free-ring producer B/s |239200|273349|
+
+The current PIPE command reports131072 bytes,23368 frames,22 READs,
+128 packets,269233 B/s. This is above the220500 minimum in the model and
+below the352800 target; physical speed is still unmeasured for these EXEs.
+The ordinary UGPLAY model gives PIPE105074 B/s. Neither a benchmark command
+PASS nor these host figures close the previous hardware REAL_FAIL.
+
+Nominal modeled maximum DI: UGPLAY1.75 ms, UGPF1.14 ms. Hardware-denied Turbo
+control: UGPF6.54 ms, below the10 ms limit but above the2 ms target.
+These figures exclude physical ISA wait states; measure them on hardware.
+Immediate-completion FEED performs zero SYSTIME calls. ALL preserves a failed
+CLOSE and stops before PIPE; all original watchdog/session/CRC gates pass.
 
 ## Repeatable host checks
 
 ```
 make -f Makefile.ultrags s8c-check
-make -f Makefile.ultrags s8c-arm UG_AUDIO_PYTHON=<python-with-unicorn-2.1.4>
+make -f Makefile.ultrags s8c-check REPRODUCIBILITY=1
+make -f Makefile.ultrags s8c-package
 ```
+
+Provide the SDK/compiler, Python/Unicorn and original PROPLAY/MOD paths as
+for `s8b-check`. `s8c-check` includes those R17/S8b regressions. Performance
+comparison rebuilds baseline94447e0 in `build/host/s8c-performance/baseline`,
+executes old/new EXEs on identical inputs and saves instruction, DSS READ,
+SYSTIME, ISA-window and elapsed-time counters. Long playback is ring-consumer
+limited; its polling instruction count can rise when the producer is faster.
+Only free-ring submission measures producer capacity. The model cannot
+certify real disk/ISA throughput. Reports are in `host/s8c-performance/` and
+`evidence/actual-exe*.json` in each build root. Packaging checks both roots,
+R17/S8b/streaming evidence freshness, rejects deliberately stale reports and
+binaries, and extracts ZIP/IMG to verify every byte before publication.
 
 Production C/UBSan compares exact samples, rational phase and duration against
 an independent scalar reference: all eight standard rates plus12345/47999,

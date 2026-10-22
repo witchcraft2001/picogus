@@ -371,15 +371,34 @@ voices-package:
 	$(NODE) $(ROOT)/tools/ultrags/package-voices.mjs $(BUILD) $(VOICES_COMPARE_BUILD) $(VOICES_DELIVERY)
 
 # Streaming PCM: production C, exact Z80 bytes and optional Turbo-write profile.
-.PHONY: s8c-host s8c-check s8c-arm
+.PHONY: s8c-host s8c-check s8c-exe s8c-performance s8c-package s8c-arm
 s8c-host:
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-host.py --build $(BUILD)/host/s8c
 
-s8c-check: dss s2-host s8c-host
+s8c-exe: dss s2-host s8c-host
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-fast.py --build $(BUILD)
 	UG_STREAM_LONG=1 $(NODE) $(ROOT)/tests/ultrags/dss/run-stream.mjs $(ROOT) $(BUILD)
 	UG_STREAM_EXE=UGPF.EXE $(NODE) $(ROOT)/tests/ultrags/dss/run-stream.mjs $(ROOT) $(BUILD)
+
+s8c-performance: s8c-exe
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/s8c-performance.py --build $(BUILD)
+
+# Includes R17, MOD4/8/FLT4/FLT8/MOD1..32/F00, exact ARM PCM and production C.
+s8c-check: s8b-check s8c-performance
+	@echo "S8c HOST_PASS / REAL_PENDING; prior hardware failures remain open"
+
+# Both fixed roots must first pass s8c-check (second: REPRODUCIBILITY=1).
+s8c-package:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/compat-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/catalog-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/gs-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(NODE) $(ROOT)/tools/ultrags/test-s8b-evidence.mjs $(ROOT)/build
+	$(NODE) $(ROOT)/tools/ultrags/test-s8b-evidence.mjs $(ROOT)/build/reproducibility
+	$(NODE) $(ROOT)/tools/ultrags/test-s8c-evidence.mjs $(ROOT)/build
+	$(NODE) $(ROOT)/tools/ultrags/test-s8c-evidence.mjs $(ROOT)/build/reproducibility
+	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --s8c
+	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --s8c --verify-only
 
 s8c-arm:
 	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/s8c-arm.py --build $(BUILD)

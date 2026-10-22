@@ -98,6 +98,11 @@ UG_ARGBUF	EQU UGMEM_BASE+96	; DSS command-line copy area (<=160B)
 ; the EXE image).  Caller response payload goes directly into the
 ; caller-supplied (DE,IX) buffer - never bounced through here.
 UGREQ.FRAME	EQU UGMEM_BASE+256	; 140B request frame scratch
+; Private streaming RPC state, outside the maximum frame (2+128+4).
+UGTM.FASTPOLLS EQU UGMEM_BASE+396
+UGTM.STARTED EQU UGMEM_BASE+397
+    ASSERT UGREQ.FRAME+140 <= UGTM.FASTPOLLS
+    ASSERT UGTM.STARTED+1 <= UGMEM_END
 
 UGMEM_END	EQU UGMEM_BASE+400	; reserved workspace end (< 0xC000)
 

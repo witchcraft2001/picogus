@@ -18,14 +18,14 @@ SSIZE EQU SV+44 ; current chunk bytes, u32
 SREADLEFT EQU SV+48 ; unread host cache bytes, u16
 SREADPTR EQU SV+50 ; next packet source, u16
 SFRAME EQU SV+52 ; source frame bytes: 1/2/4
-SBENCH EQU SV+53 ; 1=DISK, 2=FEED, 3=ALL
+SBENCH EQU SV+53 ; bitmask: 1=DISK, 2=FEED, 4=PIPE, 7=ALL
 SREPORT EQU SV+54
 SSUPPLIED EQU SV+56 ; acknowledged PCM bytes, u32
 SSTATE EQU SV+64 ; 70 bytes
-; STREAM never enumerates FX. Reuse its disjoint 4 KiB instance workspace
-; for sequential disk reads, keeping the wire/staging packets at 1024 bytes.
+; After WAV parsing STREAM needs neither the FX list nor BUF/BACK. Merge
+; 4000h..57FFh for disk read-ahead; wire packets remain <=1024 bytes.
 SDISKBUF EQU AFXRECORDS
-SDISKSIZE EQU 4096
+SDISKSIZE EQU 6144
 STREAM_INIT:
     ld hl,SV
     ld de,SV+1
@@ -1127,7 +1127,26 @@ STREAM_BENCH:
     ld a,(SBENCH)
     bit 1,a
     call nz,STREAM_BENCH_FEED
-    jp PASS
+    ; An unconfirmed CLOSE must not be hidden by CREATE for the next phase.
+    ld a,(ERR)
+    or a
+    jp nz,EXIT
+    xor a
+    ld (UGTM.NOESC),a ; cleanup's protected wait ends before the next phase
+    ld a,(SBENCH)
+    bit 2,a
+    call nz,STREAM_BENCH_PIPE
+    ld a,(ERR)
+    jp EXIT
+; Each file phase starts at PCM data, even after DISK in /BENCH:ALL.
+STREAM_BENCH_REWIND:
+    ld hl,SDATA
+    ld de,POS32
+    ld bc,4
+    ldir
+    ld hl,0
+    ld (SREADLEFT),hl
+    jp STREAM_SEEK
 ; cap a u32 HL value to 1 MiB in LEFT32; all limits frame aligned.
 STREAM_BENCH_LIMIT:
     ld de,LEFT32
@@ -1143,6 +1162,7 @@ STREAM_BENCH_LIMIT:
     ldir
     ret
 STREAM_BENCH_DISK:
+    call STREAM_BENCH_REWIND
     ld a,1
     ld (SBKIND),a
     ld hl,SLENGTH
@@ -1157,7 +1177,7 @@ STREAM_BENCH_DISK:
     ld hl,(LEFT32+2)
     ld a,h
     or l
-    ld de,4096
+    ld de,SDISKSIZE
     jr nz,.read
     ld hl,(LEFT32)
     or a
@@ -1173,10 +1193,26 @@ STREAM_BENCH_DISK:
     jr .loop
 STREAM_BENCH_FEED:
     ld a,2
+    jr STREAM_BENCH_SEND
+STREAM_BENCH_PIPE:
+    call STREAM_BENCH_REWIND
+    ld a,3
+STREAM_BENCH_SEND:
     ld (SBKIND),a
     call STREAM_CREATE
     ld hl,SBUFFER
     call STREAM_BENCH_LIMIT
+    ld a,(SBKIND)
+    cp 3
+    jr nz,.synthetic
+    ld hl,LEFT32
+    ld de,SLENGTH
+    call STREAM_CMP
+    jr nc,.start
+    ld hl,SLENGTH
+    call STREAM_BENCH_LIMIT
+    jr .start
+.synthetic:
     ld hl,SDISKBUF
     ld de,SDISKBUF+1
     ld bc,1023
@@ -1184,6 +1220,7 @@ STREAM_BENCH_FEED:
     ldir
     ld hl,SDISKBUF
     ld (SREADPTR),hl
+.start:
     call STREAM_STATUS
     call STREAM_BENCH_BEGIN
 .loop:
@@ -1192,6 +1229,12 @@ STREAM_BENCH_FEED:
     ld hl,LEFT32
     call STREAM_ZERO
     jr z,.done
+    ld a,(SBKIND)
+    cp 3
+    jr nz,.synthetic_packet
+    call STREAM_NEXT_BLOCK
+    jr .send
+.synthetic_packet:
     ld hl,(LEFT32+2)
     ld a,h
     or l
@@ -1208,8 +1251,21 @@ STREAM_BENCH_FEED:
     ld hl,1024
 .packet:
     ld (BLOCK),hl
+.send:
     call STREAM_FEED
     call ADVANCE
+    ld a,(SBKIND)
+    cp 3
+    jr nz,.count
+    ld hl,(SREADPTR)
+    ld de,(BLOCK)
+    add hl,de
+    ld (SREADPTR),hl
+    ld hl,(SREADLEFT)
+    or a
+    sbc hl,de
+    ld (SREADLEFT),hl
+.count:
     ld hl,SBBYTES
     ld bc,(BLOCK)
     call STREAM_ADD_COUNT
@@ -1288,6 +1344,9 @@ STREAM_BENCH_END:
     cp 1
     jr z,.label
     ld hl,stream_bench_feed_text
+    cp 2
+    jr z,.label
+    ld hl,stream_bench_pipe_text
 .label:
     call SHOW
     ld hl,stream_bytes
@@ -1484,6 +1543,7 @@ stream_s16: DB "S16LE",0
 stream_required_text: DB " required_Bps=",0
 stream_bench_disk_text: DB "BENCH DISK",0
 stream_bench_feed_text: DB "BENCH FEED",0
+stream_bench_pipe_text: DB "BENCH PIPE",0
 stream_delta_text: DB " delta_frames=",0
 stream_reads_text: DB " READ_calls=",0
 stream_packets_text: DB " packet_count=",0
@@ -1506,9 +1566,16 @@ stream_cancel_report: DB "stream exit underruns=",0
 stream_unknown: DB "unknown",0
 stream_bytes: DB " bytes=",0
 stream_bench_prefix: DB "/BENCH:",0
-stream_bench_values: DB "DISK",0,1,"FEED",0,2,"ALL",0,3,0
+stream_bench_values: DB "DISK",0,1,"FEED",0,2,"PIPE",0,4,"ALL",0,7,0
     ASSERT SV+144 <= HEADER
-    ASSERT SDISKBUF+SDISKSIZE <= BUF
+    ASSERT SDISKBUF == 0x4000 ; resident DSS ends here
+    ASSERT SDISKBUF+SDISKSIZE == BACK+1024
+    ASSERT SDISKBUF+SDISKSIZE <= REQ
+    ASSERT SDISKBUF+SDISKSIZE <= PCM_DESC
+    ASSERT SDISKBUF+SDISKSIZE <= AV
+    ASSERT SDISKBUF+SDISKSIZE <= SV
+    ASSERT SDISKBUF+SDISKSIZE <= V
+    ASSERT SDISKBUF+SDISKSIZE <= HEADER
     ASSERT SDISKBUF+SDISKSIZE <= AFXOLD
     ASSERT AFXRECORDS+4096 <= AFXOLD
     ASSERT AFXOLD+512 <= HEADER

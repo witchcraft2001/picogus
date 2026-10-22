@@ -7,9 +7,10 @@ import {join,resolve} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {verifyBuild,verifyExecution,executionInputs,sha256,repoRoot} from './build-evidence.mjs';
 import {buildKit} from './gs105-kit.mjs';
+import {verifyS8c} from './s8c-evidence.mjs';
 import {verifyS8b} from './s8b-evidence.mjs';
 import {verifyTurbo} from './gs-turbo-evidence.mjs';
-const s8b=process.argv.includes('--s8b'),turbo=s8b||process.argv.includes('--gs-turbo');
+const s8c=process.argv.includes('--s8c'),s8b=s8c||process.argv.includes('--s8b'),turbo=s8b||process.argv.includes('--gs-turbo');
 const out=join(repoRoot,'build'),builds=[out,join(out,'reproducibility')];
 const json=p=>JSON.parse(readFileSync(p)),hash=p=>sha256(readFileSync(p));
 function current(e){for(const [p,h]of Object.entries(e.inputs??{}))assert.equal(hash(resolve(repoRoot,p)),h,'stale input '+p);}
@@ -19,6 +20,13 @@ if(turbo){
  execFileSync('python3',[join(repoRoot,'tools/ultrags/compat-linked.py'),...builds],{stdio:'pipe'});
  // Executed ARM reports are verified by content below; packaging never
  // regenerates a missing or stale execution proof.
+}
+const s8cReports=s8c?builds.map((b,i)=>verifyS8c(b,assembly[i])):[];
+if(s8c)for(const b of builds)for(const stage of ['s8b','s8c']){
+ const path=join(b,'host',stage,'evidence-negative.json'),negative=json(path);
+ assert.equal(negative.status,'PASS');assert(negative.cases.length>=11);
+ assert.equal(negative.checkerSha256,hash(join(repoRoot,'tools/ultrags/test-'+stage+'-evidence.mjs')));
+ assert.equal(negative.gateSha256,hash(join(repoRoot,'tools/ultrags/'+stage+'-evidence.mjs')));
 }
 const s8bReports=s8b?builds.map((b,i)=>verifyS8b(b,assembly[i])):[];
 const turboReports=turbo?builds.map((b,i)=>verifyTurbo(b,assembly[i])):[];
@@ -93,18 +101,19 @@ if(s8b)for(const [i,b]of builds.entries()){
  const budget=json(join(b,'host/budgets/budgets.json'));current(budget);assert.equal(budget.legacy_images.length,6);assert(budget.sram['pg-ultrags'].free_main>=16384);
  for(const name of ['actual-exe','actual-exe-fast']){const e=json(join(b,'evidence',name+'.json'));assert.equal(e.status,'HOST_ACTUAL_EXE_PASS / REAL_PENDING');assert.deepEqual(e.inputs,executionInputs(repoRoot));assert.deepEqual(e.assembly.inputs,assembly[i].inputs);assert(e.results.length>=175);assert.equal(e.runnerSha256,hash(join(repoRoot,'tests/ultrags/dss/run-stream.mjs')));assert.equal(e.adapterSha256,hash(join(b,'native/native-card.node')));assert.equal(e.exeSha256,hash(join(b,'ultrags/dss',name==='actual-exe'?'UGPLAY.EXE':'UGPF.EXE')));}
 }
-const kitA=buildKit(repoRoot,builds[0],assembly[0],{turbo,s8b}),kitB=buildKit(repoRoot,builds[1],assembly[1],{turbo,s8b});
+const kitA=buildKit(repoRoot,builds[0],assembly[0],{turbo,s8b,s8c}),kitB=buildKit(repoRoot,builds[1],assembly[1],{turbo,s8b,s8c});
 assert.deepEqual(kitA,kitB);const entries=kitA.entries;
 // Verify-only always reconstructs the exact current ZIP/FAT and checks bytes.
 if(process.argv.includes('--verify-only')){
  for(const [i,b]of builds.entries()){const kit=i?kitB:kitA;assert.deepEqual(readFileSync(join(b,'CURRENT.UF2')),fw);assert.deepEqual(readFileSync(join(b,'CURRENT.ZIP')),kit.zip);assert.deepEqual(readFileSync(join(b,'CURRENT.IMG')),kit.img);}
  const delivery=json(join(out,'DELIVERY.json'));current(delivery);assert.equal(delivery.specSha256,hash(join(repoRoot,'ultra-gs-docs/ultra-gs.md')));assert.equal(delivery.packagerSha256,sha256(readFileSync(new URL(import.meta.url))));
  for(const f of delivery.files)assert.equal(hash(join(out,f.name)),f.sha256);
- console.log((s8b?'S8b FLT8/FLT4/MOD1..32':turbo?'GS Turbo R17':'GS105')+' current proof freshness, independent UF2/EXE/ZIP/IMG identity and re-extraction PASS');process.exit(0);
+ console.log((s8c?'S8c streaming throughput':s8b?'S8b FLT8/FLT4/MOD1..32':turbo?'GS Turbo R17':'GS105')+' current proof freshness, independent UF2/EXE/ZIP/IMG identity and re-extraction PASS');process.exit(0);
 }
-const evidence=join(out,'host/delivery',s8b?'s8b':turbo?'gs-turbo':'gs105');mkdirSync(evidence,{recursive:true});
+const evidence=join(out,'host/delivery',s8c?'s8c':s8b?'s8b':turbo?'gs-turbo':'gs105');mkdirSync(evidence,{recursive:true});
 for(const [i,b]of builds.entries()){
  const dest=join(evidence,i?'B':'A');mkdirSync(dest,{recursive:true});
+ if(s8c)for(const path of ['host/s8c','host/s8c-performance/comparison.json','host/s8c-performance/before-standard.json','host/s8c-performance/before-fast.json','host/s8c-performance/after-standard.json','host/s8c-performance/after-fast.json','evidence/actual-exe.json','evidence/actual-exe-fast.json'])cpSync(join(b,path),join(dest,path.replaceAll('/','-')),{recursive:true});
  if(s8b)for(const path of ['host/s8b','evidence/s8b-exe.json','evidence/s8b-arm.json'])cpSync(join(b,path),join(dest,path.replaceAll('/','-')),{recursive:true});
  if(turbo)for(const path of ['host/gs-turbo','evidence/gs-turbo-exe.json','GS-TURBO.json','GS-TURBO.txt'])cpSync(join(b,path),join(dest,path.replaceAll('/','-')),{recursive:true});
  for(const [source,target]of [['GS105-CONFORMANCE.json','conformance.json'],['GS105-CONFORMANCE.md','conformance.md'],['evidence/gs-exe.json','gs-exe.json'],['evidence/lowram-exe.json','lowram-exe.json'],['host/gs105','host'],['ultrags/dss/asm-manifest.json','assembly.json'],['native/native-card-build.json','adapter.json'],['host/native/actual-exe.json','native-exe.json'],['s7-dss-evidence.json','s7-exe.json'],['host/s7/s7-host-evidence.json','s7-host.json'],['evidence/f00-exe.json','f00-exe.json'],['evidence/s8a-exe.json','s8a-exe.json']])cpSync(join(b,source),join(dest,target),{recursive:true});
@@ -113,9 +122,9 @@ for(const name of ['s8a-arm','stream-arm','f00-exe','s8a-exe','actual-exe','actu
 const physical=proofs[0].report.physical;
 if(physical){cpSync(join(out,'real/gs105/owner-pass.json'),join(evidence,'owner-pass.json'));}
 const files=[['CURRENT.UF2',fw],['CURRENT.ZIP',kitA.zip],['CURRENT.IMG',kitA.img]].map(([name,v])=>({name,bytes:v.length,sha256:sha256(v)}));
-const report={status:(s8b?'S8b FLT8/FLT4/MOD1..32':turbo?'UGS-GS-TURBO/R17':'UGS-GS105/1')+' HOST_PASS / DSS_EXE_PASS / REAL_PENDING',S7:'IN_PROGRESS',gitHead:execFileSync('git',['rev-parse','HEAD'],{cwd:repoRoot,encoding:'utf8'}).trim(),dirty:true,
+const report={status:(s8c?'S8c streaming throughput':s8b?'S8b FLT8/FLT4/MOD1..32':turbo?'UGS-GS-TURBO/R17':'UGS-GS105/1')+' HOST_PASS / DSS_EXE_PASS / REAL_PENDING',S7:'IN_PROGRESS',gitHead:execFileSync('git',['rev-parse','HEAD'],{cwd:repoRoot,encoding:'utf8'}).trim(),dirty:true,
  specSha256:hash(join(repoRoot,'ultra-gs-docs/ultra-gs.md')),packagerSha256:sha256(readFileSync(new URL(import.meta.url))),independentBuilds:builds,commandCoverage:proofs[0].report.command_coverage.length,tickCases:proofs[0].report.tick_cases,fxProfiles:1344,gsExeCases:proofs.map(p=>p.gs.results.length),regressionPass:regression.pass,freeMainSRAM:budgets.sram['pg-ultrags'].free_main,stack:stack.subtotal+stack.unprofiled_and_irq_reserve,files,
- inputs:{...(s8b?Object.fromEntries(['tools/ultrags/s8b-evidence.mjs','tools/ultrags/gen-s8b.mjs','host/sprinter/ultrags/docs/S8B-README.md'].map(p=>[join(repoRoot,p),hash(join(repoRoot,p))])):{}),[join(repoRoot,'tests/ultrags/unit/test_gs105_evidence.py')]:hash(join(repoRoot,'tests/ultrags/unit/test_gs105_evidence.py')),[join(repoRoot,'tools/ultrags/gs105-kit.mjs')]:hash(join(repoRoot,'tools/ultrags/gs105-kit.mjs')),[join(repoRoot,'tools/ultrags/disk-formats.mjs')]:hash(join(repoRoot,'tools/ultrags/disk-formats.mjs')),[join(repoRoot,'tools/ultrags/verify-package.mjs')]:hash(join(repoRoot,'tools/ultrags/verify-package.mjs')),[join(repoRoot,'tools/ultrags/package-gs105.mjs')]:sha256(readFileSync(new URL(import.meta.url))),[join(repoRoot,'host/sprinter/ultrags/docs/GS105-README.md')]:hash(join(repoRoot,'host/sprinter/ultrags/docs/GS105-README.md'))},evidence:s8b?'host/delivery/s8b/':turbo?'host/delivery/gs-turbo/':'host/delivery/gs105/',turboReports,s8bReports,physical,REAL:turbo?'DOPE original grating/clipping REAL_FAIL retained; owner confirms no grating on normalized UF2 1ce3d9f6; complete song/level response unmeasured; Gidion FORMAT fix and full S8b REAL_PENDING; R17 UGGSC/UGGST/PROPLAY Turbo ON owner PASS; historical R13/R14/R15 and S8c failures retained; S7 IN_PROGRESS':physical?'Reported GS series REAL_PASS; full S7 hardware acceptance PENDING; GS Turbo ON and S8c throughput REAL_FAIL retained':'PENDING; GS Turbo ON known REAL_FAIL; S8c throughput REAL_FAIL retained',limits:proofs[0].report.limits};
+ inputs:{...(s8c?Object.fromEntries(['tools/ultrags/s8c-evidence.mjs','tools/ultrags/s8c-performance.py','host/sprinter/ultrags/docs/S8C-README.md'].map(p=>[join(repoRoot,p),hash(join(repoRoot,p))])):{}),...(s8b?Object.fromEntries(['tools/ultrags/s8b-evidence.mjs','tools/ultrags/gen-s8b.mjs','host/sprinter/ultrags/docs/S8B-README.md'].map(p=>[join(repoRoot,p),hash(join(repoRoot,p))])):{}),[join(repoRoot,'tests/ultrags/unit/test_gs105_evidence.py')]:hash(join(repoRoot,'tests/ultrags/unit/test_gs105_evidence.py')),[join(repoRoot,'tools/ultrags/gs105-kit.mjs')]:hash(join(repoRoot,'tools/ultrags/gs105-kit.mjs')),[join(repoRoot,'tools/ultrags/disk-formats.mjs')]:hash(join(repoRoot,'tools/ultrags/disk-formats.mjs')),[join(repoRoot,'tools/ultrags/verify-package.mjs')]:hash(join(repoRoot,'tools/ultrags/verify-package.mjs')),[join(repoRoot,'tools/ultrags/package-gs105.mjs')]:sha256(readFileSync(new URL(import.meta.url))),[join(repoRoot,'host/sprinter/ultrags/docs/GS105-README.md')]:hash(join(repoRoot,'host/sprinter/ultrags/docs/GS105-README.md'))},evidence:s8c?'host/delivery/s8c/':s8b?'host/delivery/s8b/':turbo?'host/delivery/gs-turbo/':'host/delivery/gs105/',turboReports,s8bReports,s8cReports,physical,REAL:turbo?'DOPE original grating/clipping REAL_FAIL retained; owner confirms no grating on normalized UF2 1ce3d9f6; complete song/level response unmeasured; Gidion FORMAT fix and full S8b REAL_PENDING; R17 UGGSC/UGGST/PROPLAY Turbo ON owner PASS; historical R13/R14/R15 and S8c failures retained; S7 IN_PROGRESS':physical?'Reported GS series REAL_PASS; full S7 hardware acceptance PENDING; GS Turbo ON and S8c throughput REAL_FAIL retained':'PENDING; GS Turbo ON known REAL_FAIL; S8c throughput REAL_FAIL retained',limits:proofs[0].report.limits};
 // Publication happens only after every validation, including both independently
 // assembled images and byte-for-byte ZIP/FAT round trips, has completed.
 for(const [i,b]of builds.entries())for(const [name,v]of [['CURRENT.UF2',readFileSync(join(b,'multifw-release/picogus.uf2'))],['CURRENT.ZIP',i?kitB.zip:kitA.zip],['CURRENT.IMG',i?kitB.img:kitA.img]]){writeFileSync(join(b,name+'.tmp'),v);renameSync(join(b,name+'.tmp'),join(b,name));}

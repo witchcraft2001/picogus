@@ -3,12 +3,12 @@
 // require every repaired fixture/FX/stream path to preserve resident memory.
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync,cpSync} from 'node:fs';
-import {execFileSync} from 'node:child_process';
+import {execFileSync,spawnSync} from 'node:child_process';
 import {join,resolve} from 'node:path';
 import {NativeCard} from './native-card.mjs';
 import {loadZ80,parseExe,SprinterMachine,runImage} from './ug-harness.mjs';
 import {verifyBuild,executionInputs,sha256} from '../../../tools/ultrags/build-evidence.mjs';
-const root=resolve(process.argv[2]??'.'),build=resolve(process.argv[3]??'build'),old=join(build,'lowram-probe');
+const root=resolve(process.argv[2]??'.'),build=resolve(process.argv[3]??'build'),old=join(build,'host/lowram');
 const assembly=verifyBuild(root,join(build,'ultrags/dss')),inputs=executionInputs(root),Z80=loadZ80(root),results=[],images={};
 const addon=join(build,'native/native-card.node'),manifestPath=join(build,'native/native-card-build.json'),manifest=JSON.parse(readFileSync(manifestPath));
 for(const [p,h]of Object.entries(manifest.inputs))assert.equal(sha256(readFileSync(p)),h);
@@ -22,9 +22,21 @@ for(const [name,from,to,guard]of [
  ['ugaudio.asm','AFXRECORDS EQU 0x4000','AFXRECORDS EQU 0x3000','    ASSERT AFXRECORDS >= 0x4000\n']]){
  const path=join(old,'lib',name),s=readFileSync(path,'utf8');assert(s.includes(from)&&s.includes(guard));writeFileSync(path,s.replace(from,to).replace(guard,''));
 }
-for(const app of ['UGTEST','UGPLAY'])execFileSync(process.env.SJASMPLUS??'sjasmplus',[
+const assembleArgs=app=>[
  ...['apps','lib','include'].map(dir=>'--inc='+join(old,dir)),'--inc='+join(build,'ultrags/gen'),
- '--raw='+join(old,app+'.EXE'),join(old,'apps',app.toLowerCase()+'.asm')],{stdio:'pipe'});
+ '--raw='+join(old,app+'.EXE'),join(old,'apps',app.toLowerCase()+'.asm')];
+// S8c's merged-cache guards must reject this old resident-memory allocation
+// before it runs. Bypass only these two guards in the deliberate negative
+// fixture, so the existing runtime corruption control remains meaningful.
+const rejected=spawnSync(process.env.SJASMPLUS??'sjasmplus',assembleArgs('UGPLAY'),{encoding:'utf8'});
+assert.notEqual(rejected.status,0);
+const streamPath=join(old,'lib/ugstream.asm');let stream=readFileSync(streamPath,'utf8');
+for(const guard of ['    ASSERT SDISKBUF == 0x4000 ; resident DSS ends here\n','    ASSERT SDISKBUF+SDISKSIZE == BACK+1024\n']){
+ assert(stream.includes(guard));assert(rejected.stderr.includes(guard.trim().split(' ;')[0].replace('ASSERT ','Assertion failed:  ')));
+ stream=stream.replace(guard,'');
+}
+writeFileSync(streamPath,stream);
+for(const app of ['UGTEST','UGPLAY'])execFileSync(process.env.SJASMPLUS??'sjasmplus',assembleArgs(app),{stdio:'pipe'});
 const cases=[['UGTEST','MOD4'],['UGTEST','MOD8'],['UGPLAY','FX A.RAW /RATE:48000 /BITS:8 /CH:1 /FMT:U8 /LOOP'],['UGPLAY','STREAM A.RAW /RATE:48000 /BITS:8 /CH:1 /FMT:U8 /BUFFER:8 /PREFILL:4 /LOW:2']];
 function run(app,cli,legacy=false,slot=0,iff=1){
  const path=join(legacy?old:join(build,'ultrags/dss'),app+'.EXE');
@@ -45,4 +57,4 @@ function run(app,cli,legacy=false,slot=0,iff=1){
 }
 for(const [app,cli]of cases){run(app,cli,true);for(const slot of [0,1])for(const iff of [0,1])run(app,cli,false,slot,iff);}
 assert.deepEqual(executionInputs(root),inputs);assert.deepEqual(verifyBuild(root,join(build,'ultrags/dss')),assembly);
-mkdirSync(join(build,'evidence'),{recursive:true});writeFileSync(join(build,'evidence/lowram-exe.json'),JSON.stringify({status:'HOST_ACTUAL_EXE_PASS / REAL_PENDING',inputs,assembly,images,adapterSha256:sha256(readFileSync(manifestPath)),runnerSha256:sha256(readFileSync(new URL(import.meta.url))),results},null,2)+'\n');
+mkdirSync(join(build,'evidence'),{recursive:true});writeFileSync(join(build,'evidence/lowram-exe.json'),JSON.stringify({status:'HOST_ACTUAL_EXE_PASS / REAL_PENDING',cacheGuardsRejected:true,inputs,assembly,images,adapterSha256:sha256(readFileSync(manifestPath)),runnerSha256:sha256(readFileSync(new URL(import.meta.url))),results},null,2)+'\n');
