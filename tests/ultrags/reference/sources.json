@@ -3,6 +3,13 @@
   "purpose": "Maintained source and licensing inventory; generated build hashes are local artifacts",
   "sources": [
     {
+      "name": "libxmp FLT8 regression reference",
+      "url": "https://github.com/libxmp/libxmp",
+      "revision": "5d4f6aa2c7dcdf8e9cd8129fe579d45b36a302da",
+      "license": "MIT for loader/test code; module music retains its own rights and is not redistributed",
+      "use": "Read-only comparison of src/loaders/flt_load.c, test-dev/test_loader_flt8.c and its Gidion_Graveland.mod fixture; cached hashes in build/host/flt8-audit. Host transport oracle uses installed libxmp 4.7.0, whose binary/header hashes are recorded separately."
+    },
+    {
       "name": "PicoGUS baseline",
       "url": "https://github.com/polpo/picogus",
       "revision": "74f57e56217066a5ed29bc4fb140308577e9a44e",

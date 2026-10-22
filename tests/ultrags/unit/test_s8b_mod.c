@@ -99,5 +99,28 @@ int main(int argc,char **argv) {
     m.size=7484;memcpy(m.b,original,7484);m.b[950]=1;m.b[1079]=5;
     assert(scan(&m,&i)==1 && i.sample_offset==7228);
     puts("FLT8 bounded cooperative reads; truncated pairs/samples, volume/loop/instrument/song, second-half I/O error, tailFF/pattern127 PASS");
+    /* Unused physical pairs must affect layout, but never the song's events.
+     * Match Gidion's eleven-pair layout with deliberately invalid instruments. */
+    memcpy(m.b,original,7484);m.size=23868;m.b[1079]=21;
+    memset(m.b+7228,255,16384);memcpy(m.b+23612,original+7228,256);
+    free(ref.b);ref=file(argv[2]);assert(scan(&ref,&j)==1);
+    assert(scan(&m,&i)==1 && i.sample_offset==23612);
+    ug_mod_start(&a,&i,rd,&m,0,0);ug_mod_start(&b,&j,rd,&ref,0,0);
+    for(unsigned t=0;t<2304;t++){same(&a,&b);ug_mod_tick(&a);ug_mod_tick(&b);}
+    assert(!a.error && !a.playing && !memcmp(m.b+23612,original+7228,256));
+    ug_mod_start(&a,&i,rd,&m,0,0);
+    assert(ug_mod_seek(&a,6,0)==-1); /* inactive orders cannot be sought */
+    for(unsigned order=6;order<=21;order++){
+        m.b[952]=order;assert(scan(&m,&i)==-1);
+    }
+    m.b[952]=0;m.fail=7228;assert(scan(&m,&i)==-2);m.fail=~0u;
+    m.size--;assert(scan(&m,&i)==-1);m.size=23868;
+    m.b[45]=65;assert(scan(&m,&i)==-1);m.b[45]=12;
+    m.b[47]=32;assert(scan(&m,&i)==-1);m.b[47]=0;
+    /* An unreferenced hole below the highest active pair is also inactive. */
+    m.b[950]=2;m.b[952]=0;m.b[953]=4;
+    memset(m.b+3132,255,2048);assert(scan(&m,&i)==1);
+    m.b[953]=3;assert(scan(&m,&i)==-1);
+    puts("FLT8 unused tail pairs/holes preserve layout and PCM; active even/odd pairs, bounds, I/O, volume/loop validation PASS");
     free(m.b);free(ref.b);return 0;
 }

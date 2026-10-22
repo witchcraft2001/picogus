@@ -93,6 +93,17 @@ for tag,channels in [('FLT4',4),('28CH',28),('31CH',31),('32CH',32)]:
    assert bytes(m.uc.mem_read(m.DATA,len(original)))==original and m.STACK-m.min_sp<=2048
    extended.append(dict(signature=tag,channels=channels,fx_channels=fx_channels,fx_voices=len(fx)*fx_channels,loop_bytes=loop_bytes,exact_frames=1536,observed_stack=m.STACK-m.min_sp,sha256=audio.hashlib.sha256(output).hexdigest()))
    print('PASS linked ARM interleaved MOD + independent FX',extended[-1],flush=True)
+tails=[];tail_inputs=[]
+for path,prefix in [(b/'host/s8b/fixtures/FLT8TAIL.MOD',b/'host/s8b/flt8-tail-prefix.s16le'),*([(Path(os.environ['UG_FLT8_MOD']).resolve(),b/'host/s8b/gidion-prefix.s16le')] if os.environ.get('UG_FLT8_MOD') else [])]:
+ data=path.read_bytes();assert data[1080:1084]==b'FLT8'
+ m=base.Card();h=m.asset(3,data);m.command(49,struct.pack('<HB',h,0));m.counting=True;out=bytearray()
+ for _ in range(24):m.render();out.extend(m.uc.mem_read(m.OUT,512))
+ assert bytes(out)==prefix.read_bytes(),'ARM/C FLT8 tail PCM prefix mismatch'
+ for order in range(data[950]):
+  for row in (0,63):m.command(51,struct.pack('<HHB',0,order,row));m.render()
+ assert bytes(m.uc.mem_read(m.DATA,len(data)))==data and m.STACK-m.min_sp<=2048
+ tails.append(dict(path=str(path.resolve()),sha256=audio.digest(path),bytes=len(data),orders=data[950],render_frames=3072,audio_sha256=audio.hashlib.sha256(out).hexdigest(),observed_stack=m.STACK-m.min_sp))
+ tail_inputs.extend([path,prefix]);print('PASS linked ARM original-layout FLT8 tail',tails[-1],flush=True)
 real=None
 if os.environ.get('UG_MULTIMOD'):
  path=Path(os.environ['UG_MULTIMOD']).resolve();data=path.read_bytes();assert data[1080:1084]==b'28CH'
@@ -103,6 +114,6 @@ if os.environ.get('UG_MULTIMOD'):
  assert bytes(m.uc.mem_read(m.DATA,len(data)))==data and m.STACK-m.min_sp<=2048
  real=dict(path=str(path),sha256=audio.digest(path),render_frames=3072,audio_sha256=audio.hashlib.sha256(out).hexdigest(),observed_stack=m.STACK-m.min_sp)
  print('PASS linked ARM original DOPE.MOD',real,flush=True)
-inputs=[base.elf,b/'multifw-release/picogus.uf2',Path(__file__),Path(__file__).with_name('s8a-arm.py'),Path(__file__).with_name('audio-render-check.py'),*(audio.ROOT/'sw/ultrags').glob('*.c'),*(audio.ROOT/'sw/ultrags').glob('*.h'),*(audio.ROOT/'sw/ultrags').glob('*.inc')]
+inputs=[base.elf,b/'multifw-release/picogus.uf2',Path(__file__),Path(__file__).with_name('s8a-arm.py'),Path(__file__).with_name('audio-render-check.py'),*tail_inputs,*(audio.ROOT/'sw/ultrags').glob('*.c'),*(audio.ROOT/'sw/ultrags').glob('*.h'),*(audio.ROOT/'sw/ultrags').glob('*.inc')]
 if real:inputs.extend([Path(real['path']),reference])
-(b/'evidence/s8b-arm.json').write_text(json.dumps(dict(status='LINKED_ARM_FLT8_PASS / REAL_PENDING',inputs={str(f.resolve()):audio.digest(f) for f in inputs},results=results,extended=extended,real=real,limits=['Functional PSRAM/timer; no physical timing claim']),indent=2)+'\n')
+(b/'evidence/s8b-arm.json').write_text(json.dumps(dict(status='LINKED_ARM_FLT8_PASS / REAL_PENDING',inputs={str(f.resolve()):audio.digest(f) for f in inputs},results=results,extended=extended,tails=tails,real=real,limits=['Functional PSRAM/timer; no physical timing claim']),indent=2)+'\n')

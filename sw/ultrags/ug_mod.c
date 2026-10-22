@@ -79,7 +79,17 @@ int ug_mod_parser_step(ug_mod_parser *p,ug_mod_info *out,ug_mod_read_fn read,voi
     if(p->stage==2) {
         unsigned n=out->sample_offset-p->cursor;if(n>sizeof(h))n=sizeof(h);
         if(read(ctx,p->cursor,h,n)) return -2;
-        for(unsigned i=0;i<n;i+=4) if(((h[i]&0xf0)|(h[i+2]>>4))>31) return -1;
+        /* Every physical pattern still determines the sample offset, including
+         * inactive tail orders. Only patterns in the playable order list need
+         * valid events: old modules can retain arbitrary unused pattern bytes.
+         * Pattern sizes and each chunk are multiples of 256, so a chunk never
+         * straddles patterns (also for FLT8's paired four-channel blocks). */
+        unsigned pattern=(p->cursor-out->pattern_offset)/(256u*out->channels);
+        bool used=false;
+        for(unsigned order=0;order<out->song_length;order++)
+            if(out->order[order]==pattern) { used=true;break; }
+        if(used) for(unsigned i=0;i<n;i+=4)
+            if(((h[i]&0xf0)|(h[i+2]>>4))>31) return -1;
         p->cursor+=n;
         if(p->cursor<out->sample_offset) return 0;
         p->stage=3;

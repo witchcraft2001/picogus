@@ -15,6 +15,8 @@ const cases=[
  ['missing UBSan program','host/s8b/host-evidence.json',jsonChange(e=>({...e,commands:{}}))],
  ['missing ARM profiles','evidence/s8b-arm.json',jsonChange(e=>({...e,results:[]}))],
  ['missing FLT4/multichannel ARM','evidence/s8b-arm.json',jsonChange(e=>({...e,extended:[]}))],
+ ['missing FLT8 tail ARM','evidence/s8b-arm.json',jsonChange(e=>({...e,tails:[]}))],
+ ['missing FLT8 tail storage','host/s8b/host-evidence.json',jsonChange(e=>{delete e.commands['flt8-tail-storage'];return e;})],
  ['missing cancellation','evidence/s8b-exe.json',jsonChange(e=>({...e,results:e.results.filter(r=>r.exit!==10)}))],
  ['resident corruption','evidence/s8b-exe.json',jsonChange(e=>({...e,results:e.results.map(r=>({...r,residentWrites:1}))}))],
  ['substituted EXE','ultrags/dss/UGTEST.EXE',flip],

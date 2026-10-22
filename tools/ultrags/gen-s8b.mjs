@@ -48,7 +48,12 @@ for(let p=0;p<3;p++)for(let c=0;c<4;c++)for(const r of [0,63]){
 for(const [off,n]of [[1084,856],[2092,855],[2108,848],[3132,840],[4152,749]])assert.equal(flt4.readUInt16BE(off),n);
 assert.equal(flt4[4156],24);assert.equal(flt4[4283],220);
 const sha=b=>createHash('sha256').update(b).digest('hex'),files=[];
-for(const [name,data]of [['FLT8.MOD',flt],['FLT8REF.MOD',chn],['FLT4.MOD',flt4],['FLT4REF.MOD',ref4]]){writeFileSync(join(out,name),data);files.push({name,bytes:data.length,sha256:sha(data)});}
+// Eleven physical pairs, only the first three played. Extra pairs deliberately
+// contain invalid events; they must still separate the song from its PCM.
+const tail=Buffer.alloc(23868);flt.copy(tail,0,0,7228);tail[1079]=21;
+tail.fill(255,7228,23612);flt.copy(tail,23612,7228);
+assert.equal(tail[23612],24);assert.equal(tail[23867],204);
+for(const [name,data]of [['FLT8.MOD',flt],['FLT8TAIL.MOD',tail],['FLT8REF.MOD',chn],['FLT4.MOD',flt4],['FLT4REF.MOD',ref4]]){writeFileSync(join(out,name),data);files.push({name,bytes:data.length,sha256:sha(data)});}
 for(const channels of [1,2,3,28,31,32]){
  const b=Buffer.alloc(1084+2*256*channels+31*4);b[950]=2;b[953]=1;b.write(channels+(channels<10?'CHN':'CH'),1080);
  for(let c=0;c<31;c++){b.writeUInt16BE(2,42+c*30);b[45+c*30]=16;b.writeUInt16BE(2,48+c*30);b.fill(c%7+1,1084+512*channels+c*4,1084+512*channels+c*4+4);}

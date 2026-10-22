@@ -20,7 +20,10 @@ int main(int argc,char **argv) {
             ug_mod_tick(&a);
         }
         assert(!a.playing);
-        m.b[1084+(128*channels-1)*4]=0x20;assert(scan(&m,&i)==-1);m.b[1084+(128*channels-1)*4]=1;
+        m.b[1084+(128*channels-1)*4]=0x20;assert(scan(&m,&i)==-1);
+        m.b[950]=1;assert(scan(&m,&i)==1 && i.sample_offset==1084+512*channels);
+        m.b[952]=1;assert(scan(&m,&i)==-1);m.b[952]=0;m.b[950]=2;
+        m.b[1084+(128*channels-1)*4]=1;
         m.size--;assert(scan(&m,&i)==-1);free(m.b);
     }
     FILE *f=fopen(argv[1],"rb");assert(f);assert(!fseek(f,0,SEEK_END));unsigned size=(unsigned)ftell(f);rewind(f);

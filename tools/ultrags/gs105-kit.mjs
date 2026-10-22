@@ -19,7 +19,7 @@ export function buildKit(root,b,assembly,{turbo=false,s8b=false}={}){
  if(s8b){
   add('S8B.TXT',join(root,'host/sprinter/ultrags/docs/S8B-README.md'));
   const f=json(join(b,'host/s8b/fixtures/fixtures.json'));assert.equal(f.generatorSha256,sha256(readFileSync(join(root,'tools/ultrags/gen-s8b.mjs'))));
-  for(const name of ['FLT8.MOD','FLT4.MOD','MOD28.MOD','MOD31.MOD','MOD32.MOD']){const mod=f.files.find(f=>f.name===name);add(name,join(b,'host/s8b/fixtures',name),mod.sha256);}
+  for(const name of ['FLT8.MOD','FLT8TAIL.MOD','FLT4.MOD','MOD28.MOD','MOD31.MOD','MOD32.MOD']){const mod=f.files.find(f=>f.name===name);add(name,join(b,'host/s8b/fixtures',name),mod.sha256);}
  }
  if(turbo)add('GSTURBO.TXT',join(b,'GS-TURBO.txt'));
  add('GSCONF.TXT',join(b,'GS105-CONFORMANCE.md'));

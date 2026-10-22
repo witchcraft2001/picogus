@@ -108,8 +108,8 @@ for(const slow of ['', ' /SLOW'])for(const slot of [0,1])for(const iff of [0,1])
 }
 for(const data of [fixture.subarray(0,7000),fixture.subarray(0,7483)])run('UGLOAD','BAD.MOD /TYPE:MOD',{files:{'BAD.MOD':data},expected:6});
 const additionalFiles={};
-for(const [name,channels]of [['FLT4.MOD',4],['MOD1.MOD',1],['MOD2.MOD',2],['MOD3.MOD',3],['MOD28.MOD',28],['MOD31.MOD',31],['MOD32.MOD',32],...(process.env.UG_MULTIMOD?[['DOPE.MOD',28]]:[])]){
- const path=name==='DOPE.MOD'?resolve(process.env.UG_MULTIMOD):join(build,'host/s8b/fixtures',name),data=readFileSync(path);
+for(const [name,channels]of [['FLT4.MOD',4],['FLT8TAIL.MOD',8],['MOD1.MOD',1],['MOD2.MOD',2],['MOD3.MOD',3],['MOD28.MOD',28],['MOD31.MOD',31],['MOD32.MOD',32],...(process.env.UG_MULTIMOD?[['DOPE.MOD',28]]:[]),...(process.env.UG_FLT8_MOD?[['GIDION.MOD',8]]:[])]){
+ const path=name==='DOPE.MOD'?resolve(process.env.UG_MULTIMOD):name==='GIDION.MOD'?resolve(process.env.UG_FLT8_MOD):join(build,'host/s8b/fixtures',name),data=readFileSync(path);
  additionalFiles[path]=sha256(data);
  for(const slot of [0,1])for(const iff of [0,1]){
   const files={[name]:data},suffix=` /SLOT:${slot}`;

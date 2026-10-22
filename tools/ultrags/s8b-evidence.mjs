@@ -8,7 +8,7 @@ export function verifyS8b(b,assembly){
  const paths=['host/s8b/host-evidence.json','host/s8b/fixtures/fixtures.json','evidence/s8b-exe.json','evidence/s8b-arm.json'];
  const [host,fixtures,exe,arm]=paths.map(p=>json(join(b,p)));
  for(const e of [host,arm]){assert(Object.keys(e.inputs).length);for(const[p,h]of Object.entries(e.inputs))assert.equal(hash(resolve(repoRoot,p)),h,'stale S8b input '+p);}
- assert.equal(host.status,'HOST_PASS / REAL_PENDING');for(const name of ['flt4','flt4-storage','flt8','flt8-storage','multimod','multimod-storage'])assert(host.commands[name],name);
+ assert.equal(host.status,'HOST_PASS / REAL_PENDING');for(const name of ['flt4','flt4-storage','flt8','flt8-storage','flt8-tail-storage','multimod','multimod-storage'])assert(host.commands[name],name);
  for(const[n,h]of Object.entries(host.artifacts))assert.equal(hash(join(b,'host/s8b',n)),h);
  assert.equal(fixtures.generatorSha256,hash(join(repoRoot,'tools/ultrags/gen-s8b.mjs')));
  for(const f of fixtures.files)assert.equal(hash(join(b,'host/s8b/fixtures',f.name)),f.sha256);
@@ -26,6 +26,19 @@ export function verifyS8b(b,assembly){
  assert.equal(arm.status,'LINKED_ARM_FLT8_PASS / REAL_PENDING');assert.equal(arm.results.length,4);
  for(const ch of [1,2])for(const loop of [4,128])assert(arm.results.some(r=>r.fx_channels===ch&&r.loop_bytes===loop&&r.orders===6&&r.exact_frames===4608&&r.observed_stack<=2048));
  assert.equal(arm.extended.length,16);
+ const tailPath=resolve(b,'host/s8b/fixtures/FLT8TAIL.MOD');
+ assert(arm.tails.some(t=>t.path===tailPath&&t.bytes===23868&&t.render_frames===3072&&t.observed_stack<=2048));
+ assert.equal(exe.additionalFiles[tailPath],hash(tailPath));
+ for(const t of arm.tails){assert.equal(hash(t.path),t.sha256);assert(t.render_frames>=3072&&t.observed_stack<=2048);}
+ if(host.commands['gidion-storage']){
+  const path='host/s8b/flt8-reference.json',ref=json(join(b,path));paths.push(path);
+  assert.equal(ref.status,'HOST_PASS / REAL_PENDING');assert(ref.ticks_compared>0&&ref.order_row_tick_speed_bpm==='EXACT');
+  assert.equal(hash(ref.path),ref.original_sha256);assert.equal(exe.additionalFiles[ref.path],ref.original_sha256);
+  assert(arm.tails.some(t=>t.path===ref.path&&t.sha256===ref.original_sha256));
+  for(const[p,h]of Object.entries(ref.inputs))assert.equal(hash(p),h);
+  for(const[p,h]of Object.entries(ref.artifacts))assert.equal(hash(join(b,'host/s8b',p)),h);
+  for(const slot of [0,1])for(const iff of [0,1])for(const gs of [false,true])assert(exe.results.some(r=>r.app==='UGPLAY'&&r.cli.startsWith('GIDION.MOD ')&&r.cli.includes('/GS')===gs&&r.exit===0&&r.slot===slot&&r.iff===iff));
+ }
  for(const [signature,channels,file]of [['FLT4',4,'FLT4.MOD'],['28CH',28,'MOD28.MOD'],['31CH',31,'MOD31.MOD'],['32CH',32,'MOD32.MOD']]){
   for(const fx of [1,2])for(const loop of [4,128])assert(arm.extended.some(r=>r.signature===signature&&r.channels===channels&&r.fx_channels===fx&&r.loop_bytes===loop&&r.exact_frames===1536&&r.observed_stack<=2048&&r.fx_voices+channels<=32));
   assert(exe.additionalFiles[resolve(b,'host/s8b/fixtures',file)]);
