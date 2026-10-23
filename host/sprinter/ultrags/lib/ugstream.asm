@@ -497,14 +497,14 @@ STREAM_CREATE:
     jp c,RPC_ERROR
     ld hl,PCM_DESC
     ld de,REQ
-    ld bc,8
+    ld bc,8                  ; частота и формат PCM
     ldir
     ld hl,SBUFFER
-    ld bc,12
+    ld bc,12                 ; три размера по 4 байта
     ldir
     ld a,UG_OP_STREAM_CREATE
-    ld bc,20
-    ld e,2
+    ld bc,UG_OP_STREAM_CREATE_REQ_LEN
+    ld e,UG_OP_STREAM_CREATE_RESP_LEN
     call RPC
     jp c,RPC_ERROR
     ld hl,(RESP)
@@ -679,6 +679,7 @@ STREAM_STATUS:
     ld bc,4
     ldir
     ret
+; docs:stream-feed:begin
 STREAM_FEED:
     ld hl,(HANDLE)
     ld (REQ),hl
@@ -715,6 +716,7 @@ STREAM_FEED:
     xor a
     ld (UGTM.NOESC),a
     pop af
+; docs:stream-feed:end
     jr c,.recover
     ld hl,RESP
     jr .ack

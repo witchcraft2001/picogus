@@ -192,9 +192,13 @@ S6TEST_RUN:
     call START_BLOCKS
     call NEXT_BLOCK
     call PATTERN
+    call FOLD_FILE
     call WRITE_BLOCK
     call PCM_CONFIGURE
     call SEAL_BLOB
+    ; Verify the lesson's original bytes, including the VERIFIED block path.
+    call READ_BLOCK
+    call COMPARE_BLOCK
     call SESSION_CHECK
     jp c,RPC_ERROR
     ld a,(CMD)
@@ -278,33 +282,33 @@ S6TEST_PLAY_FX:
     ret c
     ld hl,(HANDLE)
     ld (REQ),hl
-    ld hl,0xFFFF
+    ld hl,UG_VOICE_AUTO       ; карта сама выбирает свободные голоса
     ld (REQ+2),hl
-    ld a,128
+    ld a,128                 ; приоритет средний, панорама по центру
     ld (REQ+4),a
     ld (REQ+6),a
     ld a,(S8MODE)
     or a
-    ld a,1                    ; full-pool test avoids32-voice clipping
+    ld a,1                   ; тихо при проверке сразу 32 голосов
     jr z,.gain
-    ld a,64                   ; four quiet S16 S8a tones must be audible
+    ld a,64                  ; громче для четырёх тихих образцов MOD8
 .gain:
     ld (REQ+5),a
-    ld a,2
+    ld a,2                   ; bit1: повторять весь объект
     ld (REQ+7),a
-    ld a,54
-    ld bc,8
-    ld e,4
+    ld a,UG_OP_PLAY_FX
+    ld bc,UG_OP_PLAY_FX_REQ_LEN
+    ld e,UG_OP_PLAY_FX_RESP_LEN
     jp RPC
 S6TEST_SNAPSHOT:
-    ld a,80
-    ld bc,0
-    ld e,64
+    ld a,UG_OP_SNAPSHOT
+    ld bc,UG_OP_SNAPSHOT_REQ_LEN
+    ld e,UG_OP_SNAPSHOT_RESP_LEN
     call RPC
     ret c
     ld hl,RESP
     ld de,S6SNAP
-    ld bc,64
+    ld bc,UG_OP_SNAPSHOT_RESP_LEN
     ldir
     ret
 ; Only RAM reads, before cleanup overwrites UGREQ.FRAME. No extra ISA traffic.

@@ -4,6 +4,10 @@
 
 [![Build Status](https://github.com/polpo/picogus/actions/workflows/build.yml/badge.svg)](https://github.com/polpo/picogus/actions/workflows/build.yml)
 
+UltraGS для Sprinter: [руководство программиста](host/sprinter/ultrags/docs/ULTRAGS-PROGRAMMING.md),
+[PDF для печати](host/sprinter/ultrags/docs/ULTRAGS-PROGRAMMING.pdf),
+[утилиты и сборка](host/sprinter/ultrags/README.md).
+
 ISA sound card and CD-ROM drive emulation on the Raspberry Pi Pico's RP2040 microcontroller. PicoGUS can emulate:
 
 * [Gravis Ultrasound (GUS)](https://en.wikipedia.org/wiki/Gravis_Ultrasound) - the primary focus of PicoGUS, hence the name

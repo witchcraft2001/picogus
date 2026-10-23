@@ -89,19 +89,22 @@ GT_RUN:
     call GT_PASS
     ld hl,gt_sign
     call GT_BEGIN
-    ld a,0x3E
-    ld bc,0x0100 ; ROM sign=0 means S8
-    ld e,1
+; docs:gs-signed:begin
+    ld a,UG_GS_GS_LOAD_FX_SIGNED ; загрузить FX с выбором формата
+    ld b,1                   ; есть предварительный байт
+    ld c,0                   ; формат S8: от -128 до 127
+    ld e,1                   ; один байт ответа: номер GS-эффекта
     call GS_CALL
     jp c,GS_RPC_ERROR
     call GT_PENDING
-    ld a,128
+    ld a,128                 ; байт 80h означает -128 в формате S8
     call GT_SD
     xor a
     call GT_SD
     ld a,127
     call GT_SD
     call GT_CLOSE
+; docs:gs-signed:end
     IFDEF UG_GS_TURBO_SLOT
     ld hl,gt_fx_signed
     ld bc,3
@@ -303,15 +306,16 @@ GT_MOD4:
     ld de,S8MOD_DATA+2108
     ld bc,32
     ldir
-    ld a,0x30
+; docs:gs-mod:begin
+    ld a,UG_GS_GS_LOAD_MODULE ; начать загрузку MOD
     call GS_QUERY
     jp c,GS_RPC_ERROR
     call GT_PENDING
-    ld a,0xD1
+    ld a,UG_GS_GS_EXT_D1      ; исторический маркер начала данных
     call GS_SIMPLE
     jp c,GS_RPC_ERROR
     ld hl,S8MOD_DATA
-    ld bc,2140
+    ld bc,2140               ; размер собственного MOD4 в байтах
 .upload:
     push hl
     push bc
@@ -327,14 +331,16 @@ GT_MOD4:
     call GT_CLOSE
     IFDEF UG_GS_TURBO_SLOT
     ld hl,S8MOD_DATA
-    ld bc,2140
+    ld bc,2140               ; размер собственного MOD4 в байтах
     call GT_READBACK
     ENDIF
-    ld a,0x31
-    ld bc,0x0100
-    ld e,1
+    ld a,UG_GS_GS_PLAY_MODULE ; включить музыку
+    ld b,1                   ; передать предварительный байт
+    ld c,0                   ; 0 = текущий MOD
+    ld e,1                   ; прочитать один байт ответа
     call GS_CALL
     jp c,GS_RPC_ERROR
+; docs:gs-mod:end
     ld a,0xF5
     call GS_SIMPLE
     jp c,GS_RPC_ERROR
@@ -419,29 +425,34 @@ GT_MOD4:
     ld bc,2
     call GT_READBACK
     ENDIF
-    ld a,0x48
-    ld bc,0x0100
-    ld e,0
+; docs:gs-fx-play:begin
+    ld a,UG_GS_GS_LOOP_START ; начало петли
+    ld b,1                   ; есть предварительный байт
+    ld c,0                   ; значение предварительного байта
+    ld e,0                   ; ответных байтов нет
     call GS_CALL
     jp c,GS_RPC_ERROR
     xor a
     call GT_SD
     xor a
     call GT_SD
-    ld a,0x49
-    ld bc,0x0102
-    ld e,0
+    ld a,UG_GS_GS_LOOP_END   ; конец петли (не включается)
+    ld b,1
+    ld c,2                   ; младший байт: конец петли = 2
+    ld e,0                   ; ответных байтов нет
     call GS_CALL
     jp c,GS_RPC_ERROR
     xor a
     call GT_SD
     xor a
     call GT_SD
-    ld a,0x80
-    ld bc,0x0100
-    ld e,0
+    ld a,UG_GS_GS_FX_CH0     ; включить текущий FX на выходе GS0
+    ld b,1                   ; есть предварительный байт
+    ld c,0                   ; значение предварительного байта
+    ld e,0                   ; ответных байтов нет
     call GS_CALL
     jp c,GS_RPC_ERROR
+; docs:gs-fx-play:end
     ld hl,(GTHANDLE)
     ld (REQ),hl
     ld hl,0

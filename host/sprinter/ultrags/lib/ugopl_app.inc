@@ -255,6 +255,7 @@ OPL_RUN:
     call OPL_WRITE
     sub 0x0F
     djnz .reset_channels
+; docs:fm-instrument:begin
     ld hl,opl_operators
     ld b,18
 .operators:
@@ -292,6 +293,7 @@ OPL_RUN:
     call OPL_WRITE
     sub 0x0F
     djnz .notes
+; docs:fm-instrument:end
     ld a,(CMD)
     cp 10
     jr nz,.test

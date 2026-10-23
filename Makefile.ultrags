@@ -108,6 +108,27 @@ budgets: diagnostic-release firmware
 UGBUILD := $(BUILD)/ultrags
 NODE ?= node
 
+# Programmer guide. Does not rebuild firmware or overwrite CURRENT.*.
+UG_DOC_PYTHON ?= $(ROOT)/build/host/docs/venv/bin/python
+.PHONY: docs docs-check docs-examples
+docs-examples: $(UGBUILD)/gen/ug_wire.inc
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/docs-examples.py
+
+docs: dss docs-examples
+	@mkdir -p $(ROOT)/build/host/docs
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/docs-sync.py --check
+	$(UG_DOC_PYTHON) $(ROOT)/tools/ultrags/docs-pdf.py
+	$(NODE) $(ROOT)/tools/ultrags/docs-package.mjs
+	cp $(ROOT)/build/ULTRAGS-PROGRAMMING.pdf $(ROOT)/host/sprinter/ultrags/docs/ULTRAGS-PROGRAMMING.pdf
+
+docs-check: docs s2-host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(ROOT)/build/native
+	$(NODE) $(ROOT)/tools/ultrags/docs-examples-check.mjs
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/docs-protocol-check.py
+	$(UG_DOC_PYTHON) $(ROOT)/tools/ultrags/docs-check.py
+	@mkdir -p $(ROOT)/build/host/docs/pages
+	pdftoppm -scale-to 1100 -png $(ROOT)/build/ULTRAGS-PROGRAMMING.pdf $(ROOT)/build/host/docs/pages/page
+
 $(UGBUILD)/gen/ug_wire.inc: $(ROOT)/tools/ultrags/wire-schema.json $(ROOT)/tools/ultrags/gen-wire.mjs
 	@mkdir -p $(UGBUILD)/gen
 	$(NODE) $(ROOT)/tools/ultrags/gen-wire.mjs $(ROOT)/tools/ultrags/wire-schema.json $(UGBUILD)/gen

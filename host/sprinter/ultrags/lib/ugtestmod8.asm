@@ -89,41 +89,45 @@ S8TEST_MOD:
     call ADVANCE
     jr .upload
 .sealed:
+; docs:mod-start:begin
     call SEAL_BLOB
     ld hl,(HANDLE)
     ld (REQ),hl
-    ld a,1
+    ld a,UG_MOD_LOOP          ; повторять песню
     ld (REQ+2),a
-    ld a,49
-    ld bc,3
-    ld e,2
+    ld a,UG_OP_PLAY_MOD
+    ld bc,UG_OP_PLAY_MOD_REQ_LEN
+    ld e,UG_OP_PLAY_MOD_RESP_LEN
     call RPC
     jp c,RPC_ERROR
     ld hl,(RESP)
     ld (S8PLAY),hl
+; docs:mod-start:end
     call S6TEST_DRAIN
     call S8TEST_CHECK_MUSIC
     xor a
     ld (S8INDEX),a
 .voices:
-    ld hl,S6SNAP+4
+; docs:voice-page:begin
+    ld hl,S6SNAP+4            ; session из снимка
     ld de,REQ
-    ld bc,8
+    ld bc,8                  ; размер session
     ldir
     ld hl,S6SNAP
-    ld bc,4
+    ld bc,4                  ; номер снимка: 4 байта
     ldir
     ld a,(S8INDEX)
     ld l,a
     ld h,0
     ld (REQ+12),hl
-    ld hl,1
+    ld hl,1                  ; запросить одну запись голоса
     ld (REQ+14),hl
-    ld a,82
-    ld bc,16
-    ld e,40
+    ld a,UG_OP_VOICE_STATUS
+    ld bc,UG_OP_VOICE_STATUS_REQ_LEN
+    ld e,40                  ; заголовок 20 + одна запись 20 байт
     call RPC
     jp c,RPC_ERROR
+; docs:voice-page:end
     ld a,(S8INDEX)
     ld hl,RESP+26
     cp (hl)
@@ -258,25 +262,27 @@ S8TEST_PHASE:
     jr nz,.tone
     call FOLD_FILE
     call WRITE_BLOCK
+; docs:stereo-desc:begin
     ld hl,PCM_DESC
     ld de,PCM_DESC+1
-    ld bc,23
+    ld bc,23                 ; после первого нуля обнулить ещё 23 байта
     ld (hl),0
     ldir
-    ld hl,48000
+    ld hl,48000              ; частота в Гц
     ld (PCM_DESC),hl
-    ld a,(S8CH)
+    ld a,(S8CH)              ; 1 = mono, 2 = stereo
     ld (PCM_DESC+4),a
-    ld a,16
+    ld a,16                  ; 16 бит на отсчёт
     ld (PCM_DESC+5),a
-    ld a,2
+    ld a,2                   ; формат S16LE
     ld (PCM_DESC+6),a
-    ld hl,1024
+    ld hl,1024               ; длина уже загруженных данных в байтах
     ld (PCM_DESC+12),hl
     call PCM_CONFIGURE
     call SEAL_BLOB
     call S6TEST_PLAY_FX
     jp c,RPC_ERROR
+; docs:stereo-desc:end
     ; Pause/resume only the just-created instance; keep its ID in SRAM.
     ld hl,(RESP)
     ld (S8WORK),hl

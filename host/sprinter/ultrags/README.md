@@ -17,6 +17,13 @@ S8c streaming optimization is deferred; confirmed 44100/S16/stereo REAL_FAIL rem
 
 # Утилиты ULTRAGS для Sprinter
 
+[Руководство программиста UltraGS](docs/ULTRAGS-PROGRAMMING.md) - последовательное
+обучение, справочник GS/native/OPL2 и собираемые примеры.
+[PDF для чтения и печати](docs/ULTRAGS-PROGRAMMING.pdf) хранится в репозитории.
+`make -f Makefile.ultrags docs` пересобирает PDF и обновляет эту копию;
+`docs-check` проверяет таблицы, листинги,
+PDF и исполнение примеров в Z80/DSS-стенде. Зависимости и команды приведены ниже.
+
 Сборка и готовый комплект всегда находятся в **`build/`** от корня репозитория.
 `CURRENT.ZIP` содержит EXE, тестовый WAV и инструкции. Прошивка
 `CURRENT.UF2` и образ `CURRENT.IMG` лежат отдельно и в ZIP не включаются.
@@ -39,8 +46,134 @@ UGCFG ULTRAGS /GSALIAS ON
 PROPLAY ATDT.MOD
 ```
 
-GSALIAS действует до перезагрузки карты. `SAVE` сохраняет режим старта,
-BASE и BULK alias; GSALIAS в Settings не входит.
+Явный `UGCFG SAVE` сохраняет режим старта, BASE и BULK alias.
+GSALIAS действует до перезапуска карты и через SAVE не сохраняется.
+SAVE записывает Flash; выполнять его после каждого запуска программы не нужно.
 
 Функциональный прогон на реальном Sprinter остаётся `REAL_PENDING`;
 S7 — `IN_PROGRESS`. Каталоги промежуточных сборок не являются поставкой.
+
+
+## Руководство и учебные примеры
+
+[ULTRAGS-PROGRAMMING.md](docs/ULTRAGS-PROGRAMMING.md) - единственный
+редактируемый источник PDF. ReportLab читает этот Markdown. Таблицы форматов
+синхронизируются со схемой, листинги - с ASM-исходниками; помеченные блоки
+обновляются `python3 tools/ultrags/docs-sync.py`. Обычный текст редактируется
+в Markdown. Сам PDF не редактируют.
+Готовая копия `docs/ULTRAGS-PROGRAMMING.pdf` включена в Git по запросу владельца,
+чтобы читателю не требовались инструменты сборки. При изменении руководства
+пересоберите PDF и включите обе версии в один коммит. Сборка воспроизводима
+при одинаковых исходниках, шрифтах и версиях инструментов: время запуска
+не меняет содержимое PDF.
+
+Нужны sjasmplus 1.22.0, Python 3, Node.js, C/C++ компилятор и заголовки Node
+для стенда. Для PDF нужны пакеты из `tools/ultrags/requirements-docs.txt` и
+Poppler (`pdftoppm`). По умолчанию используются Arial и Andale Mono из macOS.
+На Linux задайте `UG_DOC_FONT`, `UG_DOC_BOLD`, `UG_DOC_MONO` путями к TTF
+с кириллицей, например DejaVu Sans / Sans Bold / Sans Mono.
+Из корня репозитория:
+
+```sh
+uv venv build/host/docs/venv
+uv pip install --python build/host/docs/venv/bin/python -r tools/ultrags/requirements-docs.txt
+make -f Makefile.ultrags docs
+make -f Makefile.ultrags docs-check
+```
+
+`docs` создаёт `build/ULTRAGS-PROGRAMMING.pdf`, копирует его в
+`host/sprinter/ultrags/docs/ULTRAGS-PROGRAMMING.pdf`, создаёт EXE и собственный GUIDE.WAV в
+`build/host/docs/examples/`, а также отдельные `build/host/docs/EXAMPLES.ZIP`
+и `EXAMPLES.IMG`. Прошивка и `CURRENT.*` этой целью не обновляются. `docs-check`
+исполняет собранные EXE в Z80/DSS-стенде с C-кодом действующей прошивки,
+проверяет оба слота, IFF/PAGE3/стек, выход и ошибки, таблицы, ссылки и листинги,
+а также совпадение PDF в `build/` и в каталоге документации.
+Хеши входных файлов, ревизия Git и результаты сохраняются в
+`build/host/docs/check.json`; это позволяет различать и незакоммиченные редакции.
+PNG всех страниц находятся в `build/host/docs/pages/`; после изменения
+оформления их нужно просмотреть. Проверки на компьютере не заменяют
+измерение ISA-обмена и прослушивание на реальном Sprinter.
+
+### Собрать один пример
+
+Базовые примеры требуют только sjasmplus и сгенерированного `ug_wire.inc`.
+Для генерации используется Node.js; Python и ReportLab нужны только для
+пакетной сборки документации. Из корня репозитория:
+
+```sh
+node tools/ultrags/gen-wire.mjs tools/ultrags/wire-schema.json build/ultrags/gen
+mkdir -p build/host/docs/examples
+sjasmplus --inc=host/sprinter/ultrags/include --inc=host/sprinter/ultrags/lib --inc=build/ultrags/gen -DDOC_SLOT=0 --raw=build/host/docs/examples/PCM0.EXE host/sprinter/ultrags/examples/firstpcm.asm
+```
+
+Для второго слота задайте `-DDOC_SLOT=1` и имя PCM1.EXE. Аналогично собирается
+`examples/discover.asm`. Остальные входные файлы подключают полные DSS-приложения;
+для них добавьте `--inc=host/sprinter/ultrags/apps` либо используйте `docs`.
+Все примеры без выпуска PDF собирает `make -f Makefile.ultrags docs-examples`.
+
+### Подготовить карту и запустить
+
+Используйте прошивку UltraGS API1/VLS1 и совместимые утилиты. До запуска
+примеров проверьте слот и режим. Следующие команды для слота 0:
+
+```text
+UGCFG INFO /SLOT:0
+UGCFG ULTRAGS /SLOT:0
+UGCFG INFO /DIAG /SLOT:0
+DISCOV0
+PCM0
+```
+
+Ожидаются BASE=02A0, API1/VLS1, boot_state=0. DISCOV0 печатает
+`UltraGS API1/VLS1 ready`. PCM0 создаёт тихий тон 125 Гц примерно на 1-2 секунды,
+проверяет чтение образцов и печатает `PCM: uploaded, read back, played, freed`.
+Код выхода PCM0 - код ошибки API, 0 при успехе, 15h при ESC. Программа требует
+пустого хранилища; при BUSY она оставляет существующие объекты на месте.
+Не освобождайте незнакомые объекты ради запуска примера. Для слота 1 задайте
+`/SLOT:1` в UGCFG и используйте DISCOV1/PCM1. Автопоиска слота нет.
+GSALIAS для этих программ не нужен: они работают через BASE. Если BASE
+другой, измените константу `CARD_IO_BASE` в firstpcm.asm (в discover.asm -
+аргумент `LD HL` перед `UG_OPEN`) и пересоберите пример;
+программа сама не меняет адреса карты.
+
+BASE можно изменить без перепрошивки через `UGCFG PORTS`. Например, если
+блок портов 02C0h..02DFh свободен, при остановленном воспроизведении и
+завершённых передачах для слота 0:
+
+```text
+UGCFG PORTS 02C0 OFF /SLOT:0
+UGCFG INFO /SLOT:0
+UGCFG SAVE /SLOT:0
+```
+
+02C0 - новый BASE, OFF отключает дополнительный BULK alias. Изменение
+вступает в силу сразу; SAVE сохраняет его после выключения питания.
+Без SAVE оно временное. Ключ `/BASE:02C0` лишь задаёт адрес поиска для
+утилиты; для перенастройки устройства нужна именно команда PORTS.
+
+### Сопровождающие сценарии
+
+Эти шесть входных файлов переиспользуют полноценные приложения проекта.
+Это расширенные проверки, а не шесть минимальных учебных программ. В руководстве
+показаны их рабочие процедуры, а не четырёхстрочные INCLUDE-обёртки.
+Файлы GUIDE.WAV и EXE берите из свежей сборки `build/host/docs/examples/`.
+
+| Команда | Что проверяет | Ожидаемый результат |
+|---|---|---|
+| `GSMOD MOD4 /SLOT:0` | Свой MOD4, GS-загрузка, ноты, громкости и direct FX | PASS, свои объекты удалены |
+| `GSFX GS /SLOT:0` | S8/U8, параметры FX и поведение GS в LOAD | PASS; включает паузу LOAD более 120 секунд |
+| `PCM PCM /VERIFY /SLOT:0` | RAW, SEAL, чтение обратно, пауза и продолжение | PASS, свои объекты удалены |
+| `MODFX MOD8 /VERIFY /SLOT:0` | Загрузка MOD8, каналы, снимки, пауза и продолжение | PASS, свои объекты удалены |
+| `FM MIX /FX:MONO /TURBO:OFF /SECONDS:2 /SLOT:0` | MOD8 + четыре mono FX + OPL2 | PASS, без новых underruns/PSRAM/protocol errors |
+| `FM MIX /FX:STEREO /TURBO:OFF /SECONDS:2 /SLOT:0` | MOD8 + два stereo FX + OPL2 | То же; требуется эксклюзивный доступ к FM |
+| `STREAM STREAM GUIDE.WAV /BUFFER:16 /PREFILL:8 /LOW:4 /SLOT:0` | DSS WAV, кольцо, FEED, EOF, закрытие | EOF и PASS; underruns и звук проверять отдельно |
+
+Замените `/SLOT:0` на `/SLOT:1` для другого слота. Не задавайте `/RESET`:
+сценарии должны отказываться от работы при несовместимых занятых ресурсах.
+GS-тест проверяет также отказ RESET_STORE=BUSY внутри LOAD; этот сброс не
+исполняется и не используется для очистки. Сценарии на UGTEST/UGOPL/UGPLAY
+возвращают коды выхода утилит (например, 10 для ESC), отличные от кодов API
+в минимальном PCM0/PCM1. Короткий GSMOD может завершиться раньше опроса ESC.
+
+Исходные GS/NeoGS-руководства и их хеши сохранены в
+`build/host/docs/sources/`; для повторной сборки PDF сеть не нужна.
