@@ -2,6 +2,10 @@
  * N-API adapter for executing real Z80 EXEs against production C storage/GS.
  * SDK peripherals are functional mocks; this is NOT electrical timing proof.
  */
+#ifdef UG_ADLIB
+#include "ug_opl.h"
+extern void ug_opl_test_reset(void);
+#endif
 #include <node_api.h>
 #include "ug_minimal.h"
 #include "ug_storage.h"
@@ -23,7 +27,11 @@ extern void ug_hw_test_reset(void);
 static napi_value integer(napi_env e,uint32_t v) { napi_value r;assert(napi_create_uint32(e,v,&r)==napi_ok);return r; }
 static uint32_t number(napi_env e,napi_value v) { uint32_t r;assert(napi_get_value_uint32(e,v,&r)==napi_ok);return r; }
 static napi_value init(napi_env e,napi_callback_info info) {
-    (void)info;mock_reset();ug_hw_test_reset();
+    (void)info;
+#ifdef UG_ADLIB
+    ug_opl_test_reset();
+#endif
+    mock_reset();ug_hw_test_reset();
     ug_hw_claim_audio();ug_hw_claim_psram_sm();assert(!ug_psram_init(&ram,pio1,1,1.85f,8u<<20,false));
     memset(&settings,0,sizeof(settings));settings.Volume.mainVol=100;settings.UltraGS.basePort=0x2a0;settings.UltraGS.bulkAlias=65535;
     ug_config_init(&ug_cfg,&settings,8,NULL,0,0,0);ug_minimal_init();ug_storage_bind(&ram,++session);ug_storage_publish(8u<<20,0,0);ug_storage_main_volume(100);
@@ -36,10 +44,22 @@ static napi_value mapping(napi_env e,napi_callback_info info) {
 }
 static napi_value read_port(napi_env e,napi_callback_info info) {
     napi_value a;size_t n=1;assert(napi_get_cb_info(e,info,&n,&a,NULL,NULL)==napi_ok && n==1);
+    #ifdef UG_ADLIB
+    if(number(e,a)==0x388) return integer(e,ug_opl_status(time_us_32()));
+    #endif
     return integer(e,ug_minimal_read((uint16_t)number(e,a)));
 }
 static napi_value write_port(napi_env e,napi_callback_info info) {
     napi_value a[2];size_t n=2;assert(napi_get_cb_info(e,info,&n,a,NULL,NULL)==napi_ok && n==2);
+#ifdef UG_ADLIB
+    if(number(e,a[0])==0x388 || number(e,a[0])==0x389) {
+        if(!ug_opl_write(number(e,a[0]),number(e,a[1]),time_us_32())) {
+            ug_storage_render(audio,128);
+            assert(ug_opl_write(number(e,a[0]),number(e,a[1]),time_us_32()));
+        }
+        return integer(e,0);
+    }
+#endif
     ug_minimal_write((uint16_t)number(e,a[0]),(uint8_t)number(e,a[1]),time_us_32());return integer(e,0);
 }
 static napi_value tick(napi_env e,napi_callback_info info) {

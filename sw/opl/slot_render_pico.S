@@ -301,6 +301,11 @@ mod_am1_fb1_pm1_fn:
     lsrs rl_tmp1, rl_sample_out, #1
     add  rl_tmp1, rh_buffer_mod_buffer_offset
     ldrh rl_tmp2, [rl_tmp1]
+#ifdef EMU8950_ULTRAGS
+    // Add a signed modulation sample; zero extension adds 65536 on negative
+    // half waves. FM phase modulation wraps, additive synthesis does not.
+    sxth rl_tmp2, rl_tmp2
+#endif
     add  rl_tmp0, rl_tmp2
 .endm
 

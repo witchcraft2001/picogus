@@ -92,6 +92,7 @@ typedef struct {
     ug_lane lanes[UG_LANES];
     int32_t voice_samples[128];
     int32_t accumulation[128][2]; /* bounded block scratch, never core1 stack */
+    const int32_t *fm;       /* optional mono input, advanced across event splits */
     int32_t vol_q15;         /* mainVol scale, 32768 == unity */
     ug_stats stats;
     uint16_t peak_frames, peak_current[2], peaks[2];

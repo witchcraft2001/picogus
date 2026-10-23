@@ -1,3 +1,9 @@
+AdLib OPL2 extension (2026-10-22): CAPS.features bit13=ADLIB_OPL2 (8192).
+Fixed ISA ports0388h/0389h; FM uses no PCM lanes. MOD8+four mono/two stereo
+FX+OPL2 is the required profile. Protocol4/API1.0 and response sizes remain
+unchanged; [AdLib notes](ADLIB-README.md). HOST_PASS / REAL_PENDING;
+S8c REAL_FAIL retained.
+
 MOD F00 extension (2026-10-21): PLAY_MOD opcode31/request3 bytes unchanged.
 CAPS.features bit12=MOD_F00_POLICY; CAPS44/SNAPSHOT64 bytes unchanged.
 Flags: bit0=LOOP, bit1=IGNORE_F00, bit2=PAUSE_F00; no policy bits follows live

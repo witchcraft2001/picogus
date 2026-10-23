@@ -28,7 +28,8 @@ for(const offset of [0,5,10])for(const gs of [false,true])for(const feedback of 
   ior=0;r.gpio[5].setInputValue(false);r.gpio[15].setInputValue(!!(port&512));
   for(let i=0;i<32&&s.rxFIFO.empty;i++)s.step();
   assert(!s.rxFIFO.empty);
-  const raw=s.readFIFO()>>>0,own=!!(raw&(1<<26)),expected=(port>>5)===(0x2a0>>5)||(gs&&(port>>5)===5);
+  // Default program: BASE 02A0h and, with the bulk alias off, the OPL block 0380h.
+  const raw=s.readFIFO()>>>0,own=!!(raw&(1<<26)),expected=(port>>5)===(0x2a0>>5)||(port>>5)===(0x388>>5)||(gs&&(port>>5)===5);
   assert.equal(own,expected);const normalized=own?(~raw>>>0):raw;
   assert.equal(((normalized>>>27)&31)|((normalized&31)<<5),port);
   assert.equal(!!(p.pinValues&(1<<26)),own);

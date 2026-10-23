@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * This program is free software under GPL version 2 or any later version.
- * Separate IOW10/IOR22 transport. BASE, ALIAS and the GS alias block are
- * classified in PIO (early IOCHRDY); CONFIG keeps the late software hold.
+ * Separate IOW10/IOR22 transport. BASE, ALIAS (or, while it is off, the OPL
+ * block 0380h) and the GS alias block are classified in PIO (early IOCHRDY);
+ * CONFIG keeps the late software hold.
  * Keep the independent core1 fuse and optional LED report.
  */
 #include "ug_compat.h"
@@ -61,7 +62,8 @@ bool ug_compat_sync_ports(uint16_t base,uint16_t alias,bool gs) {
     }
     if(!patch_safe(pc)) { release_bus(UG_LED_MAP_PC);return false; }
     pio0->instr_mem[program_offset+ug_compat_ior_offset_base_compare]=pio_encode_set(pio_y,base>>5);
-    pio0->instr_mem[program_offset+ug_compat_ior_offset_alias_compare]=pio_encode_set(pio_y,(alias==0xffff?base:alias)>>5);
+    /* Alias off: its compare owns the OPL block (0388h status in Turbo). */
+    pio0->instr_mem[program_offset+ug_compat_ior_offset_alias_compare]=pio_encode_set(pio_y,(alias==0xffff?0x388:alias)>>5);
     /* GS aliases off: the GS block falls through to the software path. */
     pio0->instr_mem[program_offset+ug_compat_ior_offset_gs_compare]=
         gs?pio_encode_set(pio_y,0xb3>>5):pio_encode_jmp(program_offset+ug_compat_ior_offset_foreign);

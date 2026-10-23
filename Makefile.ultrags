@@ -482,7 +482,7 @@ s8b-exe: dss s8b-fixtures
 	UG_MULTIMOD="$(UG_MULTIMOD)" UG_FLT8_MOD="$(UG_FLT8_MOD)" $(NODE) $(ROOT)/tests/ultrags/dss/run-s8b.mjs $(ROOT) $(BUILD)
 # Pin the accepted R17 frontend even when the fixed CMake tree is empty.
 s8b-arm: CMAKE_COMMON += -DUG_ISA_FRONTEND=COMPAT -DUG_CONFIG_CATALOG_FAST=ON -DUG_GS_STATUS_FAST=ON -DUG_LED_DIAG=OFF -DUG_CONFIG_PROBE=OFF -DUG_CONFIG_TRACE=OFF
-s8b-arm: firmware
+s8b-arm: s8b-host s8b-fixtures firmware
 	UG_MULTIMOD="$(UG_MULTIMOD)" UG_FLT8_MOD="$(UG_FLT8_MOD)" $(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/s8b-arm.py --build $(BUILD)
 	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/s8c-arm.py --build $(BUILD)
 	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/audio-render-check.py --build $(BUILD)
@@ -494,3 +494,32 @@ s8b-package:
 	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/catalog-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
 	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/gs-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
 	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --s8b
+
+# Fixed-port OPL2 alongside MOD8 + four mono / two stereo FX. Both roots must
+# pass this target before adlib-package. S8c hardware REAL_FAIL stays open.
+UG_ADLIB_BASELINE ?= $(ROOT)/build/archive/pre-adlib/CURRENT.UF2
+.PHONY: adlib-host adlib-exe adlib-arm adlib-check adlib-package
+adlib-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/adlib-host.py --build $(BUILD)/host/adlib
+adlib-exe: dss s2-host f00-host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native --adlib
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-adlib.mjs $(ROOT) $(BUILD)
+adlib-arm: adlib-host firmware
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/adlib-arm.py --build $(BUILD)
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/adlib-read-linked.py --build $(BUILD)
+adlib-check: export UG_STREAM_LONG=1
+adlib-check: s8b-check adlib-exe adlib-arm
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/adlib-legacy.py --build $(BUILD)
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/voices-budgets.py --adlib --build $(BUILD) --baseline "$(UG_ADLIB_BASELINE)"
+	$(NODE) $(ROOT)/tools/ultrags/test-adlib-evidence.mjs $(BUILD)
+	@echo "AdLib HOST_PASS / REAL_PENDING; listening, physical timing and 30-minute MIX acceptance pending"
+adlib-package:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/compat-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/adlib-read-linked.py --build $(ROOT)/build --build $(ROOT)/build/reproducibility
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/catalog-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(UG_AUDIO_PYTHON) $(ROOT)/tools/ultrags/gs-fast-linked.py $(ROOT)/build $(ROOT)/build/reproducibility
+	$(NODE) $(ROOT)/tools/ultrags/test-adlib-evidence.mjs $(ROOT)/build
+	$(NODE) $(ROOT)/tools/ultrags/test-adlib-evidence.mjs $(ROOT)/build/reproducibility
+	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --adlib
+	$(NODE) $(ROOT)/tools/ultrags/test-adlib-package.mjs
+	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --adlib --verify-only

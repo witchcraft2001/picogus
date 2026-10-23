@@ -200,6 +200,12 @@ UG_WIN_OPEN:
 ; FW_ACTIVE=8) completes BEFORE the first BASE register access.
 ; clobbers AF,BC,DE,HL
 UG_OPEN:
+    IFDEF APP_OPL
+    push af
+    ld a,1
+    ld (OPLOPENSTAGE),a
+    pop af
+    ENDIF
 	ld	b,a			; slot
 	; reject invalid slot before any hardware write
 	cp	UG_MAX_SLOT+1
@@ -220,33 +226,72 @@ UG_OPEN:
 	call	UG_ISA_OPEN		; validates slot again (defensive)
 	jp	c,.open_fail
     call UG_ISA_CLOSE
+    IFDEF APP_OPL
+    ld a,2
+    ld (OPLOPENSTAGE),a
+    ENDIF
     xor a ; CMD_MAGIC=00, magic is DATA_HIGH, CONTROL echoes selector
     call UG_CFG_READ8
     jp c,.open_fail
+    IFDEF APP_OPL
+    ld (OPLOPENVALUES),a
+    ENDIF
     cp UG_CFG_MAGIC_BYTE
     jr nz,.absent
+    IFDEF APP_OPL
+    ld a,3
+    ld (OPLOPENSTAGE),a
+    ENDIF
     ld a,UG_CFG_SEL_PROTOCOL
     call UG_CFG_READ8
     jp c,.open_fail
+    IFDEF APP_OPL
+    ld (OPLOPENVALUES+1),a
+    ENDIF
     cp UG_CFG_PROTOCOL_VER
     jr nz,.wrongmode
+    IFDEF APP_OPL
+    ld a,4
+    ld (OPLOPENSTAGE),a
+    ENDIF
     ld a,UG_CFG_SEL_FW_ACTIVE
     call UG_CFG_READ8
     jp c,.open_fail
+    IFDEF APP_OPL
+    ld (OPLOPENVALUES+2),a
+    ENDIF
     cp 8
     jr nz,.wrongmode
+    IFDEF APP_OPL
+    ld a,5
+    ld (OPLOPENSTAGE),a
+    ENDIF
     ld a,UG_CFG_SEL_UG_ALIAS
     call UG_CFG_READ16
     jp c,.open_fail
     ld (UG_ALIASCFG),hl
     call UG_CFG_OPEN
 	; --- only now may BASE registers be touched ---
+    IFDEF APP_OPL
+    ld a,6
+    ld (OPLOPENSTAGE),a
+    ENDIF
 	ld	a,UG_REG_API_MAJOR
 	call	UG_REG_R
+    IFDEF APP_OPL
+    ld (OPLOPENVALUES+3),a
+    ENDIF
 	cp	1
 	jr	nz,.wrongmode
+    IFDEF APP_OPL
+    ld a,7
+    ld (OPLOPENSTAGE),a
+    ENDIF
 	ld	a,UG_REG_API_MINOR
 	call	UG_REG_R
+    IFDEF APP_OPL
+    ld (OPLOPENVALUES+4),a
+    ENDIF
 	or	a
 	jr	nz,.wrongmode		; minor must be 0
 	; session established; drop the window

@@ -22,6 +22,7 @@ extern void ug_board_maintenance(void);
 static ug_psram_t ps;
 static float spi_divider;
 static bool audio_up;
+static int16_t samples[UG_AUDIO_FRAMES*2];
 void ug_save_prepare(void) {
     if(!audio_up) return;
     ug_audio_set_active(false); /* Digital zero; no queued playback exists in S2. */
@@ -71,7 +72,6 @@ void play_ultrags(void) {
         if(audio_up) {
             int idx=ug_audio_buf_get();
             if(idx>=0) {
-                int16_t samples[UG_AUDIO_FRAMES*2];
                 bool playing=ug_storage_render(samples,UG_AUDIO_FRAMES);
                 uint32_t *dst=ug_audio_buf_ptr(idx);
                 for(unsigned i=0;i<UG_AUDIO_FRAMES;i++) dst[i]=ug_audio_pack_frame(samples[2*i],samples[2*i+1]);

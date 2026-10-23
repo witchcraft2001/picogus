@@ -1,3 +1,5 @@
+AdLib OPL2 is always available in UltraGS at `0388h/0389h`; `CAPS.features` bit13. `UGOPL TEST` and `UGOPL MIX /FX:MONO|STEREO` exercise FM alongside MOD8/FX. Physical acceptance is REAL_PENDING; [AdLib tester notes](docs/ADLIB-README.md). S8c REAL_FAIL remains open.
+
 DOPE audio fix: MOD5..8/9..16/17..32 now use /2,/4,/8 headroom before pan; full DOPE has0 digital clips. Previous owner grating report is REAL_FAIL; corrected firmware awaits physical retest.
 
 FLT4 PCM and interleaved MOD1..32 (including 28CH DOPE.MOD) are supported; shared pool32, formats bit6. Physical acceptance remains REAL_PENDING. See docs/S8B-README.md.

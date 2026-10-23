@@ -423,7 +423,11 @@ S6TEST_MIX:
     ld a,(S8MODE)
     or a
     jr z,.plain_read
+    IFDEF APP_OPL
+    call READ_BLOCK
+    ELSE
     call S8TEST_BACKGROUND
+    ENDIF
     jr .stats
 .plain_read:
     ld a,1
@@ -474,12 +478,21 @@ S6TEST_MIX:
 .same:
     ld a,(de)
     cp (hl)
+    IFDEF APP_OPL
+    ; Capture and print the card's final counters when an error appears
+    ; during the interval, as well as on the normal completion path.
+    jp nz,OPL_MIX_DONE
+    ELSE
     jp nz,VERIFY_ERROR
+    ENDIF
     inc hl
     inc de
     djnz .same
     ret
 .done:
+    IFDEF APP_OPL
+    jp OPL_MIX_DONE
+    ENDIF
     ld a,(S8MODE)
     or a
     jp nz,S8TEST_NEXT_PHASE

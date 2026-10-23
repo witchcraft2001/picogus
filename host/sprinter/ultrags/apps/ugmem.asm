@@ -114,7 +114,11 @@ ENTRY:
     call PRINT
     ENDIF
     IFDEF APP_S6TEST
+    IFDEF APP_OPL
+    call OPL_VALIDATE
+    ELSE
     call S6TEST_VALIDATE
+    ENDIF
     jp c,SYNTAX
     ENDIF
     IFDEF APP_BENCH
@@ -126,6 +130,12 @@ ENTRY:
     jp PROTOCOL
 .bench_safe:
     ENDIF
+    IFDEF APP_OPL
+    ld hl,opl_revision_text
+    call SHOW
+    ld a,1
+    ld (OPLPHASE),a
+    ENDIF
     call DISCOVER
     jp c,EXIT
     call UG_LIB_INIT
@@ -133,14 +143,27 @@ ENTRY:
     call UG_FRAME_CRC
     ld a,(SLOT)
     ld hl,(BASE)
+    IFDEF APP_OPL
+    ld a,2
+    ld (OPLPHASE),a
+    ld a,(SLOT)
+    ENDIF
     call UG_OPEN
     jp c,PROTOCOL
+    IFDEF APP_OPL
+    ld a,3
+    ld (OPLPHASE),a
+    ENDIF
     ; INFO/CAPS are checked before any destructive operation.
     ld a,0
     ld bc,0
     ld e,40
     call RPC
     jp c,RPC_ERROR
+    IFDEF APP_OPL
+    ld a,4
+    ld (OPLPHASE),a
+    ENDIF
     ld hl,RESP
     ld de,info_magic
     ld b,7
@@ -151,6 +174,10 @@ ENTRY:
     inc hl
     inc de
     djnz .magic
+    IFDEF APP_OPL
+    ld a,5
+    ld (OPLPHASE),a
+    ENDIF
     ld hl,RESP+36
     ld de,info_layout
     ld b,4
@@ -174,14 +201,30 @@ ENTRY:
     ld b,8
     call HEX_BYTES
     call NL
+    IFDEF APP_OPL
+    ld a,6
+    ld (OPLPHASE),a
+    ENDIF
     ld a,1
     ld bc,0
     ld e,44
     call RPC
     jp c,RPC_ERROR
+    IFDEF APP_OPL
+    ld hl,RESP
+    ld de,OPLCAPS
+    ld bc,4
+    ldir
+    ld a,7
+    ld (OPLPHASE),a
+    ENDIF
     ld a,(RESP)
     and 128
+    IFDEF APP_OPL
+    jp z,OPL_MEMORY_MISSING
+    ELSE
     jp z,PROTOCOL
+    ENDIF
     IFDEF APP_AUDIO
     jp AUDIO_RUN
     ENDIF
@@ -194,6 +237,9 @@ ENTRY:
     ENDIF
     IFDEF APP_BENCH
     jp BENCH_RUN
+    ENDIF
+    IFDEF APP_OPL
+    jp OPL_RUN
     ENDIF
     ld a,(CMD)
     IFDEF APP_S6TEST
@@ -249,6 +295,9 @@ INIT:
     call S6TEST_INIT
     call S8TEST_INIT
     call GS_INIT
+    IFDEF APP_OPL
+    call OPL_INIT
+    ENDIF
     ENDIF
     IFDEF APP_BENCH
     call BENCH_INIT
@@ -328,6 +377,9 @@ PARSE:
     ld a,(HELP)
     or a
     ret nz
+    IFDEF APP_OPL
+    jp OPL_PARSE
+    ENDIF
     IFDEF UG_GS_TURBO_SLOT
     ld a,(ARGC)
     or a
@@ -439,6 +491,12 @@ PARSE:
     scf
     ret
 OPTION:
+    IFDEF APP_OPL
+    push hl
+    call OPL_OPTION
+    pop hl
+    ret nc
+    ENDIF
     IFDEF UG_GS_TURBO_SLOT
     push hl
     call GT_OPTION
@@ -1110,6 +1168,10 @@ RPC_ERROR:
 .crc:
     cp 4
     jr nz,.cancel
+    IFDEF APP_OPL
+    ld hl,opl_crc_failure_text
+    ld (REASON),hl
+    ENDIF
     ld a,9
     jp EXIT
 .cancel:
@@ -1127,6 +1189,10 @@ PASS:
     xor a
 EXIT:
     ld (ERR),a
+    IFDEF APP_OPL
+    call OPL_DIAGNOSTIC
+    call OPL_CLEANUP
+    ENDIF
     IFDEF APP_AUDIO
     call AUDIO_CLEANUP
     ENDIF
@@ -1338,7 +1404,11 @@ help_text:
 turbo_test_text: DB "GS TURBO ON slot=",'0'+UG_GS_TURBO_SLOT," aliases=00B3/00BB; GSALIAS must be ON",13,10,0
 turbo_help_option: DB "/?",0
     ELSE
+    IFDEF APP_OPL
+    DB "UGOPL TEST|MIX /FX:MONO|STEREO /SLOT:0|1 /TURBO:ON|OFF /SECONDS:1..1800",13,10,0
+    ELSE
     DB "UGTEST PROTO|PCM|FX|MIX|MOD8|FLT8|GS|MOD4 [/RESET] [/VOICES:N /SECONDS:N] [/REAL] /SLOT:0|1 /BASE:hex /QUIET /?",13,10,0
+    ENDIF
     ENDIF
     ELSE
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
@@ -1393,6 +1463,9 @@ newline: DB 13,10,0
     INCLUDE "ugtestpcm.asm"
     INCLUDE "ugtestmod8.asm"
     INCLUDE "ugtestgs.asm"
+    IFDEF APP_OPL
+    INCLUDE "ugopl_app.inc"
+    ENDIF
     ENDIF
     ENDIF
     IFDEF APP_BENCH

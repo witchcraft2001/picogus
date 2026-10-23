@@ -13,7 +13,7 @@ export class NativeCard extends ConfigCard {
  }
  get transfer(){if(!this.backend?.transfer())return null;const g=this.backend.grant();return {granted:!!(g&24),bulk:!!(g&32),rd:!!(g&16)};}
  syncMap(){this.backend.map(this.base,this.alias,+this.gs);}
- owns(p){return p>=this.base&&p<this.base+32 || this.alias!==65535&&p>=this.alias&&p<this.alias+32 || this.gs&&(p===0xb3||p===0xbb);}
+ owns(p){return (this.o.adlib&&(p===0x388||p===0x389)) || p>=this.base&&p<this.base+32 || this.alias!==65535&&p>=this.alias&&p<this.alias+32 || this.gs&&(p===0xb3||p===0xbb);}
  tickUs(us){const session=this.session;super.tickUs(us);if(this.session!==session){this.backend.init();this.syncMap();}if(this.mode===8)this.backend.tick(us);}
  readPort(p){if(p>=0x1d0&&p<=0x1d2)return super.readPort(p);if(this.mode!==8||!this.owns(p))return 255;this.nativeReads++;return this.backend.read(p);}
  writePort(p,v){if(p>=0x1d0&&p<=0x1d2){this.o.busy=this.mode===8&&!this.backend.idle();super.writePort(p,v);this.syncMap();return;}if(this.mode===8&&this.owns(p)){this.nativeWrites++;this.backend.write(p,v);}}

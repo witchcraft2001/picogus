@@ -437,6 +437,7 @@ int ug_mixer_render_stream(ug_mixer *m,int16_t *out,uint32_t frames,
         }
         for(unsigned f=0;f<count;f++) {
             int32_t accL=m->accumulation[f][0],accR=m->accumulation[f][1];
+        if(m->fm) { accL+=m->fm[done+f]; accR+=m->fm[done+f]; }
         /* master volume scale, then saturate to S16 without overflow */
         if(m->vol_q15!=32768) {
             accL=round_shift((int64_t)accL*m->vol_q15,15);
@@ -466,6 +467,7 @@ int ug_mixer_render_stream(ug_mixer *m,int16_t *out,uint32_t frames,
         }
         done+=count;
     }
+    if(m->fm) m->fm+=frames;
     return 0;
 }
 

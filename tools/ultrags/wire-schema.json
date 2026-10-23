@@ -22,6 +22,7 @@
     ]
   },
   "limits": {
+    "ADLIB_OPL2_FEATURE": {"value": 8192, "note": "CAPS.features bit13; fixed OPL2 at 0388h/0389h"},
     "MOD_F00_POLICY_FEATURE": {"value": 4096, "note": "CAPS.features bit12; PLAY_MOD policy bits1/2"},
     "MOD_LOOP": {"value": 1},
     "MOD_IGNORE_F00": {"value": 2},

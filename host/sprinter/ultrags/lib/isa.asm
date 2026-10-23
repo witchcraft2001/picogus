@@ -102,6 +102,10 @@ UG_ISA_OPEN:
     ld a,(UG_GS_TURBO_WINDOW)
     add a,2
     ENDIF
+    IFDEF APP_OPL
+    ld a,(OPLWINDOW)
+    add a,2
+    ENDIF
 	out	(c),a
 	ld	bc,UG_PORT_SYSTEM
 	; switch SYSTEM to the ISA mapping mode

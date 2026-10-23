@@ -154,6 +154,8 @@ typedef struct __OPL {
 #define opl_test_flag(opl) 0x20
 #endif
 
+void OPL_init_static(OPL *opl);
+
 OPL *OPL_new(uint32_t clk, uint32_t rate);
 void OPL_delete(OPL *);
 

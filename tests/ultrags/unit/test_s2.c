@@ -85,7 +85,17 @@ int main(int argc,char **argv){
  ug_config_select(&ug_cfg,0x76);ug_config_write(&ug_cfg,false,0xc0,true);assert(ug_config_read(&ug_cfg,false)==0xa0);
  ug_config_select(&ug_cfg,0x76);ug_config_write(&ug_cfg,true,3,true);assert(s.UltraGS.basePort==0x300);
  cfgwrite(&ug_cfg,0x76,0x2a0,false);assert(ug_cfg.result==5&&s.UltraGS.basePort==0x300);
- for(unsigned base=0;base<0x500;base++)assert((ug_ports_validate(base,0xffff)==0)==(base>=0x200&&base<=0x3e0&&!(base&31)));
+ for(unsigned base=0;base<0x500;base++)assert((ug_ports_validate(base,0xffff)==0)==(base>=0x200&&base<=0x3e0&&base!=0x380&&!(base&31)));
+ uint16_t old_opl=s.SB.oplBasePort;
+ cfgwrite(&ug_cfg,CMD_OPLPORT,0x388,true);assert(!ug_cfg.result&&s.SB.oplBasePort==old_opl);
+ assert(ug_config_read(&ug_cfg,false)==0x88&&ug_config_read(&ug_cfg,true)==3);
+ cfgwrite(&ug_cfg,CMD_OPLPORT,0x220,true);assert(ug_cfg.result==2&&s.SB.oplBasePort==old_opl);
+ cfgwrite(&ug_cfg,0x76,0x380,true);assert(ug_cfg.result==2&&s.UltraGS.basePort==0x300);
+ cfgwrite(&ug_cfg,0x77,0x380,true);assert(ug_cfg.result==2&&s.UltraGS.bulkAlias==0xffff);
+ Settings invalid=s;invalid.UltraGS.basePort=0x380;ug_config recovered;
+ ug_config_init(&recovered,&invalid,8,NULL,0,0,0);assert(invalid.UltraGS.basePort==0x2a0&&invalid.UltraGS.bulkAlias==0xffff&&recovered.boot_result==4);
+ invalid=s;invalid.UltraGS.bulkAlias=0x380;
+ ug_config_init(&recovered,&invalid,8,NULL,0,0,0);assert(invalid.UltraGS.basePort==0x2a0&&invalid.UltraGS.bulkAlias==0xffff&&recovered.boot_result==4);
  cfgwrite(&ug_cfg,0x77,0x300,true);assert(ug_cfg.result==2&&s.UltraGS.bulkAlias==0xffff);
  ug_config_select(&ug_cfg,3);ug_config_write(&ug_cfg,true,7,true);assert(ug_cfg.result==6&&s.startupMode==8);ug_config_write(&ug_cfg,true,9,true);assert(ug_cfg.result==2&&s.startupMode==8);
  ug_config_write(&ug_cfg,true,1,true);assert(!ug_cfg.result&&s.startupMode==1&&ug_cfg.active==8);

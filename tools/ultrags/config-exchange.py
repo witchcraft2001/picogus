@@ -38,6 +38,7 @@ code='''#include <stdio.h>
 #include <string.h>
 #include "picogus.h"
 #include "ultrags/ug_config.h"
+#include "ultrags/ug_opl.h"
 #include "ultrags/ug_minimal.h"
 #include "ultrags/ug_s4.h"
 #include "ultrags/ug_handshake.h"
@@ -65,6 +66,22 @@ static unsigned pending_write,queued_iow,queued_ior,early_wait_enabled=1,force_f
 static unsigned write_waited,write_done,inject_write_loss,native_byte=~0u,second_byte_only;
 static unsigned inject_config_expired,inject_config_iow_delay,inject_config_expire_on_write;
 static unsigned gs_fast_watch,gs_fast_stores,gs_fast_accounts;
+/* This fixture verifies dispatch/backpressure. Timer and queue algorithms
+ * execute independently in adlib-host; no synthesis runs on this mock core0. */
+static unsigned opl_calls,opl_retry,opl_status_calls,opl_schedules,irq_depth;
+uint8_t ug_opl_status_value=6;
+bool ug_opl_timer_poll_needed;uint32_t ug_opl_timer_deadline;
+static void tight_loop_contents(void){assert(!irq_depth); /* retries run with interrupts enabled */}
+#define save_and_disable_interrupts() (++irq_depth)
+#define restore_interrupts(v) (assert(irq_depth==(v)),--irq_depth)
+bool ug_opl_write(uint16_t p,uint8_t v,uint32_t now) {
+ (void)v;(void)now;assert(p==0x388||p==0x389);assert(write_waited);assert(irq_depth==1);
+ ++opl_calls;if(opl_retry){--opl_retry;return false;}return true;
+}
+void ug_opl_timer_schedule(void){assert(irq_depth==1);++opl_schedules;}
+uint8_t ug_opl_status(uint32_t now) {(void)now;++opl_status_calls;return 6;}
+void ug_opl_volume(uint8_t v){(void)v;}
+
 #if defined(UG_CONFIG_TRACE) || defined(UG_ISA_COMPAT_READ) || defined(UG_ISA_EARLY_READ)
 static unsigned gpio_get_all(void){
  unsigned pins=(pending_port<<6)|16|(inject_config_expired?32:0);
@@ -77,8 +94,9 @@ static unsigned gpio_get_all(void){
 #endif
 #ifdef UG_CONFIG_TRACE
 static uint8_t ug_trace_write=255,ug_trace_reads,ug_trace_flags;
-bool ug_handshake_failed(void){return false;}
+
 #endif
+bool ug_handshake_failed(void){return false;}
 static const char *firmware_string="PicoGUS model";
 #define IO_WAIT 1
 static const unsigned ug_compat_read_entry=2;
@@ -133,6 +151,7 @@ code+='static uint8_t read_picogus_low(void){'+low+'\n'
 code+='''static void write_picogus_low(uint8_t v){ug_config_write(&ug_cfg,false,v,true);}
 static void write_picogus_high(uint8_t v){ug_config_write(&ug_cfg,true,v,true);}
 '''
+code+='#ifdef UG_CONFIG_CATALOG_FAST\nstatic uint8_t ug_scalar_reply'+between('static uint8_t ug_scalar_reply','/* UG_SCALAR_CACHE_END */')+'\n#endif\n'
 code+='static void apply_iow(uint32_t iow_read){'+iow.replace('ug_minimal_write_decoded(', 'checked_native_write_decoded(')+'\n}\n'
 code+='static void bus_write(unsigned port,unsigned value){write_waited=write_done=0;apply_iow((port<<8)|value);assert(write_done);}\n'
 code+='uint32_t ug_handshake_take_write(uint32_t *data){uint32_t raw=pio_sm_get(pio0,0);*data=pio_sm_get_blocking(pio0,0);return raw;}\n'
@@ -195,7 +214,7 @@ int main(int argc,char **argv){
  /* Inline ownership must match the actual native decoder for all valid
   * committed maps, including low GS aliases and the fixed CONFIG ports. */
  for(unsigned base=0x200;base<=0x3e0;base+=32)for(unsigned alias=0x200;alias<=0x400;alias+=32)for(unsigned gs=0;gs<2;gs++) {
-  if(base==alias)continue;
+  if(base==alias || base==0x380 || alias==0x380)continue;
   settings.UltraGS.basePort=base;settings.UltraGS.bulkAlias=alias==0x400?65535:alias;ug_cfg.aliases=gs;
   for(unsigned port=0;port<1024;port++){
    assert(ug_native_port(port)==ug_minimal_port(port));
@@ -205,6 +224,7 @@ int main(int argc,char **argv){
  /* Execute real request/reply framing through both production bus handlers.
   * A late sample loses length=24h as FF without undoing its consuming read. */
  for(unsigned base=0x200;base<=0x3e0;base+=32)for(unsigned delay=0;delay<2;delay++) {
+  if(base==0x380)continue;
   settings.UltraGS.basePort=base;settings.UltraGS.bulkAlias=65535;ug_cfg.aliases=false;
   ug_minimal_init();ug_minimal_ready(0,123);
   inject_write_loss=1;inject_decode_delay=delay;second_byte_only=1;native_byte=~0u;
@@ -249,6 +269,35 @@ int main(int argc,char **argv){
  ug_minimal_init();ug_minimal_ready(0,123);
  assert(bus_read(settings.UltraGS.basePort+1)==1 && waited);
  assert(bus_read(0x100)==255 && !waited);
+#ifdef UG_ISA_COMPAT_READ
+ opl_retry=1;unsigned before_opl=opl_calls,before_sched=opl_schedules;
+ bus_write(0x388,0x40);bus_write(0x389,0x55);
+ assert(opl_calls==before_opl+3 && !opl_retry && !irq_depth);
+ assert(opl_schedules==before_sched+2); /* one alarm update per accepted write */
+ /* Bulk alias off: the PIO owns the 0380h block, so the status reply takes
+  * the owned entry and does not depend on the live-cycle check. */
+ assert(bus_read(0x388)==6 && waited);assert(bus_read(0x389)==255);
+ assert(opl_status_calls==0); /* no timer call or timer MMIO before reply */
+ ug_opl_status_value=0xa6;assert(bus_read(0x388)==0xa6);ug_opl_status_value=6;
+ inject_config_expired=1;assert(bus_read(0x388)==6);inject_config_expired=0;
+ /* Alias configured: 0388h is a software-held foreign read like CONFIG. */
+ settings.UltraGS.bulkAlias=0x280;
+ assert(bus_read(0x388)==6 && waited);
+ unsigned status_before=opl_status_calls;inject_config_expired=1;
+ assert(bus_read(0x388)==255);assert(opl_status_calls==status_before);
+ inject_config_expired=0;settings.UltraGS.bulkAlias=65535;
+#endif
+ #ifdef UG_CONFIG_CATALOG_FAST
+ bus_write(CONTROL_PORT,0xcc);bus_write(CONTROL_PORT,CMD_FWSTRING);
+ unsigned fw_calls=generic_high_calls;
+ for(unsigned round=0;round<2;round++)for(unsigned n=0;n<=strlen(firmware_string);n++) {
+  unsigned expected=firmware_string[n],old_index=cur_read;
+  inject_config_expired=1;assert(bus_read(DATA_PORT_HIGH)==255 && cur_read==old_index);
+  inject_config_expired=0;assert(bus_read(DATA_PORT_HIGH)==expected);
+  assert(cur_read==(expected?n+1:0));
+ }
+ assert(generic_high_calls==fw_calls);
+ #endif
  puts("[");const unsigned selectors[]={0,1,2,3,0xf0,0x76,0x77,0x78,0x79,0xe3,0xe4,0xe5};
  for(unsigned i=0;i<sizeof(selectors)/sizeof(*selectors);i++){
   wr(0x1d0,0xcc);wr(0x1d0,selectors[i]);rd(0x1d0);
@@ -287,7 +336,7 @@ if a.compat:
     code=code[:init_end]+maps+fence+final
     code=code.replace('port=pending_write>>8;', 'port=pending_write>>8;return pending_write;')
     code=code.replace('early_wait_enabled&&!force_foreign&&ug_minimal_port(port)',
-                      'early_wait_enabled&&!force_foreign&&port>=0x200&&ug_minimal_port(port)')
+                      'early_wait_enabled&&!force_foreign&&port>=0x200&&(ug_minimal_port(port)||((port>>5)==(0x388>>5)&&settings.UltraGS.bulkAlias==65535))')
 if a.probe:
     code=code.replace('pending_port=port;read_value=255;', 'probe_gpio_reads=0;pending_port=port;read_value=255;')
     marker=' ug_minimal_init();ug_minimal_ready(0,123);\n assert(bus_read(settings.UltraGS.basePort+1)'
@@ -332,6 +381,41 @@ if a.fast:
  fast_watch=0;
  bus_write(CONTROL_PORT,CMD_FW_CATALOG);
  assert(ug_cfg.index==0 && bus_read(DATA_PORT_HIGH)==ug_cfg.snapshot[0] && ug_cfg.index==1);
+ /* Every eligible pure selector uses the prepared scalar for both byte
+  * lanes. Stale cycles stay passive, and reads do not enter either getter. */
+ const unsigned scalar_sel[]={CMD_MAGIC,CMD_PROTOCOL,CMD_BOOTMODE,CMD_HWTYPE,
+  CMD_UG_BASE,CMD_UG_ALIAS,CMD_UG_GS_ALIASES,CMD_FW_ACTIVE,CMD_FW_BOOT_RESULT,CMD_OPLPORT};
+ for(unsigned n=0;n<sizeof(scalar_sel)/sizeof(*scalar_sel);n++){
+  bus_write(CONTROL_PORT,scalar_sel[n]);
+  assert(ug_scalar_valid);
+  unsigned hi=ug_scalar_reply[0],lo=ug_scalar_reply[1],calls=generic_high_calls;
+  inject_config_expired=1;assert(bus_read(DATA_PORT_HIGH)==255);assert(bus_read(DATA_PORT_LOW)==255);
+  inject_config_expired=0;
+  for(unsigned k=0;k<8;k++){assert(bus_read(DATA_PORT_HIGH)==hi);assert(bus_read(DATA_PORT_LOW)==lo);}
+  assert(generic_high_calls==calls);
+ }
+ /* The shadow follows committed settings before the write completes; a low
+  * staging byte must leave both read lanes on the previous complete value. */
+ bus_write(CONTROL_PORT,CMD_UG_BASE);
+ unsigned old_base=settings.UltraGS.basePort;
+ bus_write(DATA_PORT_LOW,0x60);assert(bus_read(DATA_PORT_LOW)==(old_base&255));
+ bus_write(DATA_PORT_HIGH,2);assert(settings.UltraGS.basePort==0x260);
+ assert(ug_scalar_reply[1]==0x60 && ug_scalar_reply[0]==2);assert(bus_read(DATA_PORT_LOW)==0x60 && bus_read(DATA_PORT_HIGH)==2);
+ bus_write(DATA_PORT_LOW,0xa0);bus_write(DATA_PORT_HIGH,2);
+ assert(settings.UltraGS.basePort==0x2a0 && ug_scalar_reply[1]==0xa0);
+ bus_write(CONTROL_PORT,CMD_UG_ALIAS);bus_write(DATA_PORT_LOW,0);bus_write(DATA_PORT_HIGH,3);
+ assert(ug_scalar_reply[1]==0 && ug_scalar_reply[0]==3);
+ bus_write(DATA_PORT_LOW,255);bus_write(DATA_PORT_HIGH,255);
+ assert(ug_scalar_reply[1]==255 && ug_scalar_reply[0]==255);
+ bus_write(CONTROL_PORT,CMD_UG_GS_ALIASES);bus_write(DATA_PORT_HIGH,1);
+ assert(ug_scalar_reply[0]==1 && bus_read(DATA_PORT_HIGH)==1);
+ bus_write(DATA_PORT_HIGH,0);assert(ug_scalar_reply[0]==0);
+ bus_write(CONTROL_PORT,CMD_BOOTMODE);bus_write(DATA_PORT_HIGH,1);
+ assert(ug_scalar_reply[0]==1 && bus_read(DATA_PORT_HIGH)==1);
+ bus_write(DATA_PORT_HIGH,8);assert(ug_scalar_reply[0]==8);
+ bus_write(CONTROL_PORT,CMD_UG_CFG_RESULT);assert(!ug_scalar_valid);
+ bus_write(CONTROL_PORT,CMD_FW_CATALOG);assert(!ug_scalar_valid);
+ assert(bus_read(DATA_PORT_HIGH)==ug_cfg.snapshot[0] && ug_cfg.index==1);
  /* Low-port read, selector change, and live RESULT still use the old semantics. */
  assert(bus_read(DATA_PORT_LOW)==255 && ug_cfg.index==1);
  bus_write(CONTROL_PORT,CMD_UG_CFG_RESULT);ug_cfg.result=0x16;
@@ -476,6 +560,20 @@ if a.gs_fast:
     assert failed.returncode!=0 and b'gs_fast_stores==gs_fast_accounts+1' in failed.stderr
     print('GS fast: 128 live status reads, aliases OFF/neighbours/stale passivity; pre-submit statistics mutation rejected')
 (a.build/'config-exchange.json').write_bytes(trace)
+if a.compat and a.fast:
+    for name,old,new,needle in [
+        ('opl-timer-before-reply','const uint8_t value=ug_opl_status_value;','const uint8_t value=ug_opl_status(time_us_32());',b'opl_status_calls==0'),
+        ('fwstring-general-getter','if(port==DATA_PORT_HIGH && sel_reg==CMD_FWSTRING)','if(false)',b'generic_high_calls==fw_calls'),
+        ('scalar-general-getter','if(ug_scalar_valid && (port==DATA_PORT_HIGH || port==DATA_PORT_LOW))','if(false)',b'generic_high_calls==calls'),
+        ('scalar-stale-commit','if(port>=CONTROL_PORT && port<=DATA_PORT_HIGH) ug_prepare_config_scalar();','if(port==CONTROL_PORT) ug_prepare_config_scalar();',b'ug_scalar_reply[1]==0x60'),
+    ]:
+        assert old in code
+        src=a.build/(name+'.c');src.write_text(code.replace(old,new));obj=src.with_suffix('.o');binary=a.build/name
+        subprocess.run(['cc','-std=c11',*flags,'-DSOUND_ULTRAGS=1','-DUG_ISA_COMPAT_READ=1','-c',str(src),'-o',str(obj)],check=True)
+        subprocess.run(['c++','-fsanitize=undefined',str(obj),*objects[1:],'-o',str(binary)],check=True)
+        failed=subprocess.run([str(binary),str(a.catalog.resolve())],capture_output=True)
+        assert failed.returncode!=0 and needle in failed.stderr,name+' mutation survived'
+    print('Cached OPL/FWSTRING reply: previous timer-call/general-getter mutations rejected')
 inputs={r/'sw/picogus.cpp',r/'sw/ultrags/ug_config.c',r/'sw/multifw/ug_catalog.c',r/'tools/ultrags/gen-wire.mjs',r/'tools/ultrags/wire-schema.json',a.catalog.resolve(),Path(__file__).resolve()}
 for dependency in dependencies:
     for name in shlex.split(dependency.read_text().replace('\\\n',' ').split(':',1)[1]):
@@ -484,6 +582,7 @@ for dependency in dependencies:
 (a.build/'config-exchange-profile.json').write_text(json.dumps({
     'status':'HOST_PASS / REAL_PENDING','compat':a.compat,'turbo':a.turbo,'probe':a.probe,'fast':a.fast,'gsFast':a.gs_fast,
     'fastOrderedBytes':148 if a.fast else 0,'fastMutationsRejected':2 if a.fast else 0,
+    'cachedOplReply':a.compat and a.fast,'fwstringFast':a.compat and a.fast,'scalarFast':a.compat and a.fast,'scalarCommitRefresh':a.compat and a.fast,'readMutationsRejected':4 if a.compat and a.fast else 0,
     'traceSha256':hashlib.sha256(trace).hexdigest(),
     'inputsSha256':hashlib.sha256((a.build/'config-exchange-inputs.json').read_bytes()).hexdigest(),
     'executableSha256':hashlib.sha256(exe.read_bytes()).hexdigest()

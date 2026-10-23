@@ -37,6 +37,7 @@ void ug_config_select(ug_config *c,uint8_t s) {
 uint8_t ug_config_read(ug_config *c,bool high) {
     uint16_t v;
     switch(c->selector) {
+    case CMD_OPLPORT: v=0x388; return high?v>>8:v;
     case CMD_UG_BASE: v=c->settings->UltraGS.basePort; return high?v>>8:v;
     case CMD_UG_ALIAS: v=c->settings->UltraGS.bulkAlias; return high?v>>8:v;
     case CMD_UG_CFG_RESULT: return high?(ug_config_busy(c)?5:c->result):0;
@@ -48,8 +49,8 @@ uint8_t ug_config_read(ug_config *c,bool high) {
     }
 }
 uint8_t ug_ports_validate(uint16_t base,uint16_t alias) {
-    if(base<0x200 || base>0x3e0 || (base&31)) return 2;
-    if(alias!=0xffff && (alias<0x200 || alias>0x3e0 || (alias&31) || alias==base)) return 2;
+    if(base<0x200 || base>0x3e0 || base==0x380 || (base&31)) return 2;
+    if(alias!=0xffff && (alias<0x200 || alias>0x3e0 || alias==0x380 || (alias&31) || alias==base)) return 2;
     return 0;
 }
 void ug_config_write(ug_config *c,bool high,uint8_t value,bool idle) {
@@ -58,6 +59,9 @@ void ug_config_write(ug_config *c,bool high,uint8_t value,bool idle) {
     c->result=0;
     uint16_t v=c->low|((uint16_t)value<<8);
     switch(c->selector) {
+    case CMD_OPLPORT:
+        c->result=c->active==8?(v==0x388?0:2):0x14;
+        break;
     case CMD_BOOTMODE: {
         ug_image image;
         if(!c->catalog_ok) { c->result=6; break; }

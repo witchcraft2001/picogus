@@ -18,14 +18,15 @@ export function verifyTurbo(b,assembly){
  const shared=['host/compat-linked.json','host/catalog-fast-linked.json','host/gs-fast-linked.json'].map(p=>join(repoRoot,'build',p));
  const [linked,catalog,gs]=shared.map(json);for(const e of [linked,catalog,gs]){current(e);assert(e.status.includes('PASS'));}
  assert.equal(linked.builds.length,2);assert.equal(catalog.builds.length,2);assert.equal(gs.results.length,8);
- for(const row of linked.builds){assert.equal(row.firmware,'pg-ultrags-gsturbo-r17 v4.1.1');assert(row.catalogFast&&row.gsStatusFast);assert.deepEqual(row.pioWords,{iow_program_instructions:10,ug_compat_ior_program_instructions:22});}
+ for(const row of linked.builds){assert.equal(row.firmware,'pg-ultrags-adlib-r3 v4.1.1');assert(row.catalogFast&&row.gsStatusFast);assert.deepEqual(row.pioWords,{iow_program_instructions:10,ug_compat_ior_program_instructions:22});}
  assert(linked.builds.some(r=>resolve(r.build)===resolve(b,'multifw-release')));
  assert(catalog.builds.every(r=>r.cases===37891&&r.noCallsBeforeFIFO&&r.completionAccountingAfterFIFO&&r.fifoBeforeIndex));
- for(const r of catalog.builds)assert.deepEqual(r.instructionsThroughFIFOStore,[14,18]);
- assert(gs.results.every(r=>r.beforeSubmit===13&&r.accounted));
+ for(const r of catalog.builds)assert.deepEqual(r.instructionsThroughFIFOStore,[13,17]);
+ assert(gs.results.every(r=>r.beforeSubmit===15&&r.accounted));
  const cfgdir=join(b,'host/gs-turbo/config'),profile=json(join(cfgdir,'config-exchange-profile.json'));
  assert.equal(profile.status,'HOST_PASS / REAL_PENDING');assert(profile.compat&&profile.fast&&profile.gsFast&&!profile.turbo);
  assert.equal(profile.fastOrderedBytes,148);assert.equal(profile.fastMutationsRejected,2);
+ assert(profile.cachedOplReply&&profile.fwstringFast&&profile.scalarFast&&profile.scalarCommitRefresh);assert.equal(profile.readMutationsRejected,4);
  const cinputs=join(cfgdir,'config-exchange-inputs.json');assert.equal(profile.inputsSha256,hash(cinputs));current({inputs:json(cinputs)});
  assert.equal(profile.executableSha256,hash(join(cfgdir,'config-exchange')));
  assert.equal(profile.traceSha256,hash(join(cfgdir,'config-exchange.json')));

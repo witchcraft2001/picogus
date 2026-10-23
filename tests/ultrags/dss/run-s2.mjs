@@ -61,6 +61,12 @@ test('info','INFO',0,{check:(c,m)=>m.text.includes('BULK alias: OFF')});
 test('info-alias-range','INFO',0,{mode:8,alias:0x280,check:(c,m)=>m.text.includes('BULK alias: 0280-029F')});
 for(const [base,alias] of [[0,0xffff],[0x400,0xffff],[0x2a1,0xffff],[0x2a0,0x2a0],[0x2a0,0]])
  test(`invalid committed ports ${base}/${alias}`,'INFO /DIAG',9,{mode:8,base,alias,noMutation:true,check:(c,m)=>!c.request.length&&!c.responseReads&&m.text.includes('CONFIG_PORTS')&&m.isaLog.every(e=>e.isa>=0x1d0&&e.isa<=0x1d2)});
+// Reject corrupt scalar bytes rather than printing FF as a valid ON flag.
+for(const selector of [3,0xe4,0x79])for(const value of selector===0x79?[2,255]:[0,9,255]){
+ const card=new ConfigCard(catalog,{mode:8}),read=card.readPort.bind(card);
+ card.readPort=p=>p===0x1d2&&card.sel===selector?value:read(p);
+ test('invalid CONFIG scalar '+selector+'/'+value,'INFO /DIAG',9,{card,noMutation:true,check:(c,m)=>m.text.includes('CONFIG_SCALAR')&&m.text.includes('config active/desired/boot/gs=')&&!m.text.includes('RESULT PASS')});
+}
 test('list','LIST',0,{check:(c,m)=>m.text.includes('08 ULTRAGS')&&m.text.includes('07 NE2000 ABSENT')});
 test('default-info','',0,{check:(c,m)=>m.text.includes('ISA slot: 0')&&m.text.includes('PicoGUS: PicoGUS model')});
 test('short-mode','ULTRAGS /SAVE',0,{check:c=>c.reboots===1&&c.saves===1&&c.flash.mode===8});

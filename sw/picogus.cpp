@@ -23,6 +23,8 @@
 #include "hardware/adc.h"
 #include "hardware/pio.h"
 #include "hardware/irq.h"
+#include "hardware/sync.h"
+#include "hardware/timer.h"
 #include "hardware/regs/vreg_and_chip_reset.h"
 #include "hardware/vreg.h"
 #include "hardware/clocks.h"
@@ -37,6 +39,7 @@
 
 #include "../common/picogus.h"
 #ifdef SOUND_ULTRAGS
+#include "ultrags/ug_opl.h"
 #include "ultrags/ug_storage.h"
 #include "ultrags/ug_s4.h"
 #include "ultrags/ug_led_diag.h"
@@ -246,7 +249,11 @@ static void wtvol_from_mixer(uint8_t volume) {
 #define IOR_PIO_SM 1
 
 #ifdef UG_GS_STATUS_FAST
+#ifdef UG_ADLIB
+const char* firmware_string = PICO_PROGRAM_NAME "-adlib-r3 v" PICO_PROGRAM_VERSION_STRING;
+#else
 const char* firmware_string = PICO_PROGRAM_NAME "-gsturbo-r17 v" PICO_PROGRAM_VERSION_STRING;
+#endif
 #elif defined(UG_CONFIG_CATALOG_FAST)
 const char* firmware_string = PICO_PROGRAM_NAME "-cfgfast-r12 v" PICO_PROGRAM_VERSION_STRING;
 #elif defined(UG_CONFIG_PROBE)
@@ -400,7 +407,7 @@ __force_inline void write_picogus_low(uint8_t value) {
     if(posted_config_blocked()) return;
 #endif
     if (ug_config_busy(&ug_cfg)) return;
-    if (ug_config_selector(sel_reg)) { ug_config_write(&ug_cfg,false,value,ug_runtime_idle()); return; }
+    if (ug_config_selector(sel_reg) || (sel_reg==CMD_OPLPORT && ug_cfg.active==8)) { ug_config_write(&ug_cfg,false,value,ug_runtime_idle()); return; }
     switch (sel_reg) {
     case CMD_GUSPORT: // GUS Base port
     case CMD_OPLPORT: // Adlib Base port
@@ -423,7 +430,7 @@ __force_inline void write_picogus_high(uint8_t value) {
     if(posted_config_blocked()) return;
 #endif
     if (ug_config_busy(&ug_cfg)) return;
-    if (ug_config_selector(sel_reg) || sel_reg==CMD_BOOTMODE || sel_reg==CMD_SAVE) {
+    if (ug_config_selector(sel_reg) || (sel_reg==CMD_OPLPORT && ug_cfg.active==8) || sel_reg==CMD_BOOTMODE || sel_reg==CMD_SAVE) {
         bool idle=sel_reg==CMD_UG_GS_ALIASES?ug_runtime_gs_idle():ug_runtime_idle();
 #ifdef UG_ISA_POSTED
         idle=posted_config_idle(idle);
@@ -604,6 +611,9 @@ __force_inline void write_picogus_high(uint8_t value) {
         break;
     case CMD_OPLVOL: // Set the volume for Adlib
         settings.Volume.oplVol = value;
+#ifdef SOUND_ULTRAGS
+        ug_opl_volume(value);
+#endif
 #ifdef SOUND_OPL
         set_volume(CMD_OPLVOL);
 #endif
@@ -657,7 +667,7 @@ __force_inline void write_picogus_high(uint8_t value) {
 }
 
 __force_inline uint8_t read_picogus_low(void) {
-    if (ug_config_selector(sel_reg)) return ug_config_read(&ug_cfg,false);
+    if (ug_config_selector(sel_reg) || (sel_reg==CMD_OPLPORT && ug_cfg.active==8)) return ug_config_read(&ug_cfg,false);
     switch (sel_reg) {
     case CMD_GUSPORT: // GUS Base port
         return settings.GUS.basePort == 0xFFFF ? 0 : (settings.GUS.basePort & 0xFF);
@@ -685,7 +695,7 @@ __force_inline uint8_t read_picogus_low(void) {
 }
 
 __force_inline uint8_t read_picogus_high(void) {
-    if (ug_config_selector(sel_reg)) return ug_config_read(&ug_cfg,true);
+    if (ug_config_selector(sel_reg) || (sel_reg==CMD_OPLPORT && ug_cfg.active==8)) return ug_config_read(&ug_cfg,true);
     uint8_t ret;
     switch (sel_reg) {
     case CMD_MAGIC:  // PicoGUS magic string
@@ -860,6 +870,7 @@ void processSettings(void) {
     wtvol_from_mixer(settings.Global.waveTableVolume);
 #ifdef SOUND_ULTRAGS
     ug_storage_main_volume(settings.Volume.mainVol);
+    ug_opl_volume(settings.Volume.oplVol);
 #endif
 #ifdef SOUND_SB
     sbdsp_set_wtvol_passthrough(&settings.Global.waveTableVolume, wtvol_from_mixer);
@@ -872,6 +883,29 @@ static constexpr uint32_t IO_END = 0x0u;
 // OR with 0x0000ff00 is required to set pindirs in the PIO
 static constexpr uint32_t IOR_SET_VALUE = 0x0000ff00u;
 
+#ifdef UG_CONFIG_CATALOG_FAST
+/* UG_SCALAR_CACHE_BEGIN: core0 only. These selectors are pure and can change
+ * only through a CONFIG write or reboot. RESULT/BUSY and consuming streams
+ * deliberately remain outside this preview. Refresh before write completion,
+ * so an immediate following read observes the committed value. */
+static uint8_t ug_scalar_reply[2]; /* HIGH at even address, LOW at odd. */
+static bool ug_scalar_valid;
+static __attribute__((noinline)) void ug_prepare_config_scalar(void) {
+    ug_scalar_valid=false;
+    switch(sel_reg) {
+    case CMD_MAGIC: case CMD_PROTOCOL: case CMD_BOOTMODE: case CMD_HWTYPE:
+    case CMD_UG_BASE: case CMD_UG_ALIAS: case CMD_UG_GS_ALIASES:
+    case CMD_FW_ACTIVE: case CMD_FW_BOOT_RESULT: case CMD_OPLPORT:
+        ug_scalar_reply[1]=read_picogus_low();
+        ug_scalar_reply[0]=read_picogus_high();
+        ug_scalar_valid=true;
+        break;
+    default:break;
+    }
+}
+/* UG_SCALAR_CACHE_END */
+#endif
+
 #ifdef UG_ISA_EARLY_READ
 #define ISA_PIO_PUT(pio,sm,value) ug_handshake_put(sm,value)
 #elif defined(UG_ISA_COMPAT_READ)
@@ -879,6 +913,35 @@ static constexpr uint32_t IOR_SET_VALUE = 0x0000ff00u;
 #define ISA_PIO_PUT(pio,sm,value) ug_compat_put(pio,sm,value)
 #else
 #define ISA_PIO_PUT(pio,sm,value) pio_sm_put(pio,sm,value)
+#endif
+
+#ifdef UG_ADLIB
+/* OPL timer expiry is detected by a one-shot core0 alarm, never by polling
+ * in the ISA loop: every loop iteration sits between a bus capture and its
+ * IOCHRDY reply. A flag stays set until the host resets it, so one short
+ * IRQ per timer start/reset is the whole cost. Alarm 1 (LED) and 2 (core1
+ * guard) are taken; the SDK pool uses 3. */
+enum { UG_OPL_ALARM=0 };
+void ug_opl_timer_schedule(void) {
+    if(!ug_opl_timer_poll_needed) { timer_hw->armed=1u<<UG_OPL_ALARM; return; }
+    /* The alarm matches equality on the low 32 bits: a target already in
+     * the past would wait 2^32 us, so clamp it just ahead of now. */
+    uint32_t now=time_us_32(),target=ug_opl_timer_deadline;
+    if((int32_t)(target-now)<2) target=now+2;
+    timer_hw->alarm[UG_OPL_ALARM]=target;
+}
+static void ug_opl_alarm_irq(void) {
+    timer_hw->intr=1u<<UG_OPL_ALARM;
+    ug_opl_poll(time_us_32());
+    ug_opl_timer_schedule();
+}
+static void ug_opl_alarm_init(void) {
+    hardware_alarm_claim(UG_OPL_ALARM);
+    irq_set_exclusive_handler(TIMER_IRQ_0,ug_opl_alarm_irq);
+    timer_hw->intr=1u<<UG_OPL_ALARM;
+    hw_set_bits(&timer_hw->inte,1u<<UG_OPL_ALARM);
+    irq_set_enabled(TIMER_IRQ_0,true);
+}
 #endif
 
 static inline void ug_iow_verdict(uint32_t value) {
@@ -920,6 +983,26 @@ static void apply_iow(uint32_t iow_read) {
     // native-port decoding. Its address never depends on Ultra GS settings.
     int native_reg=-1;
     if (port >= CONTROL_PORT && port <= DATA_PORT_HIGH) goto config_iow;
+    if(port==UG_OPL_PORT || port==UG_OPL_PORT+1) {
+        ug_iow_verdict(IO_WAIT);
+        // Timer registers take effect inside this write, and the expiry
+        // alarm must not interleave with that update. A full synth queue
+        // is retried with interrupts enabled between attempts.
+        for(;;) {
+            if(!ug_config_busy(&ug_cfg)) {
+                uint32_t saved=save_and_disable_interrupts();
+                bool accepted=ug_opl_write(port,(uint8_t)iow_read,time_us_32());
+                if(accepted) ug_opl_timer_schedule();
+                restore_interrupts(saved);
+                if(accepted) break;
+            }
+#if defined(UG_ISA_COMPAT_READ) || defined(UG_ISA_EARLY_READ)
+            if(ug_handshake_failed()) return;
+#endif
+            tight_loop_contents();
+        }
+        ug_iow_verdict(IO_END); return;
+    }
     native_reg=ug_native_reg(port);
     if (native_reg>=0) {
         // Frame/statistics work is not a fast IO_END-only write. Assert the
@@ -1214,6 +1297,11 @@ config_iow:
     }
     // Fallthrough if no match, or for slow write, reset PIO
     ug_iow_verdict(IO_END);
+#ifdef UG_CONFIG_CATALOG_FAST
+    // After the write is acknowledged: the next capture is handled only
+    // after this returns, so it observes the refreshed scalar either way.
+    if(port>=CONTROL_PORT && port<=DATA_PORT_HIGH) ug_prepare_config_scalar();
+#endif
 
 }
 
@@ -1224,7 +1312,7 @@ __force_inline void handle_iow(void) {
     uint16_t port=ug_handshake_port(IOW_PIO_SM,word);
     bool owned=ug_handshake_native(IOW_PIO_SM,word);
     ug_handshake_capture(IOW_PIO_SM,port,owned);
-    if(!owned && (port<CONTROL_PORT || port>DATA_PORT_HIGH)) { ug_iow_verdict(IO_END);return; }
+    if(!owned && port!=UG_OPL_PORT && port!=UG_OPL_PORT+1 && (port<CONTROL_PORT || port>DATA_PORT_HIGH)) { ug_iow_verdict(IO_END);return; }
     word=((uint32_t)port<<8)|ug_handshake_data(data);
 #endif
 #ifdef UG_ISA_POSTED
@@ -1331,6 +1419,26 @@ __force_inline void handle_ior(void) {
     // late IOCHRDY can lose a consuming read even though its index advances.
     int native_reg=-1;
     if (port >= CONTROL_PORT && port <= DATA_PORT_HIGH) goto config_ior;
+    // OPL status 0388h: the PIO owns the 0380h block (early IOCHRDY) while
+    // the bulk alias is off; with an alias configured this is a late
+    // software hold like CONFIG. The cached byte is refreshed by the alarm
+    // and by timer writes, so no timer work precedes the reply.
+    if(port==UG_OPL_PORT) {
+#ifdef UG_ISA_COMPAT_READ
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,native_capture ? ug_compat_read_entry : IO_WAIT);
+#else
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_WAIT);
+#endif
+#if defined(__arm__)
+        __asm__ volatile(".global ug_opl_status_fast_begin\nug_opl_status_fast_begin:" ::: "memory");
+#endif
+        const uint8_t value=ug_opl_status_value;
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IOR_SET_VALUE|value);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_opl_status_fast_done\nug_opl_status_fast_done:" ::: "memory");
+#endif
+        return;
+    }
 #ifdef UG_ISA_EARLY_READ
     // A foreign read may have completed before a later CONFIG write changes
     // the map. Do not consume or drive a retroactively owned native address.
@@ -1498,6 +1606,35 @@ __force_inline void handle_ior(void) {
 config_ior:
 #endif
 #ifdef UG_CONFIG_CATALOG_FAST
+    if(ug_scalar_valid && (port==DATA_PORT_HIGH || port==DATA_PORT_LOW)) {
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_WAIT);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_scalar_fast_begin\nug_scalar_fast_begin:" ::: "memory");
+#endif
+        const uint8_t value=ug_scalar_reply[port&1];
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IOR_SET_VALUE|value);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_scalar_fast_done\nug_scalar_fast_done:" ::: "memory");
+#endif
+        return;
+    }
+    if(port==DATA_PORT_HIGH && sel_reg==CMD_FWSTRING) {
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IO_WAIT);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_fwstring_fast_begin\nug_fwstring_fast_begin:" ::: "memory");
+#endif
+        const uint32_t index=cur_read;
+        const uint8_t value=firmware_string[index];
+        ISA_PIO_PUT(pio0,IOR_PIO_SM,IOR_SET_VALUE|value);
+#if defined(__arm__)
+        __asm__ volatile(".global ug_fwstring_fast_submitted\nug_fwstring_fast_submitted:" ::: "memory");
+#endif
+        cur_read=value?index+1:0;
+#if defined(__arm__)
+        __asm__ volatile(".global ug_fwstring_fast_done\nug_fwstring_fast_done:" ::: "memory");
+#endif
+        return;
+    }
     // The COMPAT live-cycle/address check above must precede this branch.
     // Only the core0-owned immutable catalogue snapshot is eligible. Keep
     // live RESULT/aliases and every other selector on the existing path.
@@ -1626,6 +1763,7 @@ int main()
     ug_runtime_init(&settings, ACTIVE_MODE);
 #ifdef SOUND_ULTRAGS
     ug_storage_main_volume(settings.Volume.mainVol);
+    ug_opl_volume(settings.Volume.oplVol);
     ug_minimal_init();
 #endif
     hw_clear_bits(&xip_ctrl_hw->ctrl, XIP_CTRL_EN_BITS);
@@ -1877,6 +2015,9 @@ extern void PIC_DeActivateIRQ(void);
 #ifdef UG_ISA_COMPAT_READ
     static_assert(sizeof(iow_program_instructions)+sizeof(ug_compat_ior_program_instructions)<=64,"compat ISA PIO budget");
     ug_compat_init(ior_offset,settings.UltraGS.basePort,settings.UltraGS.bulkAlias,ug_config_aliases(&ug_cfg));
+#endif
+#ifdef UG_ADLIB
+    ug_opl_alarm_init();
 #endif
 #ifdef SOUND_ULTRAGS
     ug_hw_note_program(pio0,iow_offset,iow_program.length,"iow");

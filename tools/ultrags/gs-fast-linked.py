@@ -34,8 +34,9 @@ for build in (a.build_a,a.build_b):
     m=audio.Machine(elf,a.nm);m.uc.mem_map(0x50200000,0x1000)
     start,end=(m.sym[n] for n in ('ug_gs_fast_begin','ug_gs_fast_submitted'))
     # Verify this compiler's R17 entry contract instead of guessing saved registers:
-    # MOV r2,r8 feeds the FIFO store; completion accounting follows the reply.
-    assert bytes(m.uc.mem_read(start+6,2))==b'\x42\x46'
+    # STR r3,[r5,#20] is the FIFO store; completion uses sp+16 after reply.
+    assert bytes(m.uc.mem_read(start+16,2))==b'\x6b\x61'
+    assert bytes(m.uc.mem_read(start+14,2))==b'\x04\x98'
     completion=m.sym['ug_compat_completions']
     state={}
     def step(uc,address,size,_):
@@ -59,8 +60,8 @@ for build in (a.build_a,a.build_b):
     for flags in (0,1,128,129):
         state={'instructions':0,'writes':[],'accounted':False}
         m.uc.mem_write(m.sym['gs_flags'],bytes([flags]))
-        m.uc.reg_write(UC_ARM_REG_R8,0x50200000)
-        m.uc.mem_write(m.STACK+8,struct.pack('<I',completion));m.uc.mem_write(completion,bytes(4))
+        m.uc.reg_write(UC_ARM_REG_R5,0x50200000)
+        m.uc.mem_write(m.STACK+16,struct.pack('<I',completion));m.uc.mem_write(completion,bytes(4))
         m.uc.reg_write(UC_ARM_REG_SP,m.STACK)
         m.uc.emu_start(start|1,end,count=200)
         assert m.reg(UC_ARM_REG_PC)==end and state['writes']==[0xff00|0x7e|flags]
@@ -72,7 +73,7 @@ report={'status':'LINKED_GS_FAST_PASS / REAL_PENDING','baseline':old,'results':r
  'limits':['New span begins AFTER IO_WAIT; old count is only the general register getter.',
            'No full polling/decode/PIO/ISA latency bound or electrical timing measurement.',
            'Spinlock hold uses declared read counts, not measured core1 contention.',
-           'The entry PIO pointer in r8 and stack completion pointer is supplied; full main initialization is not emulated.']}
+           'The entry PIO pointer in r5 and stack completion pointer is supplied; full main initialization is not emulated.']}
 (a.build_a/'host/gs-fast-linked.json').write_text(json.dumps(report,indent=2)+'\n')
 print('Linked GS fast PASS; new instructions',sorted({r['beforeSubmit'] for r in rows}),
       'old getter instructions',sorted({r['instructions'] for r in old}))

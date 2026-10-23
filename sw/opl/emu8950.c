@@ -134,7 +134,7 @@ static uint8_t am_table[210] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 
                                 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2,  //
                                 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
 
-#if !EMU8950_SLOT_RENDER
+#if !EMU8950_SLOT_RENDER || defined(EMU8950_ULTRAGS)
 #if !EMU8950_NO_WAVE_TABLE_MAP
 static uint16_t wave_table_map[4][PG_WIDTH];
 #else
@@ -200,7 +200,9 @@ static int16_t kl_tablex16[16] = {dB2x16(0.000), dB2x16(9.000), dB2x16(12.000), 
 #endif
 
 #if !EMU8950_NO_TLL
-#ifdef EMU8950_TLL_FLASH
+#if defined(EMU8950_TLL_COMPACT)
+static uint16_t tll_base[128][4];
+#elif defined(EMU8950_TLL_FLASH)
 extern const uint32_t tll_table[8 * 16][1 << TL_BITS][4];
 #else
 static uint32_t tll_table[8 * 16][1 << TL_BITS][4];
@@ -372,7 +374,15 @@ static void makeSinTable(void) {
 }
 
 static void makeTllTable(void) {
-#if !EMU8950_NO_TLL && !defined(EMU8950_TLL_FLASH)
+#if defined(EMU8950_TLL_COMPACT)
+    for (unsigned block=0; block<8; ++block)
+        for (unsigned fnum=0; fnum<16; ++fnum)
+            for (unsigned kl=0; kl<4; ++kl) {
+                int tmp=kl_tablex16[fnum]-96*(7-block);
+                unsigned kx=((kl&1)<<1)|(kl>>1);
+                tll_base[block*16+fnum][kl]=(!kl || tmp<=0)?0:(tmp>>(3-kx))/3;
+            }
+#elif !EMU8950_NO_TLL && !defined(EMU8950_TLL_FLASH)
     int32_t tmp;
     int32_t fnum, block, TL, KL, kx;
 
@@ -522,11 +532,15 @@ static void commit_slot_update(OPL_SLOT *slot, uint8_t notesel) {
 
     if (slot->update_requests & UPDATE_TLL) {
 #if !EMU8950_NO_TLL
+#ifdef EMU8950_TLL_COMPACT
+        slot->tll = tll_base[slot->blk_fnum >> 6][slot->patch->KL] + TL2EG(slot->patch->TL);
+#else
         if ((slot->type & 1) == 0) {
           slot->tll = tll_table[slot->blk_fnum >> 6][slot->patch->TL][slot->patch->KL];
         } else {
           slot->tll = tll_table[slot->blk_fnum >> 6][slot->patch->TL][slot->patch->KL];
         }
+#endif
 #else
         static const uint8_t kslrom4[16] = {
                 0 * 4, 32 * 4, 40 * 4, 45 * 4, 48 * 4, 51 * 4, 53 * 4, 55 * 4, 56 * 4, 58 * 4, 59 * 4, 60 * 4, 61 * 4,
@@ -757,7 +771,7 @@ static INLINE void update_perc_mode(OPL *opl) {
 #endif
 }
 
-#if !EMU8950_LINEAR
+#if !EMU8950_LINEAR || defined(EMU8950_ULTRAGS)
 static INLINE void update_ampm(OPL *opl) {
 #if !EMU8950_NO_TEST_FLAG
     const uint32_t pm_inc = (opl_test_flag(opl) & 8) ? opl->pm_dphase << 10 : opl->pm_dphase;
@@ -818,7 +832,7 @@ static void update_short_noise(OPL *opl) {
 }
 #endif
 
-#if !EMU8950_SLOT_RENDER
+#if !EMU8950_SLOT_RENDER || defined(EMU8950_ULTRAGS)
 static INLINE void calc_phase(OPL_SLOT *slot, int32_t pm_phase, uint8_t pm_mode, uint8_t reset) {
     int8_t pm = 0;
     if (slot->patch->PM) {
@@ -829,6 +843,12 @@ static INLINE void calc_phase(OPL_SLOT *slot, int32_t pm_phase, uint8_t pm_mode,
     if (reset) {
         slot->pg_phase = 0;
     }
+#ifdef EMU8950_ULTRAGS
+    slot->pg_phase += (((slot->fnum & 0x3ff) + pm) * ml_table[slot->patch->ML]) << slot->blk;
+    slot->pg_phase &= (DP_WIDTH * 2 - 1);
+    slot->pg_out = slot->pg_phase >> (DP_BASE_BITS + 1);
+    return;
+#endif
     slot->pg_phase += (((slot->fnum & 0x3ff) + pm) * ml_table[slot->patch->ML]) << slot->blk >> 1;
     slot->pg_phase &= (DP_WIDTH - 1);
     slot->pg_out = slot->pg_phase >> DP_BASE_BITS;
@@ -930,9 +950,17 @@ static int16_t lookup_exp_table(int16_t i) {
     int16_t t = (exp_table[(i & 0xffu)] + 1024);
     int16_t res = t >> ((i & 0x7f00) >> 8);
 #if EMU8950_LINEAR_NEG_NOT_NOT
+#ifdef EMU8950_ULTRAGS
+    return ((i & 0x8000) ? -res : res) * 2;
+#else
     return ((i & 0x8000) ? -res : res) << 1;
+#endif
+#else
+#ifdef EMU8950_ULTRAGS
+    return ((i & 0x8000) ? ~res : res) * 2;
 #else
     return ((i & 0x8000) ? ~res : res) << 1;
+#endif
 #endif
 }
 
@@ -954,7 +982,9 @@ static uint16_t get_wave_table(OPL_SLOT *slot, uint32_t index) {
 #if !EMU8950_NO_WAVE_TABLE_MAP
     return slot->wave_table[index];
 #else
-#if !EMU8950_SLOT_RENDER
+#ifdef EMU8950_ULTRAGS
+    return wav_or_table_lookup[slot->patch->WS&3][(index>>(PG_BITS-2))&3] | logsin_table[index&LOGSIN_MASK2];
+#elif !EMU8950_SLOT_RENDER
     return slot->wav_or_table[(index >> (PG_BITS - 2))&3] | logsin_table[(index & LOGSIN_MASK2)];
 #else
     assert(0);
@@ -1230,6 +1260,13 @@ INLINE static int32_t mix_output_raw(OPL *opl) {
                    External Interfaces
 
 ***********************************************************/
+
+#ifdef EMU8950_TLL_COMPACT
+void OPL_init_static(OPL *opl) {
+    if (!table_initialized) initializeTables();
+    OPL_reset(opl);
+}
+#endif
 
 OPL *OPL_new(uint32_t clk, uint32_t rate) {
     OPL *opl;
@@ -1727,7 +1764,9 @@ uint32_t __not_in_flash_func(slot_car_linear_alg0)(OPL *opl, OPL_SLOT *slot, uin
 }
 #endif
 
+#ifndef EMU8950_ULTRAGS
 static_assert(EMU8950_NO_PERCUSSION_MODE, "");
+#endif
 // this produces stereo
 void OPL_calc_buffer_linear(OPL *opl, int32_t *buffer, uint32_t nsamples) {
     int i;
@@ -1766,6 +1805,12 @@ void OPL_calc_buffer_linear(OPL *opl, int32_t *buffer, uint32_t nsamples) {
     }
 
     for (i = 0; i < 18; i++) {
+#ifdef EMU8950_ULTRAGS
+        if(opl->perc_mode && i==14) break;
+        /* Bass drum has positive polarity; melodic channels are negative. */
+        if(opl->perc_mode && i==12)
+            for(unsigned f=0; f<nsamples; ++f) buffer[f]=-buffer[f];
+#endif
         OPL_SLOT *slot = &opl->slot[i];
         int ch = i >> 1;
 #if DUMPO
@@ -1850,9 +1895,32 @@ void OPL_calc_buffer_linear(OPL *opl, int32_t *buffer, uint32_t nsamples) {
 #endif
         }
     }
+#ifdef EMU8950_ULTRAGS
+    for(unsigned f=0; f<nsamples; ++f) {
+        if(!opl->perc_mode) { buffer[f]=-buffer[f]; update_noise(opl,18); continue; }
+        update_short_noise(opl);
+        for(unsigned j=14; j<18; ++j) {
+            OPL_SLOT *slot=&opl->slot[j];
+            if(slot->update_requests) commit_slot_update(slot,opl->notesel);
+            calc_envelope(slot,opl->eg_counter+f+1,0);
+            calc_phase(slot,(opl->pm_phase+(f+1)*opl->pm_dphase)&(PM_DP_WIDTH-1),opl->pm_mode,0);
+        }
+        update_noise(opl,14);
+        buffer[f]+=calc_slot_hat(opl)+calc_slot_snare(opl);
+        update_noise(opl,2);
+        buffer[f]+=calc_slot_tom(opl)+calc_slot_cym(opl);
+        update_noise(opl,2);
+    }
+#endif
     opl->pm_phase = (opl->pm_phase + opl->pm_dphase * nsamples) & (PM_DP_WIDTH - 1);
     opl->eg_counter += nsamples;
 
+}
+#endif
+
+#ifdef EMU8950_ULTRAGS
+void OPL_calc_buffer(OPL *opl, int32_t *buffer, uint32_t nsamples) {
+    OPL_calc_buffer_linear(opl,buffer,nsamples);
 }
 #endif
 

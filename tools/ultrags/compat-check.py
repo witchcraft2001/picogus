@@ -27,9 +27,15 @@ def compat(w,l,wr,base,alias,gs=False):
         sm.native_entry=l['value']
         # GS aliases on: SET Y,5 owns 00A0h..00BFh; off: JMP to the software path.
         sm.words[l['gs_compare']]=0xe045 if gs else l['foreign']
+        # Bulk alias off: its compare owns the OPL block 0380h..039Fh (R3).
+        sm.words[l['alias_compare']]=0xe040|((0x388 if alias==0xffff else alias)>>5)
+    else:
+        sm.words[l['alias_compare']]=0xe040|((base if alias==0xffff else alias)>>5)
     sm.words[l['base_compare']]=0xe040|(base>>5)
-    sm.words[l['alias_compare']]=0xe040|((base if alias==0xffff else alias)>>5)
     return sm
+def owned_block(port,base,alias,gs):
+    blocks=[base//32,(0x388 if alias==0xffff else alias)//32]+([5] if gs else [])
+    return port//32 in blocks
 cases=0
 for gs in (False,True):
   for base in range(0x200,0x400,32):
@@ -44,13 +50,13 @@ for gs in (False,True):
                 if sm.rx:break
             assert len(sm.rx)==1
             captured=sm.rx[0];owned=bool(captured&(1<<26))
-            assert owned==(port//32 in (base//32,alias//32) or (gs and port//32==5))
+            assert owned==owned_block(port,base,alias,gs)
             raw=(~captured&0xffffffff) if owned else captured
             assert ((raw>>27)&31)|((raw&31)<<5)==port
             assert bool(sm.hold)==owned and not sm.dirs and not sm.ads
             cases+=1
-def transaction(port,value,delay,gs=False):
-    sm=compat(words,labels,wrap,0x2a0,0xffff,gs);sm.port=port
+def transaction(port,value,delay,gs=False,alias=0xffff):
+    sm=compat(words,labels,wrap,0x2a0,alias,gs);sm.port=port
     sm.step();sm.ior=0;capture_at=None;sample=None
     for tick in range(delay+256):
         sm.step()
@@ -72,6 +78,11 @@ for delay in (8,128,4096):
     assert transaction(0x2a3,36,delay)==36
     # GS aliases on: 00B3/00BB are held in PIO exactly like the native block.
     for port in (0xb3,0xbb):assert transaction(port,36,delay,gs=True)==36
+    # Bulk alias off: the OPL status read is PIO-held; a configured alias
+    # owns its own block instead and 0388h returns to the software hold.
+    assert transaction(0x388,36,delay)==36
+    assert transaction(0x280,36,delay,alias=0x280)==36
+    assert transaction(0x388,36,delay,alias=0x280)==(36 if delay==8 else 255)
 saved_native=m.native;m.native=compat
 for period in (1,2):
     for phase in range(period):assert m.coupled(iow,iow_wrap,words,labels,wrap,writer_period=period,writer_phase=phase)
@@ -159,6 +170,7 @@ int main(void){
   if(base==alias)continue;
   assert(ug_compat_sync_ports(base,alias==0x400?65535:alias,false));
   assert(bus.instr_mem[ug_compat_ior_offset_base_compare]==(0xe040|(base>>5)));
+  assert(bus.instr_mem[ug_compat_ior_offset_alias_compare]==(0xe040|((alias==0x400?0x388:alias)>>5)));
  }
  reset();bus.dbg_padout=1u<<26;
  for(unsigned i=0;i<102;i++){ug_compat_note_write(0);tick(100);}
@@ -195,7 +207,7 @@ inputs=[Path(__file__).resolve(),guard_source,r/'tools/ultrags/pio-isa-check.py'
  b/'isa_io.pio.h',ref,r/'sw/ultrags/ug_compat_ior.pio',r/'sw/ultrags/ug_compat.c',
  r/'sw/ultrags/ug_compat.h',r/'sw/ultrags/ug_handshake.h',r/'sw/picogus.cpp',r/'sw/CMakeLists.txt']
 (out/'compat.json').write_text(json.dumps(dict(status='HOST_PASS / REAL_PENDING',
-referenceWordsIdentical=False,pio0Words=32,addressCases=cases,configGsBytes=1280,timing=timing,
+referenceWordsIdentical=False,pio0Words=32,addressCases=cases,configGsBytes=1280,oplBlockOwnedWhileAliasOff=True,timing=timing,
  coupledMutationRejected=True,guard='PASS',
  limits=['CONFIG (and GS with aliases off) still depend on ARM latency; physical Turbo ON acceptance is pending',
          'PIO instruction ticks are not measured Sprinter timing'],

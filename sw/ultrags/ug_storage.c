@@ -1,3 +1,6 @@
+#ifdef UG_ADLIB
+#include "ug_opl.h"
+#endif
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * This program is free software under GPL version 2 or any later version.
  * All mutable store/job data belong exclusively to core1.
@@ -409,6 +412,7 @@ static void boot(void) { ug_minimal_ready(audio_error?3:memory_error?1:0,store.s
 void ug_storage_bind(ug_psram_t *p,uint64_t session) {
     stream_handle=0;stream_closing=false;memset(&stream,0,sizeof(stream));
     ps=p; ug_store_init(&store,0,session); memset(&job,0,sizeof(job));
+    ug_mixer_init(&mixer,(ug_mem_if){0});
     mixer_ready=audio_available=false; memset(&foreground,0,sizeof(foreground)); memset(fx,0,sizeof(fx));memset(legacy_fx,0,sizeof(legacy_fx));
     event_count=0; __atomic_store_n(&playback_busy,0,__ATOMIC_RELEASE);__atomic_store_n(&audio_active,0,__ATOMIC_RELEASE);
     memset(&mod_player,0,sizeof(mod_player)); memset(&pending_mod_info,0,sizeof(pending_mod_info));
@@ -426,8 +430,16 @@ void ug_storage_publish(uint32_t physical,uint8_t error,uint8_t ae) {
     __atomic_store_n(&busy,0,__ATOMIC_RELEASE); boot();
 }
 bool ug_storage_busy(void) { return __atomic_load_n(&busy,__ATOMIC_ACQUIRE)!=0 || ug_storage_transfer() || __atomic_load_n(&sealing.active,__ATOMIC_ACQUIRE); }
-bool ug_storage_audio_active(void) { return __atomic_load_n(&audio_active,__ATOMIC_ACQUIRE)!=0; }
-bool ug_storage_playback_busy(void) { return __atomic_load_n(&playback_busy,__ATOMIC_ACQUIRE)!=0; }
+bool ug_storage_audio_active(void) {
+#ifdef UG_ADLIB
+    if(ug_opl_busy()) return true;
+#endif
+    return __atomic_load_n(&audio_active,__ATOMIC_ACQUIRE)!=0; }
+bool ug_storage_playback_busy(void) {
+#ifdef UG_ADLIB
+    if(ug_opl_busy()) return true;
+#endif
+    return __atomic_load_n(&playback_busy,__ATOMIC_ACQUIRE)!=0; }
 void ug_storage_cancel(uint32_t now) {
     if(running) {
         ug_memory_cancel(&job,now); running=gs_job=false;
@@ -773,8 +785,13 @@ static uint32_t mainvol_q15(void) {
 bool ug_storage_render(int16_t *out,uint32_t frames) {
     if(!out || frames>128) return false;
     memset(out,0,(size_t)frames*2*sizeof(*out));
+#ifndef UG_ADLIB
     if(!mixer_ready) return false;
+#endif
     uint32_t clips=mixer.stats.clips, errors=mixer.stats.fetch_errors, started=time_us_32();
+#ifdef UG_ADLIB
+    mixer.fm=ug_opl_render(frames);
+#endif
     apply_audio_events();
     mixer.vol_q15=(int32_t)mainvol_q15();
     if(foreground.active && foreground.kind==2 && mod_player.playing && !mod_player.paused) {
@@ -844,7 +861,12 @@ bool ug_storage_render(int16_t *out,uint32_t frames) {
     } else ug_stat_add(15,mixer.stats.clips-clips);
     update_playback_busy(); publish_snapshot();
     ug_stat_max(11,time_us_32()-started);
+#ifdef UG_ADLIB
+    mixer.fm=NULL;
+    return any_playing() || ug_opl_busy();
+#else
     return any_playing();
+#endif
 }
 void ug_storage_main_volume(uint8_t percent) {
     if(percent>100) percent=100;
@@ -1011,6 +1033,9 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
          * Capability means implemented; physical acceptance remains REAL_PENDING. */
         ug_put32(r,(230u|(ug_cfg.settings->UltraGS.bulkAlias!=0xffff?8u:0u)|
                     (ug_config_aliases(&ug_cfg)?512u:0u)|(mixer_ready?(1281u|UG_STREAM_FEATURE|UG_MOD_F00_POLICY_FEATURE):0u)));
+#ifdef UG_ADLIB
+        ug_put32(r,ug_get32(r)|UG_ADLIB_OPL2_FEATURE);
+#endif
         if(mixer_ready) ug_put32(r+4,127u); /* RAW8/16, WAV, MOD4, 8CHN, FLT8, MOD 1..32 */
         ug_put32(r+8,48000); put16(r+12,1024); put16(r+14,128); put16(r+16,128);
         put16(r+20,UG_LANES);put16(r+22,UG_LANES);put16(r+24,mixer_ready?UG_LANES:0);

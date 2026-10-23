@@ -621,7 +621,10 @@ function(ug_posted_target TARGET_NAME)
     endif()
 endfunction()
 function(build_ultrags TARGET_NAME MULTIFW)
-    set(UG_ISA_FRONTEND "SHARED" CACHE STRING "HANDSHAKE frontend: SHARED or COMPAT (separate IOW10/IOR22)")
+    if(NOT UG_ISA_WRITE_PROFILE STREQUAL "HANDSHAKE")
+        message(FATAL_ERROR "UltraGS AdLib requires HANDSHAKE for lossless queue backpressure")
+    endif()
+    set(UG_ISA_FRONTEND "COMPAT" CACHE STRING "HANDSHAKE frontend: SHARED or COMPAT (separate IOW10/IOR22)")
     set_property(CACHE UG_ISA_FRONTEND PROPERTY STRINGS SHARED COMPAT)
     if(NOT UG_ISA_FRONTEND MATCHES "^(SHARED|COMPAT)$")
         message(FATAL_ERROR "UG_ISA_FRONTEND must be SHARED or COMPAT")
@@ -695,6 +698,15 @@ function(build_ultrags TARGET_NAME MULTIFW)
         pico_generate_pio_header(${TARGET_NAME} ${CMAKE_CURRENT_LIST_DIR}/ultrags/ug_handshake_ior.pio)
       endif()
     endif()
+    target_compile_definitions(${TARGET_NAME} PRIVATE UG_ADLIB=1 USE_EMU8950_OPL=1
+        EMU8950_ASM=1 EMU8950_TLL_COMPACT=1 EMU8950_NO_FLOAT=1
+        EMU8950_NO_RATECONV=1 EMU8950_NO_TIMER=1 EMU8950_NO_TEST_FLAG=1
+        EMU8950_ULTRAGS=1 EMU8950_LINEAR=1 EMU8950_SLOT_RENDER=1
+        EMU8950_NO_WAVE_TABLE_MAP=1 EMU8950_LINEAR_SKIP=1
+        EMU8950_LINEAR_END_OF_NOTE_OPTIMIZATION=1)
+    target_compile_options(${TARGET_NAME} PRIVATE -fms-extensions)
+    target_sources(${TARGET_NAME} PRIVATE ultrags/ug_opl.c opl/emu8950.c opl/slot_render.cpp opl/slot_render_pico.S)
+    target_link_libraries(${TARGET_NAME} hardware_interp)
     pico_set_program_name(${TARGET_NAME} "pg-ultrags")
     target_compile_definitions(${TARGET_NAME} PRIVATE SOUND_ULTRAGS=1 UG_LANES=${UG_LANES} UG_BUILD_ID="${UG_REV}" PSRAM_ASYNC=1
         PSRAM_PIN_CS=1 PSRAM_PIN_SCK=2 PSRAM_PIN_MOSI=3 PSRAM_PIN_MISO=0)

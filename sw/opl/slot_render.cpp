@@ -195,9 +195,17 @@ static INLINE int16_t calc_sample(const SLOT_RENDER *slot, uint32_t index, int16
     int16_t res = t >> ((att>>8)&127);
     if (!res) return res; // maybe make things more compatible
 #if EMU8950_LINEAR_NEG_NOT_NOT
+#ifdef EMU8950_ULTRAGS
+    return ((att & 0x8000) ? -res : res) * 2;
+#else
     return ((att & 0x8000) ? -res : res) << 1;
+#endif
+#else
+#ifdef EMU8950_ULTRAGS
+    return ((att & 0x8000) ? ~res : res) * 2;
 #else
     return ((att & 0x8000) ? ~res : res) << 1;
+#endif
 #endif
 }
 

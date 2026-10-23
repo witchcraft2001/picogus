@@ -159,6 +159,11 @@ S8TEST_MOD:
     ld a,(S8FLT)
     or a
     jp nz,S8B_FINISH
+    IFDEF APP_OPL
+    ld a,(OPLFX)
+    ld (S8CH),a
+    jp S8TEST_PHASE
+    ENDIF
     ld hl,s8_mod_pass
     call SHOW
     jp PASS
@@ -296,6 +301,14 @@ S8TEST_PHASE:
     jp nz,.asset
     call S6TEST_DRAIN
     call S8TEST_CHECK_MUSIC
+    IFDEF APP_OPL
+    ; Measure this MIX interval, not an older session's maximum/counters.
+    ld a,4
+    ld bc,0
+    ld e,0
+    call RPC
+    jp c,RPC_ERROR
+    ENDIF
     jp S6TEST_MIX
 .control_fx:
     ld a,57

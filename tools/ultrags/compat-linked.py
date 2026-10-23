@@ -29,7 +29,7 @@ for build in (a.build_a, a.build_b):
     gs_fast = 'UG_GS_STATUS_FAST:BOOL=ON' in cache
     assert not (fast and probe)
     assert not gs_fast or fast
-    identity = ('pg-ultrags-gsturbo-r17' if gs_fast else 'pg-ultrags-cfgfast-r12' if fast else
+    identity = ('pg-ultrags-adlib-r3' if gs_fast and 'UG_ADLIB=1' in defines else 'pg-ultrags-gsturbo-r17' if gs_fast else 'pg-ultrags-cfgfast-r12' if fast else
                 'pg-ultrags-cfgprobe-r11' if probe else 'pg-ultrags-compat-r10' + ('-led' if led else '')) + ' v4.1.1'
     assert ('UG_CONFIG_CATALOG_FAST=1' in defines) == fast
     assert ('UG_GS_STATUS_FAST=1' in defines) == gs_fast

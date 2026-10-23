@@ -863,6 +863,9 @@ DISCOVER:
     call READ8
     ret c
     ld (DESIRED),a
+    dec a
+    cp 8
+    jp nc,.badscalar
     ld a,(PROTO)
     ld (GOT),a
     ld a,4
@@ -914,6 +917,10 @@ DISCOVER:
     ld a,(VALID)
     or a
     ret z
+    ld a,(ACTIVE)
+    dec a
+    cp 8
+    jp nc,.badscalar
     ld a,0x76
     call READ16
     ret c
@@ -930,7 +937,15 @@ DISCOVER:
     call READ8
     ret c
     ld (GSALIAS),a
+    cp 2
+    jp nc,.badscalar
     or a
+    ret
+.badscalar:
+    ld hl,invalid_scalar_text
+    ld (REASON),hl
+    ld a,9
+    scf
     ret
 .selectfail:
     cp 10
@@ -1354,6 +1369,9 @@ REPORT_COMMON:
     ld hl,gs_text
     call PRINT
     ld a,(GSALIAS)
+    cp 2
+    ld hl,gs_unknown
+    jr nc,.gsprint
     or a
     ld hl,gs_off
     jr z,.gsprint
@@ -2493,6 +2511,13 @@ DIAGNOSTICS:
     call DUMP
     ld a,(UGCFG.STAGE)
     call HEX8
+    ld hl,diag_scalar
+    call PRINT
+    ld hl,ACTIVE
+    ld b,3
+    call DUMP
+    ld a,(GSALIAS)
+    call HEX8
     ld hl,diag_id
     call PRINT
     ld hl,MAGIC
@@ -2578,6 +2603,9 @@ NIBBLE:
     add a,7
     jp CHAR
 commands: DB "INFO",0,1,"LIST",0,2,"MODE",0,3,"PORTS",0,4,"GSALIAS",0,5,"VERIFY",0,6,"SAVE",0,7,0
+invalid_scalar_text: DB "CONFIG_SCALAR: invalid desired/active/GS value; inspect INFO /DIAG",0
+gs_unknown: DB "UNKNOWN",0
+diag_scalar: DB 13,10,"config active/desired/boot/gs=",0
 options: DB "/QUIET",0,1,"/?",0,2,"/SAVE",0,3,"/DIAG",0,4,"/SLOT",0,5,"/GSALIAS",0,6,0
 modes: DB "GUS",0,1,"ADLIB",0,2,"MPU",0,3,"PSG",0,4,"SB",0,5,"USB",0,6,"NE2000",0,7,"ULTRAGS",0,8,0
 onoff: DB "OFF",0,1,"ON",0,2,0
