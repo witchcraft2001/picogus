@@ -96,7 +96,7 @@ int main(int argc,char **argv) {
     CHECK(!ug_store_reserve(&s,0,s.pool,&o) && o->offset==0 && o->reserved==s.pool);
     CHECK(!ug_store_free(&s,o->handle));
     uint32_t free_bytes,largest;ug_store_space(&s,&free_bytes,&largest);CHECK(free_bytes==s.pool && largest==s.pool);
-    CHECK(ug_store_reserve(&s,UG_KIND_PCM_STREAM+1,16,&o)==2);CHECK(ug_store_reserve(&s,0,0,&o)==3);CHECK(ug_store_reserve(&s,0,UINT32_MAX,&o)==8);
+    CHECK(ug_store_reserve(&s,UG_KIND_S3M+1,16,&o)==2);CHECK(ug_store_reserve(&s,0,0,&o)==3);CHECK(ug_store_reserve(&s,0,UINT32_MAX,&o)==8);
     ug_store_reset(&s);CHECK(s.session==124);
     for(unsigned i=1;i<=128;i++) { CHECK(!ug_store_reserve(&s,0,1,&o));CHECK(o->handle==i && o->offset==(i-1)*16); }
     CHECK(ug_store_reserve(&s,0,1,&o)==10);
@@ -118,7 +118,7 @@ int main(int argc,char **argv) {
     ug_minimal_init();ug_storage_bind(&ps,123);uint8_t r[128],q[5]={0};
     rpc(0,q,0,0,40,r);CHECK(r[7]==2);rpc(2,q,0,5,0,r);CHECK(!ug_minimal_idle());
     ug_config_select(&ug_cfg,0xe1);ug_config_write(&ug_cfg,true,255,ug_minimal_idle());CHECK(ug_cfg.result==5 && !ug_config_busy(&ug_cfg));
-    ug_storage_publish(8u<<20,0,0);rpc(1,q,0,0,44,r);CHECK(ug_get32(r)==(1511|UG_STREAM_FEATURE|UG_MOD_F00_POLICY_FEATURE) && ug_get32(r+4)==127 && (r[24]|r[25]<<8)==32);
+    ug_storage_publish(8u<<20,0,0);rpc(1,q,0,0,44,r);CHECK(ug_get32(r)==(1511|UG_STREAM_FEATURE|UG_MOD_F00_POLICY_FEATURE) && ug_get32(r+4)==255 && (r[24]|r[25]<<8)==32);
     /* GS aliases may change during an EXT frame; CAPS crosses the cores. */
     ug_config_select(&ug_cfg,0x79);
     pthread_t aliases; CHECK(!pthread_create(&aliases,NULL,aliases_thread,NULL));

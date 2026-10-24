@@ -8,7 +8,7 @@ root=Path(__file__).resolve().parents[2];fw=a.build/'multifw-release' if (a.buil
 flags=fw/('CMakeFiles/pg-ultrags-multifw.dir/flags.make' if fw.name=='multifw-release' else 'CMakeFiles/pg-ultrags.dir/flags.make')
 f={m.group(1):shlex.split(m.group(2)) for line in flags.read_text().splitlines() if (m:=re.match(r'(C_\w+) = (.*)',line))}
 compiler=re.search(r'^CMAKE_C_COMPILER:[^=\n]+=(.*)$',(fw/'CMakeCache.txt').read_text(),re.M)[1]
-sources=[root/('sw/ultrags/'+n+'.c') for n in ('ug_mod','ug_storage','ug_minimal','ug_psram','ug_render','ug_stream')]
+sources=[root/('sw/ultrags/'+n+'.c') for n in ('ug_mod','ug_s3m','ug_tracker','ug_storage','ug_minimal','ug_psram','ug_render','ug_stream')]
 frames={}
 for src in sources:
     subprocess.run([compiler,*f['C_DEFINES'],*f['C_INCLUDES'],*f['C_FLAGS'],'-fstack-usage','-c',str(src),'-o',str(out/(src.stem+'.o'))],check=True)
@@ -31,12 +31,17 @@ stream_frames={n:max((v for k,v in frames.items() if k==n or k.startswith(n+'.')
 stream_total=sum(stream_frames.values())+reserve
 assert stream_frames['ug_stream_render'] and stream_total<=2048,'stream renderer stack reserve'
 # MOD rows now contain up to32 events. Check both tick and initial PLAY paths.
-row_chains=(('ug_storage_render','ug_mod_advance_frames','ug_mod_tick','apply_row','mod_player_read','ug_psram_read'),
-            ('ug_storage_render','apply_audio_events','ug_mod_start','apply_row','mod_player_read','ug_psram_read'))
+row_chains=(('ug_storage_render','ug_tracker_advance_frames','ug_tracker_tick','ug_mod_tick','apply_row','mod_player_read','ug_psram_read'),
+            ('ug_storage_render','apply_audio_events','ug_tracker_start_mod','ug_mod_start','apply_row','mod_player_read','ug_psram_read'))
 row_totals=[sum(frames[n] for n in chain)+reserve for chain in row_chains]
 assert max(row_totals)<=2048,'MOD32 row/PLAY stack reserve'
+s3m_chains=(('ug_minimal_dispatch','ug_storage_command','s3m_seal_step','ug_s3m_parser_step','mod_object_read','ug_psram_read'),
+ ('ug_storage_render','ug_tracker_advance_frames','ug_tracker_tick','ug_s3m_tick','row','event','s3m_player_read','ug_psram_read'),
+ ('ug_storage_render','apply_audio_events','ug_tracker_start_s3m','ug_s3m_start','row','event','s3m_player_read','ug_psram_read'))
+s3m_totals=[sum(max((v for k,v in frames.items() if k==n or k.startswith(n+'.')),default=0) for n in chain)+reserve for chain in s3m_chains]
+assert frames['ug_s3m_parser_step']<=384 and max(s3m_totals)<=2048,'S3M parser/row/PLAY stack reserve'
 h=lambda f:hashlib.sha256(f.read_bytes()).hexdigest()
 result={'status':'PASS','scope':'static ARM parser call-path guard; REAL stack watermark remains pending',
- 'mod_row_with_reserve':row_totals,'stream_frames':stream_frames,'stream_with_reserve':stream_total,'render_frames':render_frames,'render_with_reserve':render_total,'frames':{n:frames[n] for n in chain},'subtotal':subtotal,'unprofiled_and_irq_reserve':reserve,'core1_stack':2048,
+ 's3m_with_reserve':s3m_totals,'mod_row_with_reserve':row_totals,'stream_frames':stream_frames,'stream_with_reserve':stream_total,'render_frames':render_frames,'render_with_reserve':render_total,'frames':{n:frames[n] for n in chain},'subtotal':subtotal,'unprofiled_and_irq_reserve':reserve,'core1_stack':2048,
  'inputs':{str(x):h(x) for x in [*sources,*(root/'sw/ultrags').glob('*.h'),*(root/'sw/ultrags').glob('*.inc'),Path(__file__).resolve(),flags]}}
 (a.build/'s7-stack.json').write_text(json.dumps(result,indent=2)+'\n');print('S7 ARM static stack PASS:',result['frames'],'+',reserve,'reserve =',subtotal+reserve,'/2048')

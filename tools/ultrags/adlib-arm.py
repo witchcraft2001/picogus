@@ -6,37 +6,7 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location('audio',Path(__file__).with_name('audio-render-check.py'));audio=importlib.util.module_from_spec(spec);spec.loader.exec_module(audio)
 p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);a=p.parse_args();a.build=a.build.resolve()
 elf=a.build/'multifw-release/pg-ultrags-multifw.elf'
-class Interpolator:
- def __init__(self,uc):
-  self.uc=uc;self.regs=[[0]*16 for _ in range(2)];self.reads=0;self.writes=0
-  uc.hook_add(audio.UC_HOOK_MEM_WRITE,self.write,begin=0xd0000080,end=0xd00000ff)
-  uc.hook_add(audio.UC_HOOK_MEM_READ,self.read,begin=0xd0000080,end=0xd00000ff)
- def values(self,r):
-  raw=[];result=[]
-  for lane in range(2):
-   c=r[11+lane];assert not c&(1<<21),'blend not implemented'
-   acc=r[lane^bool(c&(1<<16))];lo=(c>>5)&31;hi=(c>>10)&31
-   v=(acc>>(c&31))&(((1<<(hi+1))-1)^((1<<lo)-1))
-   if c&(1<<15) and v&(1<<hi):v-=1<<(hi+1)
-   raw.append(v&0xffffffff);result.append((r[2+lane]+(acc if c&(1<<18) else v))&0xffffffff)
-  return raw,result+[(r[4]+sum(raw))&0xffffffff]
- def write(self,uc,access,address,size,value,arg):
-  self.writes+=1;i=(address-0xd0000080)//64;k=(address%64)//4;r=self.regs[i]
-  if k in (13,14):r[k-13]=(r[k-13]+value)&0xffffffff
-  elif k==15:
-   for lane in range(2):
-    v=(value>>(lane*16))&65535
-    if r[11+lane]&(1<<15) and v&32768:v-=65536
-    r[2+lane]=v&0xffffffff
-  else:r[k]=value&0xffffffff
- def read(self,uc,access,address,size,value,arg):
-  self.reads+=1;i=(address-0xd0000080)//64;k=(address%64)//4;r=self.regs[i];raw,result=self.values(r)
-  if 5<=k<=10:
-   value=result[(k-5)%3]
-   if k<8:r[:2]=[result[lane^bool(r[11+lane]&(1<<17))] for lane in range(2)]
-  elif k in (13,14):value=raw[k-13]
-  else:value=r[k]
-  uc.mem_write(address,struct.pack('<I',value))
+from arm_interpolator import Interpolator
 class Machine(audio.Machine):
  def __init__(self):
   super().__init__(elf,'arm-none-eabi-nm');self.interp=Interpolator(self.uc);self.min_sp=self.STACK
@@ -131,5 +101,5 @@ for channels in (8,32):
    assert m.STACK-m.min_sp<=2048
    row=dict(mod_channels=channels,fx_channels=fx_channels,fx_instances=len(fx),rhythm=rhythm,exact_frames=offset,worst_quantum_instructions=m.worst,observed_stack=m.STACK-m.min_sp)
    mixed.append(row);print('PASS linked ARM full MOD/FX/OPL mix',row,flush=True)
-inputs=[elf,Path(__file__),Path(__file__).with_name('audio-render-check.py'),a.build/'host/adlib/vectors.s32le',a.build/'host/adlib/release.s32le',Path(__file__).with_name('s8a-arm.py'),*(audio.ROOT/'sw/ultrags').glob('*.c'),*(audio.ROOT/'sw/ultrags').glob('*.h'),*(audio.ROOT/'sw/ultrags').glob('*.inc'),*(audio.ROOT/'sw/opl').glob('*.*'),audio.ROOT/'sw/ultrags/ug_opl.c']
+inputs=[Path(__file__).with_name('arm_interpolator.py'),elf,Path(__file__),Path(__file__).with_name('audio-render-check.py'),a.build/'host/adlib/vectors.s32le',a.build/'host/adlib/release.s32le',Path(__file__).with_name('s8a-arm.py'),*(audio.ROOT/'sw/ultrags').glob('*.c'),*(audio.ROOT/'sw/ultrags').glob('*.h'),*(audio.ROOT/'sw/ultrags').glob('*.inc'),*(audio.ROOT/'sw/opl').glob('*.*'),audio.ROOT/'sw/ultrags/ug_opl.c']
 (a.build/'host/adlib/arm-evidence.json').write_text(json.dumps(dict(status='LINKED_ARM_PASS / REAL_PENDING',inputs={str(f.resolve()):audio.digest(f) for f in inputs if f.is_file()},results=results,mixed=mixed,release=release,limits=['Functional interpolator/divider; no physical timing or listening claim']),indent=2)+'\n')

@@ -714,7 +714,7 @@ function(build_ultrags TARGET_NAME MULTIFW)
     target_sources(${TARGET_NAME} PRIVATE ${UG_WIRE_DIR}/ug_wire.h ultrags/ug_minimal.c ultrags/ug_play.cpp
         ultrags/ug_hwmap.c ultrags/ug_audio.c ultrags/ug_psram.c
         ultrags/ug_store.c ultrags/ug_memory.c ultrags/ug_storage.c ultrags/ug_pcm.c
-        ultrags/ug_stream.c ultrags/ug_render.c ultrags/ug_mod.c)
+        ultrags/ug_stream.c ultrags/ug_render.c ultrags/ug_mod.c ultrags/ug_s3m.c ultrags/ug_tracker.c)
     target_compile_definitions(${TARGET_NAME} PRIVATE UG_PSRAM_SCK_MHZ=${UG_PSRAM_SCK_MHZ})
     target_compile_options(${TARGET_NAME} PRIVATE -include ${CMAKE_CURRENT_LIST_DIR}/ultrags/ug_psram_wait.h)
     target_link_libraries(${TARGET_NAME} rp2040-psram hardware_dma pico_rand)

@@ -93,6 +93,37 @@ PCM_OPTION:
     or a
     ret
 PCM_VALIDATE:
+    IFDEF APP_LOAD
+    IFNDEF APP_PLAY
+    ld a,(BLOBTYPE)
+    or a
+    jr nz,.kind_ready
+    ld hl,(ARGS)
+.scan_extension:
+    ld a,(hl)
+    or a
+    jr z,.kind_ready
+    inc hl
+    cp '.'
+    jr nz,.scan_extension
+    push hl
+    ld de,pcm_s3m_extension
+    call EQUAL
+    pop hl
+    jr nz,.scan_extension
+    ld a,5
+    ld (PCM_KIND),a
+.kind_ready:
+    ld a,(BLOBTYPE)
+    or a
+    jr nz,.has_type
+    ld a,(PCM_KIND)
+    cp 5
+    scf
+    ret nz
+.has_type:
+    ENDIF
+    ENDIF
     ld a,(PCM_KIND)
     cp 1
     jr z,.raw
@@ -167,6 +198,9 @@ PCM_PREFLIGHT:
     ret z
     cp 2
     ld b,4
+    jr z,.check
+    cp 5
+    ld b,128
     jr z,.check
     cp 3
     ld b,24
@@ -260,10 +294,14 @@ PCM_SHOW_TYPE:
     ld hl,pcm_raw_text
     cp 1
     jr z,.type
+    ld hl,pcm_s3m_text
+    cp 5
+    jr z,.tracker
     ld hl,pcm_wav_text
     cp 3
     jr nz,.type
     ld hl,pcm_mod_text
+.tracker:
     call SHOW
     ld hl,(HANDLE)
     ld (REQ),hl
@@ -322,11 +360,13 @@ PCM_UNSUPPORTED:
     ld hl,pcm_unsupported_text
     ld (REASON),hl
     jp PROTOCOL
-pcm_types: DB "/TYPE:BLOB",0,1,"/TYPE:RAW",0,2,"/TYPE:WAV",0,3,"/TYPE:MOD",0,4,0
+pcm_types: DB "/TYPE:BLOB",0,1,"/TYPE:RAW",0,2,"/TYPE:WAV",0,3,"/TYPE:MOD",0,4,"/TYPE:S3M",0,6,0
 pcm_prefixes: DB "/RATE:",0,"/BITS:",0,"/CH:",0,"/FMT:",0
 pcm_formats: DB "U8",0,1,"S8",0,2,"S16LE",0,3,0
 pcm_raw_text: DB " type=RAW",0
 pcm_wav_text: DB " type=WAV",0
+pcm_s3m_extension: DB "S3M",0
+pcm_s3m_text: DB " type=S3M channels=",0
 pcm_mod_text: DB " type=MOD",0
 pcm_format_text: DB "FORMAT",0
 pcm_unsupported_text: DB "UNSUPPORTED_FORMAT_OR_FEATURE",0

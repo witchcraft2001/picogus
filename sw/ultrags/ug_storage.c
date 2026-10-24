@@ -11,7 +11,7 @@
 #include "ug_pcm.h"
 #include "ug_stream.h"
 #include "ug_render.h"
-#include "ug_mod.h"
+#include "ug_tracker.h"
 #include "ug_minimal.h"
 #include "ug_legacy.h"
 #include "ug_config.h"
@@ -36,26 +36,45 @@ static bool mixer_ready, audio_available;
 typedef struct {
     uint16_t id,handle,repeats;
     uint16_t voice[UG_LANES];
-    uint8_t active,paused,priority,gain,pan,channels,flags,state,kind,mod_song_length,legacy,legacy_fine;
+    uint8_t active,paused,priority,gain,pan,channels,flags,state,kind,legacy,legacy_fine;
+    uint8_t logical_channels,s3m,music_channel[UG_LANES],side[UG_LANES];
+    uint16_t mod_song_length;
     uint32_t offset;
     ug_pcm_info pcm; /* independent of the movable object table */
 } ug_instance;
 static ug_instance foreground, fx[UG_LANES];
 static ug_instance legacy_fx[4];
-static ug_lane hidden_music[4];
-static ug_lane *music_lane(unsigned c) {
-    unsigned voice=foreground.voice[c];
-    if(c>=4) return &mixer.lanes[voice];
-    for(unsigned i=0;i<4;i++) if(legacy_fx[i].active && legacy_fx[i].voice[0]==voice) return &hidden_music[c];
-    return &mixer.lanes[voice];
+static ug_lane hidden_music[8];
+static unsigned music_index(unsigned logical,unsigned side) {
+    for(unsigned i=0;i<foreground.channels;i++)
+        if(foreground.music_channel[i]==logical && foreground.side[i]==side)return i;
+    return UG_LANES;
 }
-static ug_mod_player mod_player;
+static bool music_overridden(unsigned i) {
+    if(i>=foreground.channels)return false;
+    unsigned logical=foreground.music_channel[i],first=music_index(logical,0);
+    if(logical>=4 || first==UG_LANES)return false;
+    for(unsigned n=0;n<4;n++)if(legacy_fx[n].active && legacy_fx[n].voice[0]==foreground.voice[first])return true;
+    return false;
+}
+static ug_lane *music_lane(unsigned i) {
+    if(music_overridden(i))return &hidden_music[foreground.music_channel[i]*2+foreground.side[i]];
+    return &mixer.lanes[foreground.voice[i]];
+}
+static void advance_hidden(uint32_t frames) {
+    for(unsigned i=0;i<foreground.channels;i++)if(music_overridden(i))ug_lane_advance_silent(music_lane(i),frames);
+}
+static ug_tracker tracker;
 static bool legacy_automatic=true;
 static unsigned legacy_ticks;
 static uint8_t legacy_f00;
 static uint16_t legacy_relooper;
 static ug_mod_info pending_mod_info, seal_mod_info;
 static struct { uint32_t offset,size; } mod_object;
+static struct { uint32_t offset,size; } s3m_object;
+static ug_s3m_info pending_s3m_info;
+static ug_s3m_parser s3m_parser;
+static bool s3m_writing;
 static uint32_t mod_lane_trigger[UG_MOD_CHANNELS];
 /* Commands run on core1 between renders. Project accepted events so the next
  * command validates the ownership that will exist at the quantum boundary. */
@@ -99,6 +118,34 @@ static int mod_player_read(void *ctx,uint32_t off,uint8_t *dst,uint32_t n) {
     int rc=ps ? ug_psram_read(ps,mod_object.offset+off,dst,n) : -1;
     if(rc) ug_stat_add(10,1);
     return rc;
+}
+static int s3m_aux_write(void *ctx,uint32_t off,const uint8_t *src,uint32_t n) {
+    const ug_object_t *o=ctx;
+    if(n>256 || off>o->aux_reserved || n>o->aux_reserved-off)return -1;
+    return ug_psram_write(ps,o->aux_offset+off,src,n);
+}
+static int s3m_player_read(void *ctx,uint32_t off,uint8_t *dst,uint32_t n) {
+    (void)ctx;
+    if(n>256 || off>s3m_object.size || n>s3m_object.size-off)return -1;
+    int rc=ug_psram_read(ps,s3m_object.offset+off,dst,n);if(rc)ug_stat_add(10,1);return rc;
+}
+static void s3m_seal_init(ug_object_t *o) {
+    ug_store_aux(&store,o->handle,0);s3m_writing=false;ug_s3m_parser_init(&s3m_parser,o->size);
+}
+static int s3m_seal_step(ug_object_t *o) {
+    int rc=ug_s3m_parser_step(&s3m_parser,mod_object_read,o,s3m_writing?s3m_aux_write:NULL,o);
+    if(rc<0) {
+        ug_store_aux(&store,o->handle,0);
+        if(rc==-2)ug_stat_add(10,1);
+        return -(rc==-2?UG_ERR_PSRAM:UG_ERR_FORMAT);
+    }
+    if(!rc)return 0;
+    if(!s3m_writing) {
+        uint8_t e=ug_store_aux(&store,o->handle,s3m_parser.info.aux_size);
+        if(e)return -(int)e;
+        s3m_writing=true;ug_s3m_parser_init(&s3m_parser,o->size);return 0;
+    }
+    o->mod_valid=1;o->mod_channels=s3m_parser.info.channels;return 1;
 }
 static void prepare_mixer(void) {
     if(!mixer_ready && audio_available && store.pool && !memory_error) {
@@ -265,10 +312,10 @@ static void make_snapshot(ug_snapshot *s) {
     put16(r+42,mixer.peaks[0]);put16(r+44,mixer.peaks[1]);
     if(foreground.state) {
         put16(r+20,foreground.id);r[24]=foreground.state;r[25]=foreground.kind;
-        put16(r+26,foreground.channels);put16(r+28,foreground.handle);
+        put16(r+26,foreground.kind==2?foreground.logical_channels:foreground.channels);put16(r+28,foreground.handle);
         ug_put32(r+32,foreground.kind==4?(uint32_t)stream.position:foreground.kind==2?0:foreground.state==3?foreground.pcm.frames:
                  (uint32_t)(mixer.lanes[foreground.voice[0]].phase>>32));
-        if(foreground.kind==2) { put16(r+36,mod_player.order);r[38]=mod_player.row;r[39]=mod_player.tick;r[40]=mod_player.speed;r[41]=mod_player.bpm; }
+        if(foreground.kind==2) { put16(r+36,tracker.state.order);r[38]=tracker.state.row;r[39]=tracker.state.tick;r[40]=tracker.state.speed;r[41]=tracker.state.bpm; }
     }
     for(unsigned v=0;v<UG_LANES;v++) {
         uint8_t *rec=s->voice[v];put16(rec,(uint16_t)v);put16(rec+6,UINT16_MAX);rec[16]=127;
@@ -279,11 +326,11 @@ static void make_snapshot(ug_snapshot *s) {
         if(!in->active) continue;
         for(unsigned c=0;c<in->channels;c++) {
             unsigned v=in->voice[c];const ug_lane *l=&mixer.lanes[v];uint8_t *rec=s->voice[v];
-            put16(rec+2,in->id);put16(rec+4,in->handle);put16(rec+6,n?UINT16_MAX:(uint16_t)c);
+            put16(rec+2,in->id);put16(rec+4,in->handle);put16(rec+6,n?UINT16_MAX:(uint16_t)(in->kind==2?in->music_channel[c]:c));
             ug_put32(rec+8,(uint32_t)(l->phase>>32));put16(rec+12,mixer.lane_peaks[v]);
             rec[17]=in->gain;rec[18]=in->pan;rec[19]=8|((in->kind==4?!in->paused && !stream.buffering && !stream.error:l->active)?1:0)|(n?2:0)|(in->paused?4:0);
             if(!n && in->kind==2) {
-                const ug_mod_channel *mc=&mod_player.channel[c];put16(rec+14,mc->period);
+                const ug_mod_channel *mc=&tracker.state.channel[in->music_channel[c]];put16(rec+14,mc->period);
                 rec[16]=mc->note;rec[17]=mc->mix_volume;rec[18]=mc->pan;
             }
             if(!counted[v]) { ++voices;counted[v]=true; }
@@ -366,7 +413,7 @@ bool ug_storage_abort(uint32_t now) {
     transfer.cancelled_command=false;transfer.stream_failure=0;
     if(phase()==T_COMMIT) { uint8_t e=commit_step(); if(e) ug_minimal_error(e); if(phase()==T_COMMIT) return false; }
     else if(phase()!=T_NONE) release_transfer();
-    if(sealing.active) { ug_store_pin(&store,sealing.handle,false); __atomic_store_n(&sealing.active,false,__ATOMIC_RELEASE); }
+    if(sealing.active) { ug_store_aux(&store,sealing.handle,0);ug_store_pin(&store,sealing.handle,false); __atomic_store_n(&sealing.active,false,__ATOMIC_RELEASE); }
     ug_storage_cancel(now); return true;
 }
 void ug_storage_gs_reset(bool cold,uint32_t now) {
@@ -415,7 +462,7 @@ void ug_storage_bind(ug_psram_t *p,uint64_t session) {
     ug_mixer_init(&mixer,(ug_mem_if){0});
     mixer_ready=audio_available=false; memset(&foreground,0,sizeof(foreground)); memset(fx,0,sizeof(fx));memset(legacy_fx,0,sizeof(legacy_fx));
     event_count=0; __atomic_store_n(&playback_busy,0,__ATOMIC_RELEASE);__atomic_store_n(&audio_active,0,__ATOMIC_RELEASE);
-    memset(&mod_player,0,sizeof(mod_player)); memset(&pending_mod_info,0,sizeof(pending_mod_info));
+    memset(&tracker,0,sizeof(tracker)); memset(&pending_mod_info,0,sizeof(pending_mod_info));
     memset(&mod_object,0,sizeof(mod_object)); memset(mod_lane_trigger,0,sizeof(mod_lane_trigger));
     output_frames=0; last_frames=last_underruns=0;
     next_play_id=next_fx_id=1; music_master=fx_master=music_gain=fx_gain=64;
@@ -504,42 +551,70 @@ static uint64_t mod_step(uint16_t period) {
     return period?(((uint64_t)3546895u<<32)/(uint32_t)period)/48000u:1;
 }
 static uint32_t mod_sample_offset(unsigned sample) {
-    uint32_t offset=mod_object.offset+mod_player.info.sample_offset;
-    for(unsigned i=0;i<sample && i<31;i++) offset+=mod_player.info.samples[i].length;
+    uint32_t offset=mod_object.offset+tracker.engine.mod.info.sample_offset;
+    for(unsigned i=0;i<sample && i<31;i++) offset+=tracker.engine.mod.info.samples[i].length;
     return offset;
 }
 static void mod_lane_sync(unsigned i,bool force) {
-    ug_mod_channel *c=&mod_player.channel[i]; ug_lane *l=music_lane(i);
-    if(l->failed && !force) { mod_player.error=1;mod_player.playing=0;l->active=0;return; }
+    ug_mod_channel *c=&tracker.engine.mod.channel[i]; ug_lane *l=music_lane(i);
+    if(l->failed && !force) { tracker.state.error=1;tracker.state.playing=0;l->active=0;return; }
     bool retrigger=force || mod_lane_trigger[i]!=c->trigger;
-    if(retrigger) mod_player.dirty_note|=(1u<<i);
-    if(l->gain!=c->mix_volume) mod_player.dirty_volume|=(1u<<i);
+    if(retrigger) tracker.state.dirty_note|=(1u<<i);
+    if(l->gain!=c->mix_volume) tracker.state.dirty_volume|=(1u<<i);
     if(retrigger) {
         mod_lane_trigger[i]=c->trigger;
         if(!c->period || c->voice_sample>=31 ||
-           c->sample_offset>=mod_player.info.samples[c->voice_sample].length) {
+           c->sample_offset>=tracker.engine.mod.info.samples[c->voice_sample].length) {
             memset(l,0,sizeof(*l));return;
         }
-        const ug_mod_sample *s=&mod_player.info.samples[c->voice_sample];
+        const ug_mod_sample *s=&tracker.engine.mod.info.samples[c->voice_sample];
         if(ug_lane_configure(&mixer,l,mod_sample_offset(c->voice_sample),s->length,s->loop_start,
               s->loop_start+s->loop_length,mod_step(c->period),c->mix_volume,c->pan,UG_FMT_S8,
               UG_LANE_MONO,s->loop_length!=0,0)) {
-            l->active=0;mod_player.error=2;mod_player.playing=0;return;
+            l->active=0;tracker.state.error=2;tracker.state.playing=0;return;
         }
         /* Keep the original source/loop bounds. The intro and 9xx offset
          * affect only the initial phase, never the stored sample or loop. */
         l->phase=(uint64_t)c->sample_offset<<32;
     }
     l->step=mod_step(c->period);l->gain=c->mix_volume;l->pan=c->pan;
-    if(mod_player.paused || foreground.paused) l->active=0;
+    if(tracker.state.paused || foreground.paused) l->active=0;
     mod_lane_trigger[i]=c->trigger;l->class_gain=music_gain;l->class_master=music_master;
     /* Calibrate a module to the four-channel mix before pan/accumulation.
      * Round channel count up to4/8/16/32: bounded shifts keep the sample path
      * free of division. Independent PCM/FX lanes retain unity headroom. */
-    unsigned channels=mod_player.info.channels;
+    unsigned channels=tracker.engine.mod.info.channels;
     l->mix_shift=channels>16?3:channels>8?2:channels>4?1:0;
 }
-static void mod_sync_all(bool force) { for(unsigned i=0;i<foreground.channels;i++)mod_lane_sync(i,force); }
+static void s3m_lane_sync(unsigned i,bool force);
+static void mod_sync_all(bool force) { for(unsigned i=0;i<foreground.channels;i++) { if(tracker.s3m)s3m_lane_sync(i,force);else mod_lane_sync(i,force); } }
+static void s3m_lane_sync(unsigned i,bool force) {
+    unsigned ch=foreground.music_channel[i],side=foreground.side[i];
+    ug_s3m_channel *c=&tracker.engine.s3m.channel[ch];const ug_s3m_sample *s=&c->sample;
+    ug_lane *l=music_lane(i);
+    if(l->failed && !force) { tracker.state.error=1;tracker.state.playing=0;l->active=0;return; }
+    bool retrigger=force || mod_lane_trigger[i]!=c->trigger;
+    if(retrigger)tracker.state.dirty_note|=1u<<ch;
+    if(l->gain!=c->mix_volume)tracker.state.dirty_volume|=1u<<ch;
+    if(retrigger) {
+        mod_lane_trigger[i]=c->trigger;
+        if(!c->period || !s->length || c->sample_offset>=s->length || (side && !(s->flags&2))) { memset(l,0,sizeof(*l));return; }
+        unsigned bytes=(s->flags&4)?2:1;
+        uint8_t fmt=tracker.engine.s3m.info.signed_samples?(bytes==2?UG_FMT_S16LE:UG_FMT_S8):(bytes==2?UG_FMT_U16LE:UG_FMT_U8);
+        /* Each plane is contiguous. Configure its own source range and stride;
+         * pan mode is independent and never doubles the source stride. */
+        if(ug_lane_configure(&mixer,l,mod_object.offset+s->offset+side*s->length*bytes,s->length,
+              s->loop_start,s->loop_end,ug_s3m_step(c),c->mix_volume,c->pan,fmt,UG_LANE_MONO,s->flags&1,0)) {
+            l->active=0;tracker.state.error=2;tracker.state.playing=0;return;
+        }
+        l->mode=(s->flags&2)?(side?UG_LANE_RIGHT:UG_LANE_LEFT):UG_LANE_MONO;
+        l->phase=(uint64_t)c->sample_offset<<32;
+    }
+    l->step=ug_s3m_step(c);l->gain=c->mix_volume;l->pan=c->pan;
+    if(!c->period || tracker.state.paused || foreground.paused)l->active=0;
+    l->class_gain=music_gain;l->class_master=music_master;
+    unsigned channels=foreground.channels;l->mix_shift=channels>16?3:channels>8?2:channels>4?1:0;
+}
 static int instance_lanes(const ug_instance *in,bool is_fx) {
     const ug_pcm_info *p=&in->pcm;
     uint8_t fmt=p->sample_format==0?UG_FMT_U8:p->sample_format==1?UG_FMT_S8:UG_FMT_S16LE;
@@ -562,15 +637,17 @@ static void drop_instance(ug_instance *in) {
     }
     for(unsigned i=0;i<in->channels;i++) {
         unsigned v=in->voice[i];
-        bool overridden=false;
-        if(in==&foreground) for(unsigned n=0;n<4;n++) if(legacy_fx[n].active && legacy_fx[n].voice[0]==v) overridden=true;
+        bool overridden=in==&foreground && music_overridden(i);
         if(!overridden) mixer.lanes[v].active=0;
         /* Restore hidden music only when an overriding FX ends. A legacy
          * foreground itself must never resurrect stale hidden voices. */
         if(in!=&foreground && in->legacy && foreground.active && foreground.kind==2)
-            for(unsigned c=0;c<4 && c<foreground.channels;c++) if(foreground.voice[c]==v) mixer.lanes[v]=hidden_music[c];
+            for(unsigned c=0;c<foreground.channels;c++) if(music_overridden(c)) {
+                unsigned first=music_index(foreground.music_channel[c],0);
+                if(foreground.voice[first]==v)mixer.lanes[foreground.voice[c]]=*music_lane(c);
+            }
     }
-    if(in->kind==2) ug_mod_stop(&mod_player);
+    if(in->kind==2) ug_tracker_stop(&tracker);
     ug_store_pin(&store,in->handle,false); in->active=0; in->paused=0; in->state=0;
     if(in->kind==4)stream_destroy();
 }
@@ -650,15 +727,34 @@ static int start_mod(ug_object_t *o,uint8_t flags) {
     for(unsigned i=0;i<event_count;i++) if(events[i].op==UG_OP_PLAY_MOD) return UG_ERR_BUSY;
     if(!o) return UG_ERR_HANDLE;
     if(o->state!=1) return UG_ERR_STATE;
-    if(o->kind!=3 || !o->mod_valid) return UG_ERR_FORMAT;
+    if((o->kind!=3 && o->kind!=5) || !o->mod_valid) return UG_ERR_FORMAT;
+    if(o->kind==5 && (flags&~UG_MOD_LOOP))return UG_ERR_BAD_ARGUMENT;
     if(!mixer_ready) return UG_ERR_PSRAM;
-    int parsed=ug_mod_parse(&pending_mod_info,mod_object_read,o,o->size);
+    int parsed=0;
+    if(o->kind==5) {
+        for(unsigned off=0;off<sizeof(pending_s3m_info);) {
+            unsigned n=sizeof(pending_s3m_info)-off;if(n>256)n=256;
+            if(ug_psram_read(ps,o->aux_offset+off,(uint8_t *)&pending_s3m_info+off,n)) { parsed=-2;break; }off+=n;
+        }
+    } else parsed=ug_mod_parse(&pending_mod_info,mod_object_read,o,o->size);
     if(parsed) { if(parsed==-2)ug_stat_add(10,1);return parsed==-2?UG_ERR_PSRAM:UG_ERR_FORMAT; }
     project_playback();
     uint16_t id=instance_id(false);if(!id)return UG_ERR_NO_VOICE;
     uint8_t rc=ug_store_pin(&store,o->handle,true);if(rc)return rc;
     ug_instance in={.id=id,.handle=o->handle,.active=1,.state=1,.channels=pending_mod_info.channels,.kind=2,.flags=flags,
                     .gain=64,.mod_song_length=pending_mod_info.song_length};
+    in.s3m=o->kind==5;
+    in.logical_channels=in.s3m?pending_s3m_info.channels:pending_mod_info.channels;
+    if(in.s3m) {
+        in.channels=0;in.mod_song_length=pending_s3m_info.orders;
+        for(unsigned side=0;side<2;side++)for(unsigned ch=0;ch<in.logical_channels;ch++) {
+            uint32_t mask=side?pending_s3m_info.stereo:pending_s3m_info.enabled;
+            if(mask&(1u<<ch)) {
+                if(in.channels==UG_LANES) { ug_store_pin(&store,o->handle,false);return UG_ERR_NO_VOICE; }
+                in.music_channel[in.channels]=ch;in.side[in.channels++]=side;
+            }
+        }
+    } else for(unsigned ch=0;ch<in.channels;ch++)in.music_channel[ch]=ch;
     if(!reserve_voices(&in,true,UINT16_MAX,false,0)) { ug_store_pin(&store,o->handle,false); return UG_ERR_NO_VOICE; }
     pending_foreground=in;queue_event(UG_OP_PLAY_MOD,NULL,0,&in);return 0;
 }
@@ -700,7 +796,7 @@ static void stop_all_playback(void) {
 static void control_instance(ug_instance *in,uint8_t action) {
     if(action==0) { drop_instance(in); return; }
     in->paused=action==1; in->state=in->paused?2:1;
-    if(in->kind==2) mod_player.paused=in->paused;
+    if(in->kind==2) tracker.state.paused=in->paused;
     if(in->kind==4)return;
     for(unsigned channel=0;channel<in->channels;channel++) {
         ug_lane *l=in->kind==2?music_lane(channel):&mixer.lanes[in->voice[channel]];
@@ -708,7 +804,7 @@ static void control_instance(ug_instance *in,uint8_t action) {
     }
 }
 static void sync_mod_pause(void) {
-    if(foreground.active && foreground.kind==2 && mod_player.paused) {
+    if(foreground.active && foreground.kind==2 && tracker.state.paused) {
         foreground.paused=1;foreground.state=2;
         for(unsigned lane=0;lane<foreground.channels;lane++) music_lane(lane)->active=0;
     }
@@ -733,20 +829,22 @@ static void apply_audio_events(void) {
             ug_object_t *o=ug_store_find(&store,foreground.handle);
             if(!o) { foreground.active=0;foreground.state=4;audio_error=UG_ERR_HANDLE;continue; }
             mod_object.offset=o->offset;mod_object.size=o->size;
-            ug_mod_start(&mod_player,&pending_mod_info,mod_player_read,&mod_object,
-                         foreground.flags,legacy_f00);
+            if(foreground.s3m) {
+                s3m_object.offset=o->aux_offset;s3m_object.size=o->aux_reserved;
+                ug_tracker_start_s3m(&tracker,&pending_s3m_info,s3m_player_read,NULL,foreground.flags);
+            } else ug_tracker_start_mod(&tracker,&pending_mod_info,mod_player_read,&mod_object,foreground.flags,legacy_f00);
             memset(mod_lane_trigger,0,sizeof(mod_lane_trigger));
             for(unsigned lane=0;lane<foreground.channels;lane++)music_lane(lane)->active=0;
             mod_sync_all(true);
             sync_mod_pause();
         } else if(e->op==UG_OP_SEEK_MOD) {
-            if(ug_mod_seek(&mod_player,get16(e->q+2),e->q[4])) mod_player.playing=0;
+            if(ug_tracker_seek(&tracker,get16(e->q+2),e->q[4])) tracker.state.playing=0;
             mod_sync_all(true);
             sync_mod_pause();
         } else if(e->op==UG_OP_SET_TEMPO) {
-            ug_mod_tempo(&mod_player,e->q[0],e->q[1]);
+            ug_tracker_tempo(&tracker,e->q[0],e->q[1]);
         } else if(e->op==UG_OP_SET_PAN) {
-            unsigned channel=get16(e->q);mod_player.channel[channel].pan=e->q[2];mod_lane_sync(channel,false);
+            unsigned channel=get16(e->q);ug_tracker_pan(&tracker,channel,e->q[2]);mod_sync_all(false);
         } else if(e->op==UG_OP_PLAY_FX) {
             int slot=-1;
             for(unsigned i=0;i<UG_LANES;i++) if(fx[i].active && intersects(&fx[i],&e->instance)) drop_instance(&fx[i]);
@@ -794,19 +892,19 @@ bool ug_storage_render(int16_t *out,uint32_t frames) {
 #endif
     apply_audio_events();
     mixer.vol_q15=(int32_t)mainvol_q15();
-    if(foreground.active && foreground.kind==2 && mod_player.playing && !mod_player.paused) {
-        while(legacy_ticks) { ug_mod_tick(&mod_player);--legacy_ticks; }
+    if(foreground.active && foreground.kind==2 && tracker.state.playing && !tracker.state.paused) {
+        while(legacy_ticks) { ug_tracker_tick(&tracker);--legacy_ticks; }
         mod_sync_all(false);
     }
-    if(foreground.active && foreground.kind==2 && mod_player.playing && !mod_player.paused && legacy_automatic) {
+    if(foreground.active && foreground.kind==2 && tracker.state.playing && !tracker.state.paused && legacy_automatic) {
         uint32_t done=0;
         while(done<frames) {
-            uint32_t to_tick=ug_mod_frames_to_tick(&mod_player);
+            uint32_t to_tick=ug_tracker_frames_to_tick(&tracker);
             uint32_t take=frames-done;if(take>to_tick)take=to_tick;
-            if(take) { for(unsigned c=0;c<4;c++) if(music_lane(c)==&hidden_music[c]) ug_lane_advance_silent(&hidden_music[c],take);ug_mixer_render(&mixer,out+done*2,take);ug_mod_advance_frames(&mod_player,take);done+=take; }
+            if(take) { advance_hidden(take);ug_mixer_render(&mixer,out+done*2,take);ug_tracker_advance_frames(&tracker,take);done+=take; }
             mod_sync_all(false);
             sync_mod_pause();
-            if(!mod_player.playing || mod_player.paused) {
+            if(!tracker.state.playing || tracker.state.paused) {
                 for(unsigned lane=0;lane<foreground.channels;lane++) music_lane(lane)->active=0;
                 if(done<frames) ug_mixer_render(&mixer,out+done*2,frames-done);
                 done=frames;
@@ -814,7 +912,7 @@ bool ug_storage_render(int16_t *out,uint32_t frames) {
         }
     } else {
         if(foreground.active && !foreground.paused && foreground.kind==2)
-            for(unsigned c=0;c<4;c++) if(music_lane(c)==&hidden_music[c]) ug_lane_advance_silent(&hidden_music[c],frames);
+            advance_hidden(frames);
         if(foreground.active && foreground.kind==4 && !foreground.paused) {
             uint8_t previous_error=stream.error;
             bool ended=ug_stream_render(&stream,mixer.mem,stream_samples,frames);
@@ -837,15 +935,15 @@ bool ug_storage_render(int16_t *out,uint32_t frames) {
     for(unsigned which=0;which<=UG_LANES+4;which++) {
         ug_instance *in=!which?&foreground:which<=UG_LANES?&fx[which-1]:&legacy_fx[which-UG_LANES-1];
         if(in->kind==4)continue;
-        if(!in->active || (in->paused && !(in->kind==2 && mod_player.error))) continue;
+        if(!in->active || (in->paused && !(in->kind==2 && tracker.state.error))) continue;
         unsigned first=in->voice[0];
         bool fault=false;
         for(unsigned c=0;c<in->channels;c++)
             if((in->kind==2?music_lane(c):&mixer.lanes[in->voice[c]])->failed) fault=true;
-        if(in->kind==2 && mod_player.error) fault=true;
-        bool ended=in->kind==2?!mod_player.playing:!mixer.lanes[first].active;
+        if(in->kind==2 && tracker.state.error) fault=true;
+        bool ended=in->kind==2?!tracker.state.playing:!mixer.lanes[first].active;
         if(fault || ended) {
-            uint8_t error=in->kind==2 && mod_player.error==2?UG_ERR_FORMAT:UG_ERR_PSRAM;
+            uint8_t error=in->kind==2 && tracker.state.error==2?UG_ERR_FORMAT:UG_ERR_PSRAM;
             drop_instance(in);
             if(!which) foreground.state=fault?4:3;
             if(fault) { failed=true; audio_error=error; }
@@ -970,10 +1068,16 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
             }
             else if(!rc) return false;
             else { o->mod_valid=1;o->mod_channels=seal_mod_info.channels; }
+        } else if(!*status && o->kind==5) {
+            if(!sealing.parser_started) { s3m_seal_init(o);sealing.parser_started=true; }
+            int rc=s3m_seal_step(o);
+            if(!rc)return false;
+            if(rc<0) { o->state=2;*status=(uint8_t)-rc; }
         }
         ug_seal_elapsed_us=time_us_32()-sealing.started;
         uint32_t actual=sealing.crc^UINT32_MAX;
         if(!*status && sealing.verify && actual!=sealing.expected) { o->state=2; *status=UG_ERR_CRC; }
+        if(*status)ug_store_aux(&store,o->handle,0);
         if(!*status) { o->crc=actual; o->state=1; ug_put32(r,actual); *len=4; }
         ug_store_pin(&store,o->handle,false); __atomic_store_n(&sealing.active,false,__ATOMIC_RELEASE); return true;
     }
@@ -1036,7 +1140,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
 #ifdef UG_ADLIB
         ug_put32(r,ug_get32(r)|UG_ADLIB_OPL2_FEATURE);
 #endif
-        if(mixer_ready) ug_put32(r+4,127u); /* RAW8/16, WAV, MOD4, 8CHN, FLT8, MOD 1..32 */
+        if(mixer_ready) ug_put32(r+4,255u); /* RAW8/16, WAV, MOD4, 8CHN, FLT8, MOD 1..32 */
         ug_put32(r+8,48000); put16(r+12,1024); put16(r+14,128); put16(r+16,128);
         put16(r+20,UG_LANES);put16(r+22,UG_LANES);put16(r+24,mixer_ready?UG_LANES:0);
         r[26]=1;r[27]=1;
@@ -1200,7 +1304,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         if(q[2]>1 || (!q[2] && ug_get32(q+3))) *status=UG_ERR_BAD_ARGUMENT;
         else if(!o) *status=UG_ERR_HANDLE;
         else if(legacy_pending(o->handle)) *status=UG_ERR_STATE;
-        else if(o->kind>3) *status=UG_ERR_BAD_OPCODE;
+        else if(o->kind>5 || o->kind==4) *status=UG_ERR_BAD_OPCODE;
         else if(o->state || o->uploaded!=o->size) *status=UG_ERR_STATE;
         else if(o->kind==1 && !o->pcm_valid) *status=UG_ERR_STATE;
         else if(o->pins) *status=UG_ERR_PINNED;
@@ -1232,12 +1336,21 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
            (get16(q) && get16(q)!=pending_foreground.id)) *status=UG_ERR_STATE;
         else if(q[4]>=64 || get16(q+2)>=pending_foreground.mod_song_length) *status=UG_ERR_RANGE;
         else if(event_count==UG_AUDIO_EVENTS) *status=UG_ERR_BUSY;
-        else queue_event(op,q,5,NULL);
+        else {
+            /* The S3M terminator occupies an order-table slot but is not a
+             * seek target. Read the immutable source, including for a queued
+             * PLAY, so a rejected PLAY cannot change this validation state. */
+            uint8_t order=0;
+            ug_object_t *o=ug_store_find(&store,pending_foreground.handle);
+            if(pending_foreground.s3m && (!o || mod_object_read(o,96u+get16(q+2),&order,1))) *status=UG_ERR_PSRAM;
+            else if(pending_foreground.s3m && order==255) *status=UG_ERR_RANGE;
+            else queue_event(op,q,5,NULL);
+        }
         return true;
     }
     if(op==UG_OP_SET_TEMPO) {
         project_playback();
-        if(q[0]<1 || q[0]>31 || q[1]<32) *status=UG_ERR_BAD_ARGUMENT;
+        if(q[0]<1 || (q[0]>31 && !pending_foreground.s3m) || q[1]<32) *status=UG_ERR_BAD_ARGUMENT;
         else if(!pending_foreground.active || pending_foreground.kind!=2) *status=UG_ERR_STATE;
         else if(event_count==UG_AUDIO_EVENTS) *status=UG_ERR_BUSY;
         else queue_event(op,q,2,NULL);
@@ -1245,10 +1358,10 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
     }
     if(op==UG_OP_SET_PAN) {
         project_playback();
-        if(get16(q)>=8) *status=UG_ERR_RANGE;
+        if(get16(q)>=32) *status=UG_ERR_RANGE;
         else if(!pending_foreground.active || pending_foreground.kind!=2) *status=UG_ERR_STATE;
         else if(event_count==UG_AUDIO_EVENTS) *status=UG_ERR_BUSY;
-        else if(get16(q)>=pending_foreground.channels) *status=UG_ERR_RANGE;
+        else if(get16(q)>=pending_foreground.logical_channels) *status=UG_ERR_RANGE;
         else queue_event(op,q,3,NULL);
         return true;
     }
@@ -1335,7 +1448,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
         __atomic_store_n(&busy,1,__ATOMIC_RELEASE); return false;
     } else if(op==UG_OP_ALLOC) {
         if(memory_error) { *status=memory_error; return true; }
-        if(q[0]>3) { *status=UG_ERR_BAD_ARGUMENT;return true; }
+        if(q[0]>5 || q[0]==4) { *status=UG_ERR_BAD_ARGUMENT;return true; }
         ug_object_t *o; *status=ug_store_reserve(&store,q[0],ug_get32(q+1),&o);
         if(!*status) { put16(r,o->handle); ug_put32(r+2,o->reserved); *len=6; }
     } else if(op==UG_OP_FREE) {
@@ -1355,7 +1468,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
                 ug_put32(r+26,o->pcm.rate); ug_put32(r+30,o->pcm.frames);
                 r[34]=o->pcm.channels; r[35]=o->pcm.bits; r[36]=o->pcm.sample_format;
             }
-            if(o->kind==3 && o->mod_valid) r[37]=o->mod_channels;
+            if((o->kind==3 || o->kind==5) && o->mod_valid) r[37]=o->mod_channels;
             *len=38;
         }
     }

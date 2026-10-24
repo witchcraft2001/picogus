@@ -12,7 +12,9 @@ export function verifyTurbo(b,assembly){
  for(const e of [pio,independent]){assert.equal(e.status,'HOST_PASS / REAL_PENDING');current(e);}
  assert.equal(pio.pio0Words,32);assert.equal(pio.addressCases,524288);assert.equal(pio.configGsBytes,1280);
  assert(pio.coupledMutationRejected);assert.equal(pio.guard,'PASS');
- assert.equal(independent.cases,12288);assert.equal(independent.aborted,576);assert.deepEqual(independent.offsets,[0,5,10]);
+ // R3 also owns the 32-port OPL block: 64 ports with GS off, 96 with
+ // GS on, across three relocation offsets and both feedback levels.
+ assert.equal(independent.cases,12288);assert.equal(independent.aborted,3*2*(64+96));assert.deepEqual(independent.offsets,[0,5,10]);
  // Paired checks execute and compare both fixed build directories, then the
  // dependency manifests bind every linked object and UF2 payload to sources.
  const shared=['host/compat-linked.json','host/catalog-fast-linked.json','host/gs-fast-linked.json'].map(p=>join(repoRoot,'build',p));
@@ -21,8 +23,8 @@ export function verifyTurbo(b,assembly){
  for(const row of linked.builds){assert.equal(row.firmware,'pg-ultrags-adlib-r3 v4.1.1');assert(row.catalogFast&&row.gsStatusFast);assert.deepEqual(row.pioWords,{iow_program_instructions:10,ug_compat_ior_program_instructions:22});}
  assert(linked.builds.some(r=>resolve(r.build)===resolve(b,'multifw-release')));
  assert(catalog.builds.every(r=>r.cases===37891&&r.noCallsBeforeFIFO&&r.completionAccountingAfterFIFO&&r.fifoBeforeIndex));
- for(const r of catalog.builds)assert.deepEqual(r.instructionsThroughFIFOStore,[13,17]);
- assert(gs.results.every(r=>r.beforeSubmit===15&&r.accounted));
+ for(const r of catalog.builds)assert.deepEqual(r.instructionsThroughFIFOStore,[14,18]);
+ assert(gs.results.every(r=>r.beforeSubmit===13&&r.accounted));
  const cfgdir=join(b,'host/gs-turbo/config'),profile=json(join(cfgdir,'config-exchange-profile.json'));
  assert.equal(profile.status,'HOST_PASS / REAL_PENDING');assert(profile.compat&&profile.fast&&profile.gsFast&&!profile.turbo);
  assert.equal(profile.fastOrderedBytes,148);assert.equal(profile.fastMutationsRejected,2);

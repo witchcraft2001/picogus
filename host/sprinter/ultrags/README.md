@@ -1,3 +1,5 @@
+S3M PCM is available through native PLAY_MOD and GS30/31. `.S3M` and `/TYPE:S3M` are accepted; CAPS.formats bit7, kind5. Mono uses one voice per enabled channel; stereo can require two. See [S3M tester notes](docs/S3M-README.md) and [programmer guide §6.5](docs/ULTRAGS-PROGRAMMING.md). HOST_PASS / REAL_PENDING; previous hardware failures remain open.
+
 AdLib OPL2 is always available in UltraGS at `0388h/0389h`; `CAPS.features` bit13. `UGOPL TEST` and `UGOPL MIX /FX:MONO|STEREO` exercise FM alongside MOD8/FX. Physical acceptance is REAL_PENDING; [AdLib tester notes](docs/ADLIB-README.md). S8c REAL_FAIL remains open.
 
 DOPE audio fix: MOD5..8/9..16/17..32 now use /2,/4,/8 headroom before pan; full DOPE has0 digital clips. Previous owner grating report is REAL_FAIL; corrected firmware awaits physical retest.
@@ -177,3 +179,15 @@ GS-тест проверяет также отказ RESET_STORE=BUSY внутр
 
 Исходные GS/NeoGS-руководства и их хеши сохранены в
 `build/host/docs/sources/`; для повторной сборки PDF сеть не нужна.
+
+S3M checks: `make -f Makefile.ultrags s3m-check`, repeat with
+`REPRODUCIBILITY=1`, then `s3m-package`. Use the same SDK/compiler and private
+MOD/PROPLAY regression inputs as `adlib-check`; set UG_AUDIO_PYTHON to Python
+with Unicorn 2.1.4. Host S3M reference requires libxmp 4.7.0 (Homebrew include/lib
+paths in s3m-host.py). Reports and original fixtures: build/host/s3m/.
+`UG_S3M_BASELINE` defaults to `build/archive/pre-s3m/CURRENT.UF2`; the six
+other firmware modes must match that archived delivery (apart from the SDK
+build date). The inherited GS105 tests require `UG_PROPLAY_MOD=atdt.mod`
+and `UG_F00_MOD=bruno_-_bst.mod`, with their original contents.
+`docs-examples` builds S3M0/S3M1 and GSS3M0/GSS3M1; these standalone examples
+require an empty store, monitor snapshots and clean up their own object.

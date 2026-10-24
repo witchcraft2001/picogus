@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Execute the linked R17 catalogue span and post-reply completion accounting; no electrical timing claim."""
+"""Execute the linked R3 catalogue span and post-reply completion accounting; no electrical timing claim."""
 import argparse
 import hashlib
 import json
@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 import unicorn
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ
-from unicorn.arm_const import UC_ARM_REG_PC, UC_ARM_REG_R11, UC_ARM_REG_SP, UC_CPU_ARM_CORTEX_M0
+from unicorn.arm_const import UC_ARM_REG_PC, UC_ARM_REG_SP, UC_CPU_ARM_CORTEX_M0
 
 p = argparse.ArgumentParser()
 p.add_argument('build_a', type=Path)
@@ -42,8 +42,8 @@ for build in (a.build_a, a.build_b):
         kind, off, va, pa, n, _, _, _ = struct.unpack_from('<8I', data, phoff + i * stride)
         if kind == 1 and n:
             uc.mem_write(va, data[off:off+n])
-    assert bytes(uc.mem_read(start+2,2))==b'\x5a\x46', 'R17 entry must read cfg through r11'
-    assert bytes(uc.mem_read(start+34,2))==b'\x04\x98', 'completion pointer must be loaded from sp+16 after reply'
+    assert bytes(uc.mem_read(start+2,2))==b'\x03\x99', 'R3 entry must read cfg from sp+12'
+    assert bytes(uc.mem_read(start+36,2))==b'\x05\x98', 'completion pointer must be loaded from sp+20 after reply'
     completion=syms['ug_compat_completions'];atomic=syms['__atomic_fetch_add_4'];stack=0x2004f000
     state = {}
 
@@ -89,10 +89,10 @@ for build in (a.build_a, a.build_b):
             if index < 148:
                 uc.mem_write(cfg + 152 + index, bytes([value]))
             uc.mem_write(cfg + 300, struct.pack('<H', index))
-            # Verified R17 register contract; execute real atomic accounting after FIFO.
+            # Verified R3 stack contract; execute real atomic accounting after FIFO.
             # Surrounding live-cycle/selector dispatch is exercised by the C fixture.
-            uc.reg_write(UC_ARM_REG_R11,cfg);uc.reg_write(UC_ARM_REG_SP,stack)
-            uc.mem_write(stack+16,struct.pack('<I',completion));uc.mem_write(completion,bytes(4))
+            uc.reg_write(UC_ARM_REG_SP,stack);uc.mem_write(stack+12,struct.pack('<I',cfg))
+            uc.mem_write(stack+20,struct.pack('<I',completion));uc.mem_write(completion,bytes(4))
             state = {'index': index, 'payload': 0xff00 | value,
                      'writes': [], 'instructions': 0,'accounted':False,'spinReads':0}
             uc.emu_start(start | 1, end, count=100)
@@ -102,8 +102,8 @@ for build in (a.build_a, a.build_b):
             assert len(state['writes']) == (2 if index < 148 else 1)
             counts.add(state['beforeSubmit'])
             cases += 1
-    # Independently counted R17 Thumb path: 17 instructions in-range, 13 at EOF (AdLib build register allocation).
-    assert cases == 37891 and counts == {13,17}, (cases,counts)
+    # Independently counted R3 Thumb path: 18 instructions in-range, 14 at EOF.
+    assert cases == 37891 and counts == {14,18}, (cases,counts)
     results.append({'build': str(build), 'cases': cases, 'instructionsThroughFIFOStore': sorted(counts),
                     'noCallsBeforeFIFO': True,'completionAccountingAfterFIFO':True, 'fifoBeforeIndex': True})
     for path in (elf, fw / 'CMakeCache.txt'):
@@ -113,7 +113,7 @@ out.write_text(json.dumps({
     'status': 'LINKED_FAST_CATALOG_PASS / REAL_PENDING', 'builds': results,
     'unicorn': unicorn.__version__, 'inputs': inputs,
     'limits': ['Span begins after IO_WAIT; does not bound full dispatch latency.',
-               'Entry r11=ug_cfg and stack completion pointer are supplied; full main initialization is not emulated.',
+               'Entry sp+12=ug_cfg and sp+20=completion pointer are supplied; full main initialization is not emulated.',
                'No physical timing, SRAM contention, WAIT acceptance or host sampling measurement.']
 }, indent=2) + '\n')
 print('Both linked spans: 37891 cases each; FIFO before accounting/index, no pre-reply calls; instructions:', sorted(counts))

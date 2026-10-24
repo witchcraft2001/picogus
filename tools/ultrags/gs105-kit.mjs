@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {sha256} from './build-evidence.mjs';
 import {makeZip,makeImg} from './disk-formats.mjs';
 import {readZip,readFat12} from './verify-package.mjs';
-export function buildKit(root,b,assembly,{turbo=false,s8b=false,s8c=false,adlib=false}={}){
+export function buildKit(root,b,assembly,{turbo=false,s8b=false,s8c=false,adlib=false,s3m=false}={}){
  const json=p=>JSON.parse(readFileSync(p)),payload=new Map();
  function add(name,path,expected){
   assert(/^[A-Z0-9_-]{1,8}\.[A-Z0-9]{1,3}$/.test(name),'invalid kit name '+name);assert(!payload.has(name),'duplicate kit entry '+name);
@@ -15,7 +15,7 @@ export function buildKit(root,b,assembly,{turbo=false,s8b=false,s8c=false,adlib=
  }
  for(const f of assembly.files.filter(f=>!f.name.startsWith('ST-')))add(f.name,join(b,'ultrags/dss',f.name),f.sha256);
  const fast=json(join(b,'ultrags/dss/fast-asm.json'));add('UGPF.EXE',join(b,'ultrags/dss/UGPF.EXE'),fast.sha256);
- for(const [name,source]of [['TESTER',adlib?'ADLIB':s8c?'S8C':s8b?'S8B':turbo?'GS-TURBO':'GS105'],['GS105','GS105'],['S8A','S8A'],['S8C','S8C'],['F00','F00']])add(name+'.TXT',join(root,'host/sprinter/ultrags/docs',source+'-README.md'));
+ for(const [name,source]of [['TESTER',s3m?'S3M':adlib?'ADLIB':s8c?'S8C':s8b?'S8B':turbo?'GS-TURBO':'GS105'],['GS105','GS105'],['S8A','S8A'],['S8C','S8C'],['F00','F00']])add(name+'.TXT',join(root,'host/sprinter/ultrags/docs',source+'-README.md'));
  if(adlib)add('ADLIB.TXT',join(root,'host/sprinter/ultrags/docs/ADLIB-README.md'));
  if(s8b){
   add('S8B.TXT',join(root,'host/sprinter/ultrags/docs/S8B-README.md'));
@@ -36,9 +36,17 @@ export function buildKit(root,b,assembly,{turbo=false,s8b=false,s8c=false,adlib=
  add('CLIPS.TXT',join(clipsDir,'original-clips.json'));
  const d4=join(root,'build/gs-clock-d4-delivery'),old=json(join(d4,'D4.json'));
  for(const name of ['UGGS0.EXE','UGGS1.EXE','UGGSC0.EXE','UGGSC1.EXE'])add(name,join(d4,name),old.files[name].sha256);
+ if(s3m){
+  add('S3M.TXT',join(root,'host/sprinter/ultrags/docs/S3M-README.md'));
+  const proof=json(join(b,'host/s3m/host-evidence.json'));
+  for(const n of ['DEMO','MOU8','STU16','M32','S16'])add(n+'.S3M',join(b,'host/s3m/fixtures',n+'.S3M'),proof.inputs[join(b,'host/s3m/fixtures',n+'.S3M')]);
+  const examples=json(join(b,'host/docs/examples/manifest.json'));
+  for(const n of ['S3M0','S3M1','GSS3M0','GSS3M1'])add(n+'.EXE',join(b,'host/docs/examples',n+'.EXE'),examples[n+'.EXE']);
+  add('ULTRAGS.PDF',join(root,'host/sprinter/ultrags/docs/ULTRAGS-PROGRAMMING.pdf'));
+ }
  const sorted=()=>[...payload].sort(([a],[b])=>a.localeCompare(b));
  payload.set('HASHES.TXT',Buffer.from(sorted().map(([n,v])=>sha256(v)+'  '+n).join('\r\n')+'\r\n'));
- const entries=sorted(),zipOnly=new Set(clips.clips.map(c=>c.name)),imgEntries=entries.filter(([n])=>!zipOnly.has(n));
+ const entries=sorted(),zipOnly=new Set([...clips.clips.map(c=>c.name),...(s3m?['ULTRAGS.PDF']:[])]),imgEntries=entries.filter(([n])=>!zipOnly.has(n));
  const zip=makeZip(entries),img=makeImg(imgEntries);assert.deepEqual([...readZip(zip)],entries);assert.deepEqual([...readFat12(img)],imgEntries);
  return {entries,zip,img};
 }

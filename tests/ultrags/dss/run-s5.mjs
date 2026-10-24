@@ -20,7 +20,7 @@ for(const f of reference) {
   const [status,r]=model.command(f.op,Buffer.from(f.q,'hex'));
   const expected=Buffer.from(f.r,'hex');
   // The legacy model covers resident transfers; streaming has a production-C runner.
-  if(f.op===1 && !status)expected.writeUInt32LE(expected.readUInt32LE()&~2048);
+  if(f.op===1 && !status){expected.writeUInt32LE(expected.readUInt32LE()&~2048);expected.writeUInt32LE(expected.readUInt32LE(4)&~128,4);}
   if(status!==f.status||!r.equals(expected))throw Error('S5 C/model mismatch op '+f.op);
   if([32,34].includes(f.op)&&!status) {model.transfer.granted=true;model.transfer.last=model.now;}
  }

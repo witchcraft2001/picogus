@@ -405,9 +405,6 @@ PARSE:
     IFDEF APP_LOAD
     cp 1
     jp nz,.bad
-    ld a,(BLOBTYPE)
-    or a
-    jp z,.bad
     IFDEF APP_PCM
     jp PCM_VALIDATE
     ENDIF
@@ -1413,7 +1410,7 @@ turbo_help_option: DB "/?",0
     ELSE
 help_text: DB "UGMEM INFO|LIST|TEST QUICK|FULL|RESET WARM|COLD|FREE handle",13,10
     DB "ROUNDTRIP bytes /SLOW /VERIFY /SLOT:0|1 /BASE:hex /QUIET /?",13,10
-    DB "UGLOAD file /TYPE:MOD|RAW|WAV|BLOB /RATE:N /BITS:8|16 /CH:1|2 /FMT:U8|S8|S16LE",13,10
+    DB "UGLOAD file /TYPE:MOD|S3M|RAW|WAV|BLOB /RATE:N /BITS:8|16 /CH:1|2 /FMT:U8|S8|S16LE",13,10
     DB "UGLOAD file /TYPE:BLOB [/CRC:hhhhhhhh] | UGDUMP handle file [/OFFSET:N /LENGTH:N /OVERWRITE]",13,10,0
     ENDIF
     ENDIF

@@ -158,7 +158,7 @@ int main(void) {
     settings.Volume.mainVol=100; settings.UltraGS.basePort=0x2a0;settings.UltraGS.bulkAlias=0xffff;
     ug_config_init(&ug_cfg,&settings,8,NULL,0,0,0); ug_minimal_init();
     ug_storage_bind(&ps,17);int16_t pre[4]={123,456,789,12};assert(!ug_storage_render(pre,2));for(unsigned j=0;j<4;j++) assert(!pre[j]);ug_storage_publish(8u<<20,0,0);
-    uint8_t info[1]={0},len; assert(call(UG_OP_CAPS,info,0,&len)==0 && get16(response+24)==UG_LANES && ug_get32(response+4)==127);
+    uint8_t info[1]={0},len; assert(call(UG_OP_CAPS,info,0,&len)==0 && get16(response+24)==UG_LANES && ug_get32(response+4)==255);
     assert(ug_get32(response)&1u); /* Complete GS dispatcher shares the native renderer. */
 
     const char *vp=getenv("UG_S6_VECTORS");if(vp) shared_vectors(vp);
@@ -299,7 +299,7 @@ int main(void) {
     assert(!call(UG_OP_CAPS,NULL,0,&len) && ug_get32(response+4)==0 && get16(response+24)==0);
     ug_storage_bind(&ps,19);ug_storage_publish(0,UG_ERR_PSRAM,0);
     uint8_t quick=0;assert(!call(UG_OP_MEM_TEST,&quick,1,&len));
-    assert(!call(UG_OP_CAPS,NULL,0,&len) && ug_get32(response+4)==127 && get16(response+24)==UG_LANES);
+    assert(!call(UG_OP_CAPS,NULL,0,&len) && ug_get32(response+4)==255 && get16(response+24)==UG_LANES);
     puts("S6 storage/playback: RAW config, WAV SEAL/read metadata, PCM controls/repeats/mix/queue, stereo/paused FX, ID wrap, reset/fault/pins PASS");
     return 0;
 }

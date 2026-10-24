@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Build guide entry units and original, deterministic audio fixtures."""
-import hashlib, json, subprocess, wave
+import argparse, hashlib, json, subprocess, wave
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
-out = ROOT/'build/host/docs/examples'
+p=argparse.ArgumentParser();p.add_argument('--build',type=Path,default=ROOT/'build');a=p.parse_args();build=a.build.resolve()
+out = build/'host/docs/examples'
 out.mkdir(parents=True, exist_ok=True)
 inc = [ROOT/'host/sprinter/ultrags'/x for x in ('apps','include','lib')]
-inc.append(ROOT/'build/ultrags/gen')
+inc.append(build/'ultrags/gen')
 # Remove only obsolete long DOS names emitted by the first guide draft.
 for n in ('DISCOVER0','DISCOVER1'):
     for ext in ('.EXE','.lst'):(out/(n+ext)).unlink(missing_ok=True)
 files = {}
 for src in sorted((ROOT/'host/sprinter/ultrags/examples').glob('*.asm')):
-    for slot in ([0,1] if src.stem in ('discover','firstpcm') else [None]):
+    for slot in ([0,1] if src.stem in ('discover','firstpcm','s3m','gss3m') else [None]):
         name = ({'discover':'DISCOV','firstpcm':'PCM'}.get(src.stem,src.stem.upper()))+(str(slot) if slot is not None else '')
         target = out/(name+'.EXE')
         subprocess.run(['sjasmplus', *['--inc='+str(d) for d in inc],

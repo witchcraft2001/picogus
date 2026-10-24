@@ -67,13 +67,18 @@ class Machine:
             self.ret()
     def sio_write(self,uc,access,address,size,value,_):
         i=(address-0xd0000060)//4;self.sio[i]=value&0xffffffff
-        if i in (1,3):
-            a,b=self.sio[i-1],self.sio[i]
-            signed=i==3
+        if i<4:
+            # RP2040 starts on EITHER operand write. SDK's 64/32 reciprocal
+            # path writes the divisor first, then DIVIDEND. Signed/unsigned
+            # operand addresses alias the same two hardware registers.
+            self.sio[i^2]=value&0xffffffff
+            uc.mem_write(0xd0000060,struct.pack('<4I',*self.sio[:4]))
+            a,b=self.sio[0],self.sio[1]
+            signed=i>=2
             if signed:a=a if a<0x80000000 else a-0x100000000;b=b if b<0x80000000 else b-0x100000000
-            assert b
-            q=abs(a)//abs(b)
-            if (a<0)!=(b<0):q=-q
+            q=abs(a)//abs(b) if b else 0xffffffff
+            if b and (a<0)!=(b<0):q=-q
+            elif not b and signed:q=1 if a<0 else -1
             self.sio[4]=q&0xffffffff;self.sio[5]=(a-q*b)&0xffffffff;self.sio[6]=3
             uc.mem_write(0xd0000070,struct.pack('<III',*self.sio[4:7]))
     def sio_read(self,uc,access,address,size,value,_):
@@ -108,8 +113,8 @@ class Machine:
                               16+i%32,128 if stereo else i*13%256,1,(1+(i&1)) if stereo else 0,(i&1) if stereo else 0))
         for lane,offset,length,step,gain,pan,fmt,mode,side in lanes:
             assert self.call('ug_lane_set',[self.MIX,lane,offset,length,0,length,step&0xffffffff,step>>32,gain,pan,fmt,mode,1,side])==0
-            # AAPCS rounds ug_lane's 580 data bytes to its u64 alignment.
-            lane_address=self.MIX+16+lane*584
+            # AAPCS rounds ug_lane's 585 data bytes (including the independent stride) to its u64 alignment.
+            lane_address=self.MIX+16+lane*592
             assert struct.unpack('<II',self.uc.mem_read(lane_address,8))==(offset,length),'target lane ABI changed'
             pcm=lane>=4 if profile=='mod4-28-fx' else profile in ('32-mono-48000','32-mono-44100','16-stereo-48000') or lane>=8
             if pcm:self.call('ug_lane_pcm_rate',[lane_address,rate if profile in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx') else 44100,48000,0])
@@ -119,7 +124,7 @@ class Machine:
                     partner=next((x[0] for x in lanes if x[1]==offset and x[7]==1),None)
                     if partner is not None:assert self.call('ug_lane_share_cache',[self.MIX,lane,partner])==0
         # The lane layout is a target ABI contract checked against init data:
-        # ug_mem_if=16 bytes, ug_lane=584 bytes in the linked RP2040 build.
+        # ug_mem_if=16 bytes, ug_lane=592 bytes in the linked RP2040 build.
         assert struct.unpack('<I',self.uc.mem_read(self.MIX,4))[0]==self.READ|1
         self.counting=True;output=bytearray()
         for _ in range(8):

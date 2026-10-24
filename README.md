@@ -7,6 +7,8 @@
 UltraGS для Sprinter: [руководство программиста](host/sprinter/ultrags/docs/ULTRAGS-PROGRAMMING.md),
 [PDF для печати](host/sprinter/ultrags/docs/ULTRAGS-PROGRAMMING.pdf),
 [утилиты и сборка](host/sprinter/ultrags/README.md).
+S3M PCM через native API и GS: mono/stereo 8/16 bit, эффекты ST3, общий пул32 голосов.
+[Проверка S3M на карте](host/sprinter/ultrags/docs/S3M-README.md); HOST_PASS / REAL_PENDING.
 
 ISA sound card and CD-ROM drive emulation on the Raspberry Pi Pico's RP2040 microcontroller. PicoGUS can emulate:
 

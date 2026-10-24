@@ -248,7 +248,11 @@ AUDIO_PARSE:
     ENDIF
     ld a,(BLOBTYPE)
     or a
+    jr z,.type_option_ok
+    ld a,(PCM_KIND)
+    cp 5
     jp nz,.bad
+.type_option_ok:
     ld a,(ARGC)
     or a
     jp z,.bad
@@ -374,6 +378,9 @@ AUDIO_PARSE:
     cp 1
     jp nz,.bad
 .extension:
+    ld a,(BLOBTYPE)
+    or a
+    jr nz,.kind_selected
     ld hl,(ARGS)
     ld de,0
 .scan:
@@ -397,6 +404,7 @@ AUDIO_PARSE:
     call LOOKUP
     ret c
     ld (PCM_KIND),a
+.kind_selected:
     call PCM_VALIDATE
     ret c
 .play_options:
@@ -425,12 +433,17 @@ AUDIO_PARSE:
     or b
     jp nz,.bad
     ld a,(PCM_KIND)
+    cp 5
+    jr z,.gs_validated
     cp 3
     jp nz,.bad
 .gs_validated:
     ld a,(PCM_KIND)
+    cp 5
+    jr z,.tracker_options
     cp 3
     jr nz,.pcm_options
+.tracker_options:
     ld a,(AFX)
     or a
     jp nz,.bad
@@ -521,6 +534,9 @@ AUDIO_RUN:
     and 1
     jp z,AUDIO_UNSUPPORTED
 .precheck:
+    ld a,(PCM_KIND)
+    cp 5
+    call z,AUDIO_S3M_CAPS
     ld a,(GSFLAG)
     or a
     jp nz,GS_PLAY_FILE
@@ -556,6 +572,8 @@ AUDIO_RUN:
     jp nz,PCM_FORMAT_ERROR
     ld a,(RESP+2)
     ld (AKIND),a
+    cp 5
+    jr z,.s3m_caps
     cp 3
     jr z,.mod_caps
     ld a,(AF00)
@@ -581,8 +599,24 @@ AUDIO_RUN:
     ld a,(RESP+34)
     ld (ACHANNELS),a
     jr .caps_done
+.s3m_caps:
+    call AUDIO_S3M_CAPS
+    ld a,(RESP+37)
+    ld (ACHANNELS),a
+    ld b,128
+    jr .tracker_caps
 .mod_caps:
     call AUDIO_MOD_POLICY_CAPS
+    jr .mod_options
+.tracker_caps:
+    ld a,(AFX)
+    or a
+    jp nz,AUDIO_UNSUPPORTED
+    ld a,(AOPTS)
+    or a
+    jp nz,AUDIO_UNSUPPORTED
+    jr .mod_format
+.mod_options:
     ld a,(AFX)
     or a
     jp nz,AUDIO_UNSUPPORTED
@@ -663,6 +697,8 @@ AUDIO_RUN:
     ld (REQ),hl
     ; RESP is reused by replacement/FX checks; retain the validated kind.
     ld a,(AKIND)
+    cp 5
+    jr z,.play_mod
     cp 3
     jr z,.play_mod
     ld a,(AFX)
@@ -713,6 +749,10 @@ AUDIO_RUN:
     and 2
     rrca
     ld b,a
+    ld a,(AKIND)
+    cp 5
+    ld a,0
+    jr z,.policy_selected
     ld a,(AF00)
     or a
     jr nz,.policy_selected
@@ -1620,6 +1660,14 @@ AUDIO_UNSUPPORTED:
     ld (REASON),hl
     jp PROTOCOL
     IFDEF APP_PLAY
+AUDIO_S3M_CAPS:
+    ld a,(AF00)
+    or a
+    jp nz,SYNTAX
+    ld a,(ACAPS+4)
+    and 128
+    jp z,AUDIO_UNSUPPORTED
+    ret
 AUDIO_MOD_POLICY_CAPS:
     ld a,(ACAPS+1)
     and UG_MOD_F00_POLICY_FEATURE/256
@@ -1642,7 +1690,7 @@ AUDIO_ERROR:
 stream_word: DB "STREAM",0
     INCLUDE "ugstream.asm"
 audio_commands: DB "STREAM",0,11,"HANDLE",0,1,"STOP",0,2,"PAUSE",0,3,"RESUME",0,4,"FX",0,5,"FXHANDLE",0,6,"FXSTOP",0,7,"FXPAUSE",0,8,"FXRESUME",0,9,0
-audio_extensions: DB "RAW",0,1,"WAV",0,2,"MOD",0,3,0
+audio_extensions: DB "RAW",0,1,"WAV",0,2,"MOD",0,3,"S3M",0,5,0
 audio_options: DB "/WAIT",0,1,"/LOOP",0,2,"/REPLACE",0,4,"/STEAL",0,8,0
 audio_f00_options: DB "/F00:IGNORE",0,UG_MOD_IGNORE_F00,"/F00:PAUSE",0,UG_MOD_PAUSE_F00,0
 audio_f00_ignore_text: DB "MOD F00=IGNORE",0

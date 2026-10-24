@@ -42,6 +42,7 @@ typedef struct {
 typedef enum {
     UG_FMT_S8 = 0,    /* 1 byte/sample, signed */
     UG_FMT_S16LE = 1, /* 2 bytes/sample, signed little-endian */
+    UG_FMT_U16LE = 3, /* internal planar S3M unsigned 16-bit */
     UG_FMT_U8 = 2     /* 1 byte/sample, unsigned PCM centered at 128 */
 } ug_fmt;
 
@@ -69,6 +70,7 @@ typedef struct {
     uint8_t  active;
     uint8_t  ended;         /* non-looped lane reached EOF */
     uint8_t  failed;        /* backend failure: silence until next PLAY */
+    uint8_t  stride;        /* bytes between samples, independent of pan mode */
     uint8_t  ch_off;        /* interleaved stereo channel (0=L,1=R); mono=0 */
     uint8_t  cache_victim;    /* next line to evict (0/1 round robin) */
     uint16_t cache_peer;     /* FFFF=own cache; stereo right may share left */

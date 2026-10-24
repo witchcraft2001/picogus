@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 COMMON = ['tests/ultrags/unit/sdk_mock/sdk_mock.c', 'sw/multifw/ug_catalog.c',
           *['sw/ultrags/'+name+'.c' for name in ('ug_config', 'ug_minimal', 'ug_storage',
-            'ug_store', 'ug_memory', 'ug_psram', 'ug_hwmap', 'ug_pcm', 'ug_stream', 'ug_render', 'ug_mod')]]
+            'ug_store', 'ug_memory', 'ug_psram', 'ug_hwmap', 'ug_pcm', 'ug_stream', 'ug_render', 'ug_mod', 'ug_s3m', 'ug_tracker')]]
 PROGRAMS = {'s6-voices': ['tests/ultrags/unit/test_shared_voices.c', *COMMON],
             's6-voices64': ['tests/ultrags/unit/test_shared_voices.c', *COMMON],
             's6-legacy': ['tests/ultrags/unit/test_legacy.c', *COMMON],

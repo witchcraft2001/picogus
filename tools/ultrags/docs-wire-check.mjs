@@ -27,7 +27,7 @@ for(const name of ['INFO','CAPS','MEM_INFO','STATS','LEGACY_INFO','SNAPSHOT']){
   offset+=length(f);
  }
  assert.equal(offset,r.length);results.push([name,'response layout/constants']);
- if(name==='CAPS'){assert.equal(r.readUInt32LE(0)&16,0);assert.equal(r.readUInt32LE(4),127);assert.equal(r.readUInt16LE(20),32);}
+ if(name==='CAPS'){assert.equal(r.readUInt32LE(0)&16,0);assert.equal(r.readUInt32LE(4),255);assert.equal(r.readUInt16LE(20),32);}
 }
 writeFileSync('build/host/docs/wire-check.json',JSON.stringify({scope:'production C dispatcher',knownSchemaDifference:'CAPS.playlist_entries=0, schema const32',results},null,2)+'\n');
 console.log('Guide wire check PASS',results.length);

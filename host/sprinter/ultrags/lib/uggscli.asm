@@ -398,11 +398,11 @@ GS_CALL_NO_PRE:
     ENDIF
 gs_option: DB "/GS",0
     IFDEF APP_PLAY
-gs_replace_warning: DB "WARNING GS 30 frees all legacy MOD/FX assets",13,10,0
+gs_replace_warning: DB "WARNING GS 30 frees all legacy tracker/FX assets",13,10,0
 gs_busy_text: DB "LEGACY_ASSETS_OR_LOAD_BUSY_USE_REPLACE",0
 gs_unknown_text: DB "GS_D2_OR_PLAY_RESULT_UNKNOWN_NOT_RETRIED",0
 gs_changed_text: DB "GS_MODULE_CHANGED_NOT_STARTED",0
-gs_play_text: DB "GS PLAY repeat; F00 inherited from 6A; handle=0x",0
+gs_play_text: DB "GS PLAY repeat; MOD F00 follows 6A; handle=0x",0
 gs_crc_text: DB " crc=0x",0
     ENDIF
     IFDEF APP_MON

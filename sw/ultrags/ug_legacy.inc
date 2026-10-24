@@ -23,7 +23,7 @@ static struct {
     uint8_t selected,last_fx,pending_id,kind,sign,stream_error;
     uint8_t post_op,post[3],post_used,post_need;
     uint8_t reply[4],reply_used,reply_size;
-    bool loading,closing;
+    bool loading,closing,s3m;
     uint16_t buffered;
     uint32_t crc,cursor;
     uint8_t buffer[256];
@@ -38,7 +38,7 @@ bool ug_legacy_busy(void) { return __atomic_load_n(&legacy_busy,__ATOMIC_ACQUIRE
 bool ug_legacy_loading(void) { return (__atomic_load_n(&legacy_busy,__ATOMIC_ACQUIRE)&2u)!=0; }
 void ug_legacy_reset(bool cold) {
     memset(&legacy,0,sizeof(legacy));memset(legacy_samples,0,sizeof(legacy_samples));legacy.next_fx=1;
-    legacy_automatic=true;legacy_ticks=0;mod_player.dirty_note=mod_player.dirty_volume=15;
+    legacy_automatic=true;legacy_ticks=0;tracker.state.dirty_note=tracker.state.dirty_volume=15;
     if(cold) { legacy_f00=0;legacy_relooper=0; }
     legacy_publish();
 }
@@ -119,7 +119,7 @@ static bool legacy_close(uint8_t *out,uint8_t *error) {
         if(o && o->state==2) legacy.stream_error=UG_ERR_PSRAM;
         if(legacy.stream_error) legacy.buffered=0;
         else { uint8_t e=legacy_flush();if(e && !legacy.stream_error) legacy.stream_error=e; }
-        legacy.closing=true;legacy.cursor=0;legacy.crc=UINT32_MAX;
+        legacy.closing=true;legacy.s3m=false;legacy.cursor=0;legacy.crc=UINT32_MAX;
         ug_mod_parser_init(&legacy_mod_parser,&legacy_mod_info,o?o->uploaded:0);
         if(!o || !o->uploaded) { if(!legacy.stream_error) legacy.stream_error=UG_ERR_FORMAT; }
         if(o) { o->size=o->uploaded;o->reserved=(o->size+15)&~15u; }
@@ -132,10 +132,19 @@ static bool legacy_close(uint8_t *out,uint8_t *error) {
     }
     if(o && !legacy.stream_error) {
         if(legacy.kind==3) {
-            int parsed=ug_mod_parser_step(&legacy_mod_parser,&legacy_mod_info,mod_object_read,o);
-            if(!parsed) return false;
-            if(parsed<0) legacy.stream_error=parsed==-2?UG_ERR_PSRAM:UG_ERR_FORMAT;
-            else { o->mod_valid=1;o->mod_channels=legacy_mod_info.channels; }
+            if(!legacy.s3m) {
+                int parsed=ug_mod_parser_step(&legacy_mod_parser,&legacy_mod_info,mod_object_read,o);
+                if(!parsed)return false;
+                if(parsed==-2)legacy.stream_error=UG_ERR_PSRAM;
+                else if(parsed<0) {
+                    /* A completely valid MOD wins even with an SCRM string.
+                     * The S3M parser validates the fallback, never a suffix. */
+                    legacy.s3m=true;o->kind=5;s3m_seal_init(o);return false;
+                } else { o->mod_valid=1;o->mod_channels=legacy_mod_info.channels; }
+            } else {
+                int parsed=s3m_seal_step(o);if(!parsed)return false;
+                if(parsed<0)legacy.stream_error=(uint8_t)-parsed;
+            }
         } else {
             o->pcm=(ug_pcm_info){.rate=16574,.channels=1,.bits=8,.sample_format=legacy.sign?0:1,
                 .data_offset=0,.data_length=o->size,.frames=o->size};o->pcm_valid=1;
@@ -172,8 +181,8 @@ static uint8_t legacy_play(unsigned channel,ug_legacy_sample *s,uint8_t note,uin
     if(note>95) return UG_ERR_RANGE;
     apply_audio_events();
     unsigned logical=(unsigned[]){0,3,1,2}[channel],voice;
-    bool overrides=foreground.active && foreground.kind==2 && logical<foreground.channels;
-    if(overrides) voice=foreground.voice[logical];
+    bool overrides=foreground.active && foreground.kind==2 && music_index(logical,0)<UG_LANES;
+    if(overrides) voice=foreground.voice[music_index(logical,0)];
     else if(legacy_fx[channel].active) voice=legacy_fx[channel].voice[0];
     else {
         project_playback();ug_instance candidate={.channels=1};
@@ -182,7 +191,10 @@ static uint8_t legacy_play(unsigned channel,ug_legacy_sample *s,uint8_t note,uin
     }
     uint8_t e=ug_store_pin(&store,o->handle,true);if(e) return e;
     drop_instance(&legacy_fx[channel]);
-    if(overrides) hidden_music[logical]=mixer.lanes[voice];
+    if(overrides) for(unsigned side=0;side<2;side++) {
+        unsigned index=music_index(logical,side);
+        if(index<UG_LANES) { hidden_music[logical*2+side]=mixer.lanes[foreground.voice[index]];mixer.lanes[foreground.voice[index]].active=0; }
+    }
     ug_instance in=new_instance(o,instance_id(true),volume,logical==0 || logical==3?0:255,1);
     in.legacy=1;in.legacy_fine=s->fine;in.priority=s->priority;in.voice[0]=(uint16_t)voice;
     legacy_fx[channel]=in;
@@ -292,33 +304,33 @@ bool ug_legacy_command(uint8_t cmd,bool has_pre,uint8_t pre,uint8_t *out,bool *d
     }
     case 0x48:case 0x49:legacy.post_op=cmd;legacy.post[0]=pre;legacy.post_used=1;legacy.post_need=3;break;
     case 0x60:case 0x61:case 0x62:
-        legacy.reply[0]=!foreground.active || foreground.kind!=2?0:cmd==0x60?(uint8_t)mod_player.order:cmd==0x61?mod_player.row:(uint8_t)(((mod_player.order&3)<<6)|mod_player.row);legacy.reply_size=1;break;
+        legacy.reply[0]=!foreground.active || foreground.kind!=2?0:cmd==0x60?(uint8_t)tracker.state.order:cmd==0x61?tracker.state.row:(uint8_t)(((tracker.state.order&3)<<6)|tracker.state.row);legacy.reply_size=1;break;
     case 0x63:case 0x64: {
-        uint32_t *dirty=cmd==0x63?&mod_player.dirty_note:&mod_player.dirty_volume;
+        uint32_t *dirty=cmd==0x63?&tracker.state.dirty_note:&tracker.state.dirty_volume;
         for(unsigned c=0;c<4;c++) {
-            uint8_t value=cmd==0x63?mod_player.channel[c].note:mod_player.channel[c].mix_volume;
-            if(!foreground.active || foreground.kind!=2 || c>=foreground.channels)value=cmd==0x63?127:0;
+            uint8_t value=cmd==0x63?tracker.state.channel[c].note:tracker.state.channel[c].mix_volume;
+            if(!foreground.active || foreground.kind!=2 || c>=foreground.logical_channels)value=cmd==0x63?127:0;
             legacy.reply[c]=value|((*dirty&(1u<<c))?0:128);
         }
         *dirty=0;legacy.reply_size=4;break;
     }
-    case 0x65:if(foreground.active && foreground.kind==2) { if(ug_mod_seek(&mod_player,pre,0)) e=UG_ERR_RANGE;else mod_sync_all(true); }break;
+    case 0x65:if(foreground.active && foreground.kind==2) { if(ug_tracker_seek(&tracker,pre,0)) e=UG_ERR_RANGE;else mod_sync_all(true); }break;
     case 0x66:
         if(foreground.active && foreground.kind==2) {
-            if(!pre) { if(!legacy_f00) { mod_player.paused=1;sync_mod_pause(); } }
-            else ug_mod_tempo(&mod_player,pre<32?pre:mod_player.speed,pre>=32?pre:mod_player.bpm);
+            if(!pre) { if(!tracker.s3m && !legacy_f00) { tracker.state.paused=1;sync_mod_pause(); } }
+            else ug_tracker_tempo(&tracker,pre<32?pre:tracker.state.speed,pre>=32?pre:tracker.state.bpm);
         }
         break;
-    case 0x67:case 0x68:legacy.reply[0]=cmd==0x67?mod_player.speed:mod_player.bpm;legacy.reply_size=1;break;
+    case 0x67:case 0x68:legacy.reply[0]=cmd==0x67?tracker.state.speed:tracker.state.bpm;legacy.reply_size=1;break;
     case 0x69:if(legacy_ticks==UG_AUDIO_EVENTS)e=UG_ERR_BUSY;else if(foreground.active && foreground.kind==2)++legacy_ticks;break;
     case 0x6a:
         *out=legacy_f00;legacy_f00=pre!=0;
-        if(!mod_player.f00_policy) mod_player.f00_mode=legacy_f00;
+        if(!tracker.s3m && !tracker.state.f00_policy) tracker.state.f00_mode=legacy_f00;
         break;
     case 0x6b:legacy.post_op=cmd;legacy.post[0]=has_pre?pre:0;legacy.post_used=1;legacy.post_need=2;break;
     case 0xd2:e=UG_ERR_STATE;*out=0;break;
     case 0xf5:legacy_automatic=false;break;
-    case 0xf6:legacy_automatic=true;mod_player.tempo_fraction=0;break;
+    case 0xf6:legacy_automatic=true;tracker.state.tempo_fraction=0;break;
     default:
         if((cmd>=0x80 && cmd<=0x83) || (cmd>=0x88 && cmd<=0x8b) || (cmd>=0x90 && cmd<=0x93) || (cmd>=0x98 && cmd<=0x9b)) {
             legacy.post_op=cmd;legacy.post[0]=pre;legacy.post_used=1;legacy.post_need=cmd<0x88?1:cmd<0x98?2:3;

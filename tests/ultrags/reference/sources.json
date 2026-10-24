@@ -3,6 +3,19 @@
   "purpose": "Maintained source and licensing inventory; generated build hashes are local artifacts",
   "sources": [
     {
+      "name": "Scream Tracker 3 S3M format",
+      "url": "https://bearstrong.net/tekst97/data/programmering/formater/s3m_form/",
+      "license": "Documentation reference; no source code copied",
+      "use": "Header, parapointers, packed patterns and PCM instrument layout; \u00a710.5"
+    },
+    {
+      "name": "libxmp S3M playback oracle",
+      "url": "https://github.com/libxmp/libxmp",
+      "tag": "libxmp-4.7.0",
+      "license": "MIT",
+      "use": "Independent host tick oracle and read-only S3M loader/ST3 effects reference. Version, binary/header and fixture hashes in build/host/s3m/host-evidence.json. Never linked into firmware; all delivered music is generated locally."
+    },
+    {
       "name": "libxmp FLT8 regression reference",
       "url": "https://github.com/libxmp/libxmp",
       "revision": "5d4f6aa2c7dcdf8e9cd8129fe579d45b36a302da",

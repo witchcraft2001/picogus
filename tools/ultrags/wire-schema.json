@@ -118,7 +118,8 @@
       { "value": 1, "name": "RAW_PCM" },
       { "value": 2, "name": "WAV_PCM" },
       { "value": 3, "name": "MOD" },
-      { "value": 4, "name": "PCM_STREAM" }
+      { "value": 4, "name": "PCM_STREAM" },
+      { "value": 5, "name": "S3M" }
     ],
     "states": [
       { "value": 0, "name": "UPLOADING" },

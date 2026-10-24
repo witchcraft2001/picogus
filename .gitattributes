@@ -1,0 +1,2 @@
+# ReportLab PDFs contain ASCII streams; review them as binary artifacts.
+*.pdf binary

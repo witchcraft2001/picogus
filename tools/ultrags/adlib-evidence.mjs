@@ -18,7 +18,8 @@ export function verifyAdlib(b,assembly,{readJson=p=>JSON.parse(readFileSync(p))}
  assert(reads.inputs[join(repoRoot,'tools/ultrags/adlib-read-linked.py')]);
  assert.equal(reads.oplCases,256);assert(reads.fwstringCases>=280);
  assert.equal(reads.scalarCases,512);assert.equal(reads.scalarInstructionsThroughFIFO,8);
- assert.equal(reads.oplInstructionsThroughFIFO,7);assert.equal(reads.fwstringInstructionsThroughFIFO,12);
+ // R3 uses the PIO-held OPL reply; match the executed R3 spans exactly.
+ assert.equal(reads.oplInstructionsThroughFIFO,9);assert.equal(reads.fwstringInstructionsThroughFIFO,14);
  assert(reads.noTimerOrCallsBeforeFIFO&&reads.completionAfterFIFO&&reads.streamAdvanceAfterFIFO);
  for(const p of ['tests/ultrags/unit/test_adlib.c','sw/ultrags/ug_opl.c','sw/opl/emu8950.c','tools/ultrags/adlib-host.py','tools/ultrags/adlib_inputs.py'])assert(host.inputs[join(repoRoot,p)]);
  for(const name of ['adlib-test','vectors.s32le','release.s32le'])assert.equal(host.artifacts[name],hash(join(dir,name)));

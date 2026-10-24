@@ -125,9 +125,7 @@ static int32_t ug_fetch_sample(ug_mixer *m, ug_lane *l, uint32_t idx) {
         sat_inc(&m->stats.fetch_errors); l->failed=1; m->last_error=-1;
         return 0;
     }
-    uint32_t channels = l->mode == UG_LANE_MONO ? 1u : 2u;
-    uint32_t base = l->src_offset + (idx * channels + l->ch_off) *
-                    (l->fmt == UG_FMT_S16LE ? 2u : 1u);
+    uint32_t base = l->src_offset + idx*l->stride + l->ch_off*((l->fmt&1)?2u:1u);
     uint8_t b0, b1;
     if (ug_fetch_byte(m, l, base, &b0) != 0) return 0;
     if (l->fmt == UG_FMT_S8) {
@@ -135,11 +133,12 @@ static int32_t ug_fetch_sample(ug_mixer *m, ug_lane *l, uint32_t idx) {
     }
     if (l->fmt == UG_FMT_U8) return ((int32_t)b0 - 128) * 256;
     if (ug_fetch_byte(m, l, base + 1, &b1) != 0) return 0;
-    return (int32_t)(int16_t)(b0 | ((uint16_t)b1 << 8));
+    uint16_t value=b0|((uint16_t)b1<<8);
+    return l->fmt==UG_FMT_U16LE?(int32_t)value-32768:(int16_t)value;
 }
 
 static inline int32_t cached_sample(const uint8_t *p,uint8_t fmt) {
-    if(fmt==UG_FMT_S16LE) return (int16_t)(p[0]|((uint16_t)p[1]<<8));
+    if(fmt&1) { uint16_t v=p[0]|((uint16_t)p[1]<<8);return fmt==UG_FMT_U16LE?(int32_t)v-32768:(int16_t)v; }
     return fmt==UG_FMT_S8?(int32_t)(int8_t)*p*256:((int32_t)*p-128)*256;
 }
 
@@ -149,10 +148,9 @@ static inline int32_t cached_sample(const uint8_t *p,uint8_t fmt) {
 static inline bool cached_pair(ug_mixer *m,ug_lane *l,uint32_t pos,uint32_t next,
                                bool interpolate,int32_t *s0,int32_t *s1) {
     if(pos>=l->len_samples || next>=l->len_samples || !m->mem.read) return false;
-    unsigned bytes=l->fmt==UG_FMT_S16LE?2u:1u;
-    unsigned channels=l->mode==UG_LANE_MONO?1u:2u;
-    uint32_t a=l->src_offset+(pos*channels+l->ch_off)*bytes;
-    uint32_t b=interpolate?l->src_offset+(next*channels+l->ch_off)*bytes:a;
+    unsigned bytes=(l->fmt&1)?2u:1u;
+    uint32_t a=l->src_offset+pos*l->stride+l->ch_off*bytes;
+    uint32_t b=interpolate?l->src_offset+next*l->stride+l->ch_off*bytes:a;
     if(a>=m->mem.size || bytes>m->mem.size-a || b>=m->mem.size || bytes>m->mem.size-b) return false;
     uint32_t tag=a&~(UG_CACHE_LINE-1u),ao=a-tag,bo=b-tag;
     /* b can precede tag at a loop wrap. Compare before adding bytes so a
@@ -275,12 +273,12 @@ int ug_lane_configure(ug_mixer *m,ug_lane *l,uint32_t src_offset,
                 uint64_t step_q32,uint8_t gain,uint8_t pan,
                 uint8_t fmt,uint8_t mode,uint8_t looped,uint8_t ch_off) {
     if (!m || !l || !len_samples) return -1;
-    if (fmt != UG_FMT_S8 && fmt != UG_FMT_S16LE && fmt != UG_FMT_U8) return -1;
+    if (fmt != UG_FMT_S8 && fmt != UG_FMT_S16LE && fmt != UG_FMT_U8 && fmt != UG_FMT_U16LE) return -1;
     if ((step_q32 >> 32) > UG_MAX_STEP_INT) return -1;
     if (looped && !(loop_start < loop_end && loop_end <= len_samples)) return -1;
     if (!looped) { loop_start = 0; loop_end = len_samples; }
     /* source range must fit inside declared pool (checked against byte len) */
-    uint32_t bps = fmt == UG_FMT_S16LE ? 2u : 1u;
+    uint32_t bps = (fmt&1) ? 2u : 1u;
     uint32_t channels = mode == UG_LANE_MONO ? 1u : 2u;
     if ((mode == UG_LANE_MONO && ch_off != 0) ||
         (mode == UG_LANE_LEFT && ch_off != 0) ||
@@ -308,6 +306,7 @@ int ug_lane_configure(ug_mixer *m,ug_lane *l,uint32_t src_offset,
     l->mode = mode;
     l->looped = looped;
     l->ch_off = ch_off;
+    l->stride = channels*bps;
     l->active = 1;
     l->ended = 0;
     l->cache_peer=UINT16_MAX;
@@ -337,8 +336,8 @@ void ug_lane_pcm_rate(ug_lane *l,uint32_t rate,uint32_t output_rate,uint16_t rep
  * cache line; phases and rational-rate residue stay in registers until its end.
  * Edge taps and unusual large steps use the checked generic scalar path. */
 static __attribute__((noinline)) void render_voice_samples(ug_mixer *m,ug_lane *l,unsigned count) {
-    unsigned done=0,bytes=l->fmt==UG_FMT_S16LE?2u:1u;
-    unsigned stride=bytes*(l->mode==UG_LANE_MONO?1u:2u);
+    unsigned done=0,bytes=(l->fmt&1)?2u:1u;
+    unsigned stride=l->stride;
     while(done<count && l->active) {
         uint32_t pos=(uint32_t)(l->phase>>32),frac=(uint32_t)l->phase;
         uint32_t address=l->src_offset+pos*stride+l->ch_off*bytes;

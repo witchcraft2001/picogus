@@ -12,6 +12,7 @@ typedef struct {
     uint8_t kind, state;
     uint8_t pcm_valid, mod_valid, mod_channels;
     ug_pcm_info pcm;
+    uint32_t aux_offset, aux_reserved; /* private preparation, same owner/pin */
 } ug_object_t;
 typedef struct {
     ug_object_t objects[UG_OBJECT_LIMIT];
@@ -29,3 +30,4 @@ ug_object_t *ug_store_find(ug_store_t *s, uint16_t handle);
 uint8_t ug_store_pin(ug_store_t *s, uint16_t handle, bool pin);
 uint16_t ug_store_enum(const ug_store_t *s, uint16_t after);
 void ug_store_space(const ug_store_t *s, uint32_t *free_bytes, uint32_t *largest);
+uint8_t ug_store_aux(ug_store_t *s,uint16_t handle,uint32_t size);

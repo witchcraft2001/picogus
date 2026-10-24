@@ -1,5 +1,5 @@
     IFDEF APP_PLAY
-    DB "UGPLAY file.MOD|file.WAV|file.RAW | HANDLE handle [/WAIT /LOOP /REPLACE]",13,10
+    DB "UGPLAY file.MOD|file.S3M|file.WAV|file.RAW | HANDLE handle [/WAIT /LOOP /REPLACE]",13,10
     DB "MOD /GS: historical repeat, inherited 6A; /SLOW /VERIFY /REPLACE /WAIT",13,10
     DB "MOD only: /F00:IGNORE (default) | /F00:PAUSE; requires new firmware",13,10
     DB "RAW: /RATE:N /BITS:8|16 /CH:1|2 /FMT:U8|S8|S16LE",13,10

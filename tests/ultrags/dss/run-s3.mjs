@@ -15,7 +15,7 @@ for(const c of reference){
  const [status,r]=differential.command(c.op,Buffer.from(c.q,'hex')),actual=Buffer.from(c.r,'hex');
  // This legacy model does not implement streaming. Compare the original
  // feature set; S8c validates bit11 and the stream commands against production C.
- if(c.op===1 && !status)actual.writeUInt32LE(actual.readUInt32LE()&~2048);
+ if(c.op===1 && !status){actual.writeUInt32LE(actual.readUInt32LE()&~2048);actual.writeUInt32LE(actual.readUInt32LE(4)&~128,4);}
  // Wall-clock duration depends on the mock peripheral/CPU. All other wire
  // bytes, including compared-byte count and first mismatch, must match.
  if(status!==c.status||r.length!==actual.length||!r.subarray(0,c.op===5?10:r.length).equals(actual.subarray(0,c.op===5?10:actual.length)))throw Error('C/model mismatch opcode '+c.op);
