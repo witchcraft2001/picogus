@@ -4,7 +4,7 @@
     IFNDEF DOC_SLOT
     DEFINE DOC_SLOT 0
     ENDIF
-    DEFINE UG_DSS_TIMED
+    DEFINE UG_NO_DSS          ; библиотека UltraGS не вызывает DSS
 CARD_IO_BASE EQU 0x02A0       ; первый порт UltraGS на шине ISA
 
 TONE_BYTES  EQU 768
@@ -394,8 +394,6 @@ cleanup:
     ld a,(allocated)
     or a
     ret z
-    ld a,1
-    ld (UGTM.NOESC),a          ; a held ESC must not interrupt cleanup
     ld a,UG_XC_TRANSPORT_RESET ; отменить незавершённый обмен
     call UG_XCTRL
     ret c

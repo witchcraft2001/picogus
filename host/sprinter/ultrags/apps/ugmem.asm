@@ -1,6 +1,9 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; S3 memory tools. Real DSS/Z80, conservative eight-byte frame windows.
     DEFINE UG_DSS_TIMED
+    IFNDEF UG_ISA_TURBO_OFF    ; UGGST/UGOPL/UGTEST define it before isa.asm
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
+    ENDIF
     ; File payloads use bounded 256-byte windows. Control frames keep their
     ; eight-byte windows, and all ISA accesses retain Turbo off. UGMEM and
     ; the public library default remain unchanged.

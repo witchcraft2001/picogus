@@ -248,6 +248,135 @@ void ug_lane_advance_silent(ug_lane *l,uint32_t frames) {
     while(frames-- && l->active) ug_advance(l);
 }
 
+/* ---- IMA ADPCM (WAV format 0x11) ----
+ * Block = per channel {s16 first sample, u8 step index, u8 reserved}, then
+ * 4-byte words per channel in turn; each word holds 8 nibbles, low first.
+ * Decoding follows the IMA reference (shift-and-add difference). */
+static const int16_t ima_steps[89] = {
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+    50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+    253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+    1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+    3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767};
+static const int8_t ima_adjust[8] = {-1, -1, -1, -1, 2, 4, 6, 8};
+
+/* Block header of this lane's channel: first sample and step index. */
+static int ima_header(ug_mixer *m, ug_lane *l, uint32_t block, int16_t *pred, uint8_t *index) {
+    uint32_t off = l->src_offset + block * l->ima_block_align + 4u * l->ch_off;
+    uint8_t b0, b1, b2;
+    if (ug_fetch_byte(m, l, off, &b0) || ug_fetch_byte(m, l, off + 1, &b1) ||
+        ug_fetch_byte(m, l, off + 2, &b2)) return -1;
+    *pred = (int16_t)(b0 | ((uint16_t)b1 << 8));
+    *index = b2 > 88 ? 88 : b2; /* out-of-range index: clamp, never fault */
+    return 0;
+}
+/* Restart the decoder at a block header. keep: the current sample is the
+ * one just before this block, retained as the previous interpolation tap. */
+static int ima_seek_block(ug_mixer *m, ug_lane *l, uint32_t block, bool keep) {
+    int16_t last = l->ima_pred, pred; uint8_t index;
+    if (ima_header(m, l, block, &pred, &index)) { l->ima_valid = 0; return -1; }
+    l->ima_prev = last; l->ima_prev_valid = keep;
+    l->ima_pred = pred; l->ima_index = index;
+    l->ima_bstart = block * l->ima_spb; l->ima_boff = block * l->ima_block_align;
+    l->ima_n = l->ima_bstart; l->ima_valid = 1;
+    return 0;
+}
+/* Decode sample ima_n+1, which must lie in the current block. Decoding in a
+ * block always starts at its header, so an odd nibble reuses the byte that
+ * its even partner fetched: one byte read per two samples, no division. */
+static inline int ima_next(ug_mixer *m, ug_lane *l) {
+    uint32_t j = l->ima_n - l->ima_bstart;
+    unsigned nibble;
+    if (!(j & 1u)) {
+        uint32_t group = 4u * l->ima_channels;
+        uint32_t off = l->src_offset + l->ima_boff + group + 4u * l->ch_off + (j >> 3) * group + ((j & 7u) >> 1);
+        if (ug_fetch_byte(m, l, off, &l->ima_byte)) { l->ima_valid = 0; return -1; }
+        nibble = l->ima_byte & 15u;
+    } else nibble = l->ima_byte >> 4;
+    int32_t step = ima_steps[l->ima_index], diff = step >> 3;
+    if (nibble & 4) diff += step;
+    if (nibble & 2) diff += step >> 1;
+    if (nibble & 1) diff += step >> 2;
+    int32_t pred = l->ima_pred + ((nibble & 8) ? -diff : diff);
+    if (pred > 32767) pred = 32767;
+    if (pred < -32768) pred = -32768;
+    int32_t index = l->ima_index + ima_adjust[nibble & 7];
+    l->ima_index = (uint8_t)(index < 0 ? 0 : index > 88 ? 88 : index);
+    l->ima_prev = l->ima_pred; l->ima_prev_valid = 1;
+    l->ima_pred = (int16_t)pred; ++l->ima_n;
+    return 0;
+}
+/* Sample k (k < len_samples) of this lane's channel. A backward or
+ * cross-block jump restarts at that block's header, so catch-up after any
+ * phase jump is bounded by one block. */
+static int32_t ima_sample(ug_mixer *m, ug_lane *l, uint32_t k) {
+    if (l->ima_valid) {
+        if (k == l->ima_n) return l->ima_pred;
+        if (k + 1 == l->ima_n && l->ima_prev_valid) return l->ima_prev;
+    }
+    uint32_t spb = l->ima_spb;
+    if (!l->ima_valid || k < l->ima_n || k - l->ima_bstart >= spb) {
+        uint32_t block = k / spb;
+        if (ima_seek_block(m, l, block, l->ima_valid && l->ima_n + 1 == block * spb)) return 0;
+    }
+    while (l->ima_n < k) if (ima_next(m, l)) return 0;
+    return l->ima_pred;
+}
+static __attribute__((noinline)) void render_ima_samples(ug_mixer *m, ug_lane *l, unsigned count) {
+    unsigned done = 0;
+    const uint32_t len = l->len_samples, whole = (uint32_t)(l->step >> 32), step = (uint32_t)l->step;
+    const uint32_t remainder = l->step_remainder, denominator = l->step_denominator;
+    while (done < count && l->active) {
+        uint32_t pos = (uint32_t)(l->phase >> 32), frac = (uint32_t)l->phase;
+        if (whole <= 1) {
+            /* Sequential run (source rate <= 48 kHz): the decoder stays at pos
+             * or pos+1, and both taps are inside the object and its block. */
+            uint32_t residue = l->step_residue;
+            while (done < count && pos + 1 < len && l->ima_valid) {
+                int32_t s0, s1;
+                if (pos + 1 == l->ima_n && l->ima_prev_valid) { s0 = l->ima_prev; s1 = l->ima_pred; }
+                else if (pos == l->ima_n && pos + 1 - l->ima_bstart < l->ima_spb) {
+                    s0 = l->ima_pred;
+                    if (ima_next(m, l)) break;
+                    s1 = l->ima_pred;
+                } else break;
+                m->voice_samples[done++] = frac ? interpolate(s0, s1, frac) : s0;
+                uint32_t advance = step, extra = 0;
+                if (remainder) {
+                    residue += remainder;
+                    if (residue >= denominator) { residue -= denominator; ++advance; if (!advance) extra = 1; }
+                }
+                uint32_t next = frac + advance;
+                pos += whole + extra + (next < frac); frac = next;
+            }
+            l->step_residue = residue;
+            l->phase = ((uint64_t)pos << 32) | frac; /* pos <= len-1 here */
+            if (l->failed) { l->active = 0; break; }
+            if (done >= count) break;
+        }
+        /* One frame through the general path: block edges, object end and
+         * whole-object wraps use the same second-tap rule as PCM. */
+        if (pos >= len) { sat_inc(&m->stats.fetch_errors); l->failed = 1; m->last_error = -1; l->active = 0; break; }
+        int32_t s = ima_sample(m, l, pos);
+        if (frac && !l->failed) {
+            int32_t s1 = s;
+            if (pos + 1 < len) s1 = ima_sample(m, l, pos + 1);
+            else if (l->repeats == 0 || l->repeats > 1) {
+                int16_t first; uint8_t index;
+                s1 = ima_header(m, l, 0, &first, &index) ? 0 : first;
+            }
+            s = interpolate(s, s1, frac);
+        }
+        if (l->failed) { l->active = 0; break; }
+        m->voice_samples[done++] = s;
+        ug_advance(l);
+    }
+    if (done < count) memset(m->voice_samples + done, 0, (count - done) * sizeof(m->voice_samples[0]));
+}
+
+
 void ug_mixer_init(ug_mixer *m, ug_mem_if mem) {
     memset(m, 0, sizeof(*m));
     m->mem = mem;
@@ -314,6 +443,44 @@ int ug_lane_configure(ug_mixer *m,ug_lane *l,uint32_t src_offset,
     return 0;
 }
 
+int ug_lane_set_ima(ug_mixer *m, unsigned li, uint32_t src_offset,
+                    uint32_t data_bytes, uint32_t frames, uint16_t block_align,
+                    uint16_t spb, uint8_t gain, uint8_t pan,
+                    uint8_t mode, uint8_t ch_off) {
+    if (!m || li >= UG_LANES || !frames || !data_bytes || !m->mem.read || gain > 64) return -1;
+    if (mode != UG_LANE_MONO && mode != UG_LANE_LEFT && mode != UG_LANE_RIGHT) return -1;
+    if ((mode == UG_LANE_MONO && ch_off != 0) || (mode == UG_LANE_LEFT && ch_off != 0) ||
+        (mode == UG_LANE_RIGHT && ch_off != 1)) return -1;
+    uint32_t channels = mode == UG_LANE_MONO ? 1u : 2u, header = 4u * channels;
+    if (block_align <= header || (block_align - header) % header ||
+        spb != 1u + 8u * ((block_align - header) / header)) return -1;
+    if ((uint64_t)src_offset + data_bytes > m->mem.size) return -1;
+    /* frames must be decodable from the bytes present, incl. a short last block */
+    uint32_t tail = data_bytes % block_align;
+    uint64_t capacity = (uint64_t)(data_bytes / block_align) * spb;
+    if (tail >= header) capacity += 1u + 8u * ((tail - header) / header);
+    if (frames > capacity) return -1;
+    ug_lane *l = &m->lanes[li];
+    memset(l, 0, sizeof(*l));
+    l->src_offset = src_offset;
+    l->len_samples = frames;
+    l->loop_end = frames;
+    l->gain = gain;
+    l->class_gain = l->class_master = 64;
+    l->repeats = 1;
+    l->pan = pan;
+    l->fmt = UG_FMT_IMA4;
+    l->mode = mode;
+    l->ch_off = ch_off;
+    l->active = 1;
+    l->cache_peer = UINT16_MAX;
+    l->cache_tag[0] = l->cache_tag[1] = UG_CACHE_TAG_INVALID;
+    l->ima_block_align = block_align;
+    l->ima_spb = spb;
+    l->ima_channels = (uint8_t)channels;
+    return 0;
+}
+
 int ug_lane_share_cache(ug_mixer *m,unsigned right,unsigned left) {
     if(!m || right>=UG_LANES || left>=UG_LANES || right==left) return -1;
     ug_lane *r=&m->lanes[right],*l=&m->lanes[left];
@@ -336,6 +503,7 @@ void ug_lane_pcm_rate(ug_lane *l,uint32_t rate,uint32_t output_rate,uint16_t rep
  * cache line; phases and rational-rate residue stay in registers until its end.
  * Edge taps and unusual large steps use the checked generic scalar path. */
 static __attribute__((noinline)) void render_voice_samples(ug_mixer *m,ug_lane *l,unsigned count) {
+    if(l->fmt==UG_FMT_IMA4) { render_ima_samples(m,l,count); return; }
     unsigned done=0,bytes=(l->fmt&1)?2u:1u;
     unsigned stride=l->stride;
     while(done<count && l->active) {

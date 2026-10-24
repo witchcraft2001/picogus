@@ -7,6 +7,7 @@ HEADER:
     DW 128,0,0,0,0,0,START,START,0xBFFE
     DS 128-($-HEADER),0
 START: jp ENTRY
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
     INCLUDE "isa.asm"
     DEFINE APP_PROTO
     DEFINE APP_PCM

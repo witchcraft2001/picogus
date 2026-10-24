@@ -124,6 +124,7 @@ docs: dss docs-examples
 docs-check: docs s2-host
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(ROOT)/build/native
 	$(NODE) $(ROOT)/tools/ultrags/docs-examples-check.mjs
+	$(NODE) $(ROOT)/tools/ultrags/nodss-check.mjs
 	$(UG_PYTHON) $(ROOT)/tools/ultrags/docs-protocol-check.py
 	$(UG_DOC_PYTHON) $(ROOT)/tools/ultrags/docs-check.py
 	@mkdir -p $(ROOT)/build/host/docs/pages
@@ -544,6 +545,16 @@ adlib-package:
 	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --adlib
 	$(NODE) $(ROOT)/tools/ultrags/test-adlib-package.mjs
 	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --adlib --verify-only
+
+# WAV IMA ADPCM (format 0x11): ffmpeg fixtures/reference, production C under UBSan.
+.PHONY: adpcm-host adpcm-exe adpcm-check
+adpcm-host:
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/adpcm-host.py --build $(BUILD)/host/adpcm --cc "$(CC)"
+adpcm-exe: dss s2-host adpcm-host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/build-native-card.py --build $(BUILD)/native
+	$(NODE) $(ROOT)/tests/ultrags/dss/run-adpcm.mjs $(ROOT) $(BUILD)
+adpcm-check: adpcm-exe
+	@echo "WAV IMA ADPCM HOST_PASS / DSS-EXE_PASS / REAL_PENDING"
 
 # S3M PCM/ST3 profile: independent reference, real EXEs and linked ARM.
 UG_S3M_BASELINE ?= $(ROOT)/build/archive/pre-s3m/CURRENT.UF2

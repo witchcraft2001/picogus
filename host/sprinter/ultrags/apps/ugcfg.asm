@@ -5,6 +5,7 @@ HEADER:
     DB "EXE",1
     DW 128,0,0,0,0,0,ENTRY,ENTRY,0xBFFE
     DS 128-($-HEADER),0
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
     INCLUDE "ugmem.inc"
 CAT EQU 0xB800
 RESP EQU 0xB900

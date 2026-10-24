@@ -13,6 +13,28 @@ from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS, UC_HOOK_CODE
 from unicorn.arm_const import *
 
 ROOT=Path(__file__).resolve().parents[2]
+LANE_BYTES=616
+IMA_PROFILES={'mod4-four-ima-44100':(4,4,44100),'32-ima-44100':(0,32,44100)}
+IMA_BLOCK,IMA_DATA=128,384 # spb=249, three blocks: block crossings and a whole-object wrap
+IMA_STEPS=[7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,
+    157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,
+    1707,1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,
+    12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767]
+def ima_oracle(offset,data_bytes,block):
+    """Independent mono IMA ADPCM decode of the DATA pattern (byte = address & 255)."""
+    out=[];spb=1+8*((block-4)//4)
+    for b in range(data_bytes//block):
+        base=offset+b*block;pred=((base&255)|(((base+1)&255)<<8));pred-=65536 if pred>=32768 else 0
+        index=min((base+2)&255,88);out.append(pred)
+        for j in range(spb-1):
+            byte=(base+4+j//2)&255;nibble=byte>>4 if j&1 else byte&15
+            step=IMA_STEPS[index];diff=step>>3
+            if nibble&4:diff+=step
+            if nibble&2:diff+=step>>1
+            if nibble&1:diff+=step>>2
+            pred=max(-32768,min(32767,pred-diff if nibble&8 else pred+diff))
+            index=max(0,min(88,index+[-1,-1,-1,-1,2,4,6,8][nibble&7]));out.append(pred)
+    return out
 def digest(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def symbols(path,nm):
     out={}
@@ -111,20 +133,32 @@ class Machine:
                 stereo=profile=='16-stereo-48000'
                 lanes.append((i,0x200001+(i//2 if stereo else i)*4096,882,(rate<<32)//48000,
                               16+i%32,128 if stereo else i*13%256,1,(1+(i&1)) if stereo else 0,(i&1) if stereo else 0))
+        ima=[]
+        if profile in IMA_PROFILES:
+            music,count,rate=IMA_PROFILES[profile];lanes=lanes[:music]
+            for i in range(count):
+                lane=music+i if music else i;offset=0x300001+i*4096
+                ima.append((lane,offset,i*7%256,16+i%40))
         for lane,offset,length,step,gain,pan,fmt,mode,side in lanes:
             assert self.call('ug_lane_set',[self.MIX,lane,offset,length,0,length,step&0xffffffff,step>>32,gain,pan,fmt,mode,1,side])==0
-            # AAPCS rounds ug_lane's 585 data bytes (including the independent stride) to its u64 alignment.
-            lane_address=self.MIX+16+lane*592
+            # AAPCS rounds ug_lane's data bytes (PCM fields + IMA decoder state) to its u64 alignment.
+            lane_address=self.MIX+16+lane*LANE_BYTES
             assert struct.unpack('<II',self.uc.mem_read(lane_address,8))==(offset,length),'target lane ABI changed'
             pcm=lane>=4 if profile=='mod4-28-fx' else profile in ('32-mono-48000','32-mono-44100','16-stereo-48000') or lane>=8
             if pcm:self.call('ug_lane_pcm_rate',[lane_address,rate if profile in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx') else 44100,48000,0])
+        spb=1+8*((IMA_BLOCK-4)//4);frames_ima=IMA_DATA//IMA_BLOCK*spb
+        for lane,offset,pan,gain in ima:
+            assert self.call('ug_lane_set_ima',[self.MIX,lane,offset,IMA_DATA,frames_ima,IMA_BLOCK,spb,gain,pan,0,0])==0
+            lane_address=self.MIX+16+lane*LANE_BYTES
+            assert struct.unpack('<II',self.uc.mem_read(lane_address,8))==(offset,frames_ima),'target lane ABI changed'
+            self.call('ug_lane_pcm_rate',[lane_address,rate,48000,0])
         if 'ug_lane_share_cache' in self.sym:
             for lane,offset,length,step,gain,pan,fmt,mode,side in lanes:
                 if mode==2:
                     partner=next((x[0] for x in lanes if x[1]==offset and x[7]==1),None)
                     if partner is not None:assert self.call('ug_lane_share_cache',[self.MIX,lane,partner])==0
         # The lane layout is a target ABI contract checked against init data:
-        # ug_mem_if=16 bytes, ug_lane=592 bytes in the linked RP2040 build.
+        # ug_mem_if=16 bytes, ug_lane=LANE_BYTES in the linked RP2040 build.
         assert struct.unpack('<I',self.uc.mem_read(self.MIX,4))[0]==self.READ|1
         self.counting=True;output=bytearray()
         for _ in range(8):
@@ -134,7 +168,7 @@ class Machine:
         # Independent integer oracle: absolute frame time, no production cache,
         # phase-advance or optimized rounding/division helper is reused.
         def nearest(n,d):return (-1 if n<0 else 1)*((abs(n)+d//2)//d)
-        expected=bytearray()
+        expected=bytearray();decoded_cache={}
         for frame in range(1024):
             left=right=0
             for lane,offset,length,step,gain,pan,fmt,mode,side in lanes:
@@ -155,6 +189,11 @@ class Machine:
                     left+=nearest(value*(255-pan),255);right+=nearest(value*pan,255)
                 elif mode==1:left+=value if pan<=128 else nearest(value*(255-pan),127)
                 else:right+=value if pan>=128 else nearest(value*pan,128)
+            for lane,offset,pan,gain in ima:
+                decoded=decoded_cache.setdefault(offset,ima_oracle(offset,IMA_DATA,IMA_BLOCK))
+                phase=(frame*rate*(1<<32))//48000;pos=(phase>>32)%frames_ima;fraction=phase&0xffffffff
+                value=nearest(decoded[pos]*((1<<32)-fraction)+decoded[(pos+1)%frames_ima]*fraction,1<<32)
+                value=nearest(value*gain,64);left+=nearest(value*(255-pan),255);right+=nearest(value*pan,255)
             expected.extend(struct.pack('<hh',max(-32768,min(32767,left)),max(-32768,min(32767,right))))
         assert output==expected,'linked ARM samples differ from independent oracle: '+profile
         return {'profile':profile,'frames':1024,'instructions':self.instructions,'division64Calls':self.div64,'cacheReads':self.reads,'cacheReadBytes':self.read_bytes,'outputSha256':hashlib.sha256(output).hexdigest(),'independentOracle':'PASS'}
@@ -167,10 +206,10 @@ def main():
     if a.baseline:files.append(a.baseline)
     inputs={str(f.resolve()):digest(f) for f in files}
     cases=[]
-    for profile in ['mod4','mod4-one-stereo','mod4-two-stereo','paused-mod-two-stereo','stereo-balance','twelve-lane','32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx']:
+    for profile in ['mod4','mod4-one-stereo','mod4-two-stereo','paused-mod-two-stereo','stereo-balance','twelve-lane','32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx',*IMA_PROFILES]:
         row=Machine(elf,a.nm).run(profile)
         assert row['division64Calls']==0,'64-bit division in bounded audio kernel'
-        if a.baseline and profile not in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx'):
+        if a.baseline and profile not in ('32-mono-48000','32-mono-44100','16-stereo-48000','mod4-28-fx',*IMA_PROFILES):
             old=Machine(a.baseline,a.nm).run(profile)
             assert old['outputSha256']==row['outputSha256'],'changed samples '+profile
             assert row['instructions']<old['instructions'],'no instruction improvement '+profile

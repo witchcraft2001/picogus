@@ -447,6 +447,7 @@ msg_fail:	DB	"UGDIAG: FAIL",13,10,0
 msg_open:	DB	"UGDIAG: card absent",13,10,0
 msg_close:	DB	"UGDIAG: ISA close failed",13,10,0
 
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
 	INCLUDE	"ugproto.asm"		; library tail keeps ENTRY at image start
 
 	END	ENTRY

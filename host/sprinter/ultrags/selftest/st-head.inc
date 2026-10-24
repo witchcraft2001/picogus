@@ -7,6 +7,7 @@
 ; The library text is pulled in by st-tail.inc at the END of each file
 ; so ENTRY stays the first byte after the header.
 
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
 	ORG	0x8000
 EXE_HDR:
 	DB	"EXE"

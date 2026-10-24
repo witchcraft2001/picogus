@@ -43,7 +43,8 @@ typedef enum {
     UG_FMT_S8 = 0,    /* 1 byte/sample, signed */
     UG_FMT_S16LE = 1, /* 2 bytes/sample, signed little-endian */
     UG_FMT_U16LE = 3, /* internal planar S3M unsigned 16-bit */
-    UG_FMT_U8 = 2     /* 1 byte/sample, unsigned PCM centered at 128 */
+    UG_FMT_U8 = 2,    /* 1 byte/sample, unsigned PCM centered at 128 */
+    UG_FMT_IMA4 = 4   /* IMA ADPCM, WAV format 0x11 block layout */
 } ug_fmt;
 
 typedef enum {
@@ -77,6 +78,13 @@ typedef struct {
     uint32_t cache_tag[UG_CACHE_LINES]; /* byte window base, tag INVALID = empty */
     uint8_t  cache[UG_CACHE_LINES][UG_CACHE_LINE];
     uint8_t  mix_shift;     /* MOD headroom: 0=unity, 1..3=divide by2/4/8 */
+    /* IMA ADPCM decoder (fmt==UG_FMT_IMA4 only). The lane decodes forward
+     * sample by sample: ima_pred is sample ima_n, ima_prev sample ima_n-1
+     * when ima_prev_valid; ima_bstart/ima_boff locate the current block. */
+    uint16_t ima_block_align, ima_spb;
+    uint8_t  ima_channels, ima_index, ima_valid, ima_prev_valid, ima_byte;
+    int16_t  ima_pred, ima_prev;
+    uint32_t ima_n, ima_bstart, ima_boff;
 } ug_lane;
 
 typedef struct {
@@ -120,6 +128,14 @@ int ug_lane_configure(ug_mixer *m,ug_lane *lane,uint32_t src_offset,
                 uint64_t step_q32,uint8_t gain,uint8_t pan,
                 uint8_t fmt,uint8_t mode,uint8_t looped,uint8_t ch_off);
 void ug_lane_advance_silent(ug_lane *lane,uint32_t frames);
+/* Configure one lane for IMA ADPCM (WAV 0x11 block layout), played once or
+ * as whole-object repeats; internal loops are not supported. data_bytes is
+ * the ADPCM data length, frames the samples per channel. Mono uses
+ * mode=UG_LANE_MONO/ch_off=0; stereo uses one LEFT and one RIGHT lane. */
+int ug_lane_set_ima(ug_mixer *m, unsigned lane, uint32_t src_offset,
+                    uint32_t data_bytes, uint32_t frames, uint16_t block_align,
+                    uint16_t samples_per_block, uint8_t gain, uint8_t pan,
+                    uint8_t mode, uint8_t ch_off);
 
 int ug_lane_share_cache(ug_mixer *m,unsigned right,unsigned left);
 

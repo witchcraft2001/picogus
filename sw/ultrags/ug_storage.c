@@ -620,7 +620,11 @@ static int instance_lanes(const ug_instance *in,bool is_fx) {
     uint8_t fmt=p->sample_format==0?UG_FMT_U8:p->sample_format==1?UG_FMT_S8:UG_FMT_S16LE;
     for(unsigned side=0;side<p->channels;side++) {
         uint8_t mode=p->channels==1?UG_LANE_MONO:side?UG_LANE_RIGHT:UG_LANE_LEFT;
-        if(ug_lane_set(&mixer,in->voice[side],in->offset,p->frames,p->loop_start,p->loop_end,
+        if(p->sample_format==UG_PCM_FMT_IMA_ADPCM) {
+            /* WAV IMA ADPCM: decoded on the lane; no internal loop exists. */
+            if(ug_lane_set_ima(&mixer,in->voice[side],in->offset,p->data_length,p->frames,
+                               p->block_align,p->samples_per_block,in->gain,in->pan,mode,(uint8_t)side)) return -1;
+        } else if(ug_lane_set(&mixer,in->voice[side],in->offset,p->frames,p->loop_start,p->loop_end,
                        0,in->gain,in->pan,fmt,mode,(p->flags&1)!=0,(uint8_t)side)) return -1;
         ug_lane *l=&mixer.lanes[in->voice[side]];
         ug_lane_pcm_rate(l,p->rate,48000,in->repeats);
@@ -1140,7 +1144,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
 #ifdef UG_ADLIB
         ug_put32(r,ug_get32(r)|UG_ADLIB_OPL2_FEATURE);
 #endif
-        if(mixer_ready) ug_put32(r+4,255u); /* RAW8/16, WAV, MOD4, 8CHN, FLT8, MOD 1..32 */
+        if(mixer_ready) ug_put32(r+4,511u); /* RAW8/16, WAV, MOD4, 8CHN, FLT8, MOD 1..32, S3M, WAV IMA ADPCM */
         ug_put32(r+8,48000); put16(r+12,1024); put16(r+14,128); put16(r+16,128);
         put16(r+20,UG_LANES);put16(r+22,UG_LANES);put16(r+24,mixer_ready?UG_LANES:0);
         r[26]=1;r[27]=1;

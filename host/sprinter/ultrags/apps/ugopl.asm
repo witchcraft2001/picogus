@@ -9,6 +9,7 @@ START: jp ENTRY
     DEFINE APP_PCM
     DEFINE APP_S6TEST
     DEFINE APP_OPL
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
     INCLUDE "isa.asm"
     INCLUDE "ugmem.asm"
     END START

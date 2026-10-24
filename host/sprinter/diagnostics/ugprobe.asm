@@ -105,6 +105,7 @@ error_text: DB " ERROR_2A6=",0
 newline: DB 13,10,0
 done_text: DB "DIAGNOSTIC COMPLETE (not an acceptance PASS)",13,10,0
 fail_text: DB "DIAGNOSTIC FAILED: ISA window open",13,10,0
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
     INCLUDE "isa.asm"
     ASSERT $ < values
     END entry

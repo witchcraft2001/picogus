@@ -9,7 +9,8 @@
 ;
 ;   UG_LIB_INIT    : once per process; initialises the workspace (RAM is
 ;                    NOT guaranteed zero - caller must run this first)
-;   UG_OPEN        : in A=slot, HL=ISA base; config discovery + probe.
+;   UG_OPEN        : in A=slot, HL=ISA base; config discovery + probe
+;                    (without UG_ISA_TURBO_OFF: BASE registers + INFO/CAPS).
 ;                    CF=1 + A=UG_ERR_* on failure (window always closed)
 ;   UG_CLOSE       : ends the session; cancels a live transfer first
 ;   UG_RPC         : in A=opcode(0..7Fh), HL=req payload, BC=req len<=128,
@@ -34,6 +35,29 @@
 	IFNDEF UGPROTO_INC
 	DEFINE UGPROTO_INC
 
+; Build profiles: define before INCLUDE "ugproto.asm".
+;   UG_DSS_TIMED  waits are measured by the DSS clock; ESC (DSS SCANKEY)
+;                 cancels them.
+;   UG_NO_DSS     the library never calls DSS (no RST 10h): the same waits
+;                 are counted in calibrated poll loops; an optional
+;                 UG_POLL_HOOK routine of the program may cancel them.
+;   UG_ISA_TURBO_OFF  Turbo off for every ISA window, Turbo on after it
+;                 (the DSS default); UG_OPEN discovers the card through the
+;                 software-held CONFIG ports. Without it the CPU speed is
+;                 left alone and UG_OPEN identifies the card by its BASE
+;                 registers and INFO/CAPS.
+; Neither of the first two: fixed poll budgets (UGDIAG, selftests).
+    IFDEF UG_NO_DSS
+    IFDEF UG_DSS_TIMED
+    ASSERT 0, "UG_NO_DSS and UG_DSS_TIMED are exclusive"
+    ENDIF
+    DEFINE UG_TIMED
+    ENDIF
+    IFDEF UG_DSS_TIMED
+    DEFINE UG_TIMED
+    ENDIF
+
+UG_LIB_BEGIN:			; library code range, for host checks
 	INCLUDE	"ugmem.inc"
 	INCLUDE	"ug_wire.inc"
 	INCLUDE	"isa.asm"
@@ -51,6 +75,19 @@ UG_ERR_UNSAFE_NMI EQU 0xF0		; STACK refused: NMI safety unproven
 UG_WAIT_BUDGET	EQU 0x4000
 ; GS latch WC/WN poll budget (~0.4s @21MHz)
 UG_GS_BUDGET	EQU 0x4000
+
+    IFDEF UG_NO_DSS
+; Synthetic clock, measured on the cheapest waiting loop with no ISA wait
+; states. UG_SYNTH_PPS polls last at least 1 s at 21 MHz (with Turbo
+; switching the window part always runs at 3.5 MHz). UG_SLOW_BUDGET bounds
+; one GS_DATA block below the card's 5 s grant fuse even at 3.5 MHz.
+    IFDEF UG_ISA_TURBO_OFF
+UG_SYNTH_PPS	EQU 6700		; 1.05 s Turbo on, ~2.3 s Turbo off
+    ELSE
+UG_SYNTH_PPS	EQU 19300		; 1.03..1.06 s at 21 MHz, ~6 s at 3.5 MHz
+    ENDIF
+UG_SLOW_BUDGET	EQU 12000		; 0.5..1.8 s at 21 MHz, <3.5 s at 3.5 MHz
+    ENDIF
 
 ; conservative pre-measurement ISA chunk (spec 3.1: protected 3.5 MHz ISA, chunk<=8)
 UG_CHUNK_DEF	EQU 8
@@ -225,6 +262,17 @@ UG_OPEN:
 	ld	a,b			; slot back
 	call	UG_ISA_OPEN		; validates slot again (defensive)
 	jp	c,.open_fail
+    IFNDEF UG_ISA_TURBO_OFF
+    ; The firmware holds CONFIG 01D0h..01D2h in software, too late for a
+    ; Turbo ISA cycle; the BASE block is held by PIO. Identify the card by
+    ; BASE registers here and by INFO after the session opens.
+    ld a,UG_REG_RSVD_0A
+    call UG_REG_R
+    or a
+    jp nz,.absent		; FFh: floating bus, nothing at BASE
+    ld hl,0xFFFF
+    ld (UG_ALIASCFG),hl		; no bulk alias until CAPS reports one
+    ELSE
     call UG_ISA_CLOSE
     IFDEF APP_OPL
     ld a,2
@@ -271,6 +319,7 @@ UG_OPEN:
     jp c,.open_fail
     ld (UG_ALIASCFG),hl
     call UG_CFG_OPEN
+    ENDIF
 	; --- only now may BASE registers be touched ---
     IFDEF APP_OPL
     ld a,6
@@ -308,6 +357,15 @@ UG_OPEN:
 	xor	a
 	ld	(UG_LAST_ERROR),a
 	ld	(UG_LAST_SOURCE),a
+    IFNDEF UG_ISA_TURBO_OFF
+    call UG_OPEN_VERIFY
+    ret nc
+    ld b,a
+    xor a
+    ld (UGCTX.SESS),a		; failed identity: no session remains
+    ld a,b
+    scf
+    ENDIF
 	ret
 .absent:
 	call	UG_ISA_CLOSE
@@ -323,6 +381,79 @@ UG_OPEN:
 	; ISA_OPEN failed before changing hardware; A=err already
 	ld	b,1
 	jp	UG_SET_ERR
+
+    IFNDEF UG_ISA_TURBO_OFF
+; UG_OPEN_VERIFY: INFO must report UGS1, API 1.0 and mode 8; CAPS then
+; gives the bulk alias. CAPS refused as BUSY (a transfer left by another
+; program) keeps FFFFh: the alias is an optional write method.
+; out CF=0 / CF=1 A=error (UG_LAST_* set). clobbers AF,BC,DE,HL; IX kept
+UG_OPEN_VERIFY:
+    push ix
+    ld hl,-UG_OP_CAPS_RESP_LEN
+    add hl,sp
+    ld sp,hl			; response buffer on the stack, below C000h
+    ld a,UG_OP_INFO
+    call .rpc
+    jr c,.out
+    ld a,c
+    cp UG_OP_INFO_RESP_LEN
+    jr nz,.wrong
+    ld hl,0
+    add hl,sp
+    ld de,.ident
+    ld b,7			; "UGS1", api 1.0, mode 8
+.cmp:
+    ld a,(de)
+    cp (hl)
+    jr nz,.wrong
+    inc de
+    inc hl
+    djnz .cmp
+    ld a,UG_OP_CAPS
+    call .rpc
+    jr nc,.caps
+    cp UG_ERR_BUSY
+    scf
+    jr nz,.out
+    xor a
+    ld (UG_LAST_ERROR),a
+    ld (UG_LAST_SOURCE),a
+    jr .out
+.caps:
+    ld a,c
+    cp UG_OP_CAPS_RESP_LEN
+    jr nz,.wrong
+    ld hl,30			; CAPS.alias
+    add hl,sp
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    ld (UG_ALIASCFG),hl
+    xor a
+    jr .out
+.wrong:
+    ld a,UG_ERR_STATE
+    ld b,1
+    call UG_SET_ERR
+.out:
+    ex af,af'
+    ld hl,UG_OP_CAPS_RESP_LEN
+    add hl,sp
+    ld sp,hl
+    ex af,af'
+    pop ix
+    ret
+.rpc: ; A=opcode, empty request; response to the stack buffer
+    ld hl,2
+    add hl,sp			; skip .rpc's own return address
+    ex de,hl
+    ld ix,UG_OP_CAPS_RESP_LEN
+    ld bc,0
+    jp UG_RPC
+.ident:
+    DB "UGS1",1,0,8
+    ENDIF
 
 ; ------------------------------------------------------------ UG_CLOSE
 ; Ends the session.  Cancels a live transfer first (best-effort framed
@@ -408,7 +539,7 @@ UG_RPC:
 	call	UG_BUILD_FRAME		; BC = total frame bytes
 	jp	c,.badframe
 	push	bc			; frame len across the window open
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_RPC_START
     ENDIF
 	; READY is required before the FIRST byte. An old response must not
@@ -421,7 +552,7 @@ UG_RPC:
 	jr	c,.ready_winfail
 	bit	0,a
 	jr	nz,.ready
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     bit 1,a
     jr nz,.busy_unowned
     bit 2,a
@@ -432,7 +563,7 @@ UG_RPC:
     ENDIF
 	bit	5,a
 	jr	nz,.ready_fault
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_RPC_NEXT
     jr nc,.ready_wait
     pop bc
@@ -472,7 +603,7 @@ UG_RPC:
 	pop	bc
 	call	UG_REQ_WRITE
 	call	UG_ISA_CLOSE
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_PHASE
     ENDIF
 	; ---- wait: a loop of independently opened/closed status reads ----
@@ -496,7 +627,7 @@ UG_RPC:
     ; a deadline already started before grant must not be restarted.
     pop af
     pop hl
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_PHASE
     ENDIF
     jr .wait
@@ -515,7 +646,7 @@ UG_RPC:
 	jp	nz,.xerr
 .executing:
 	pop	hl
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_RPC_NEXT
     jr nc,.wait
     push af
@@ -980,7 +1111,7 @@ UG_WRITE:
     jp .w_data_done
 	; ---- data: N bytes as <=UG_CHUNK bounded windows ----
 .w_loop:
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_BULK_YIELD
     jp c,.w_fail
     ENDIF
@@ -1279,7 +1410,7 @@ UG_READ:
     jp .r_data_done
 	; chunks
 .r_loop:
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_BULK_YIELD
     jp c,.r_fail
     ENDIF
@@ -1379,7 +1510,7 @@ UG_READ:
 	pop	ix
 	ret
 
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
 ; Check ESC on entering each 256-byte region, with ISA already closed.
 ; IRQ/MMU/Turbo are still restored after EVERY chunk. Public cap is eight;
 ; file payload cap is 256. For arbitrary chunk sizes <=cap the poll gap is
@@ -1401,9 +1532,20 @@ UG_BULK_YIELD:
     push hl
     push ix
     push iy
+    IFDEF UG_NO_DSS
+    IFDEF UG_POLL_HOOK
+    call UG_POLL_HOOK		; CF=1: the program cancels
+    sbc a,a
+    inc a			; Z = cancel
+    ELSE
+    xor a
+    inc a			; NZ: nothing can cancel
+    ENDIF
+    ELSE
     ld c,0x31
     rst 0x10
     cp 27
+    ENDIF
     pop iy
     pop ix
     pop hl
@@ -1420,7 +1562,11 @@ UG_BULK_YIELD:
 
  ; GS_DATA uses one-byte windows and closed-window latch waits.
 UG_SLOW_DATA:
+    IFDEF UG_NO_DSS
+    ld hl,UG_SLOW_BUDGET
+    ELSE
     ld hl,0xFFFF
+    ENDIF
     ld (UGXFER.SLOWCOUNT),hl
     IFDEF UG_DSS_TIMED
     call UG_WAIT_START
@@ -1489,6 +1635,26 @@ UG_SLOW_WAIT:
     ld b,1
     jp UG_SET_ERR
     ELSE
+    IFDEF UG_NO_DSS
+    IFDEF UG_POLL_HOOK
+    ld a,(UGTM.NOESC)
+    or a
+    jr nz,.count
+    push bc
+    push de
+    push ix
+    push iy
+    call UG_POLL_HOOK
+    pop iy
+    pop ix
+    pop de
+    pop bc
+    ld a,UG_ERR_CANCELLED
+    ld b,1
+    jp c,UG_SET_ERR
+.count:
+    ENDIF
+    ENDIF
     ; Non-DSS library users still have a finite latch wait.
     ld hl,(UGXFER.SLOWCOUNT)
     dec hl
@@ -1621,7 +1787,7 @@ UG_GS_POLL_CB:
 ;
 ; UG_GS_WC: wait until CB(bit0) clears, bounded
 UG_GS_WC:
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_GS_WAIT_START
     ENDIF
 	ld	hl,UG_GS_BUDGET
@@ -1631,7 +1797,7 @@ UG_GS_WC:
 	bit	0,a
 	jr	z,.wcdone
 	pop	hl
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_NEXT
     jp c,UG_GS_WAIT_ERROR
     jr .wc
@@ -1652,7 +1818,7 @@ UG_GS_WC:
 ;
 ; UG_GS_WN: wait until DB(bit7) sets, bounded
 UG_GS_WN:
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_START
     ld a,1
     ld (UGTM.LIMIT),a
@@ -1664,7 +1830,7 @@ UG_GS_WN:
 	bit	7,a
 	jr	nz,.wndone
 	pop	hl
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_NEXT
     jp c,UG_GS_WAIT_ERROR
     jr .wn
@@ -1684,7 +1850,7 @@ UG_GS_WN:
 	ret
 ;
 UG_GS_WD:
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_START
     ld a,1
     ld (UGTM.LIMIT),a
@@ -1697,7 +1863,7 @@ UG_GS_WD:
     ret c
     bit 7,a
     ret z
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     call UG_WAIT_NEXT
     jp c,UG_GS_WAIT_ERROR
     jr .loop
@@ -1711,7 +1877,7 @@ UG_GS_WD:
     ld b,3
     jp UG_SET_ERR
 ;
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
 ; COMMAND is retained by SC until WC completes. No ISA window is open here.
 UG_GS_WAIT_START:
     call UG_WAIT_START
@@ -1890,7 +2056,8 @@ UG_BAD_BEGIN:
 	ld	b,1
 	jp	UG_SET_ERR
 
-    IFDEF UG_DSS_TIMED
+    IFDEF UG_TIMED
     INCLUDE "ugwait.asm"
     ENDIF
+UG_LIB_END:
 	ENDIF ; UGPROTO_INC

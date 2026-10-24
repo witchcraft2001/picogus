@@ -4,6 +4,7 @@
     IFNDEF DOC_SLOT
     DEFINE DOC_SLOT 0
     ENDIF
+    DEFINE UG_NO_DSS          ; библиотека UltraGS не вызывает DSS
     ORG 0x8000
 header:
     DB "EXE",1

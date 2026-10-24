@@ -3,6 +3,8 @@
 ; Preserves BC/DE/HL/IX/IY, PAGE3 and IFF. Every bus operation has its own
 ; short Turbo-off window. Delays/DSS run with ISA closed. No data read or
 ; mutation is retried here. E3/FWSTRING may be reselected only BEFORE data.
+; These software-held ports are not Turbo-safe: only UG_ISA_TURBO_OFF
+; builds use them (UG_OPEN discovery, UGCFG); the others skip CONFIG.
     IFNDEF UGCONFIG_INC
     DEFINE UGCONFIG_INC
     INCLUDE "isa.asm"
@@ -22,10 +24,12 @@ UG_CFG_SELECT: ; A=selector; CF=1 A=wire TIMEOUT/CANCELLED on failure
     push hl
     push ix
     push iy
+    IFNDEF UG_NO_DSS
     ld c,0x21
     rst 0x10
     ld a,b
     ld (UGCFG.SEC),a
+    ENDIF
     ld hl,0
     ld (UGCFG.COUNT),hl
     xor a
@@ -42,6 +46,13 @@ UG_CFG_SELECT: ; A=selector; CF=1 A=wire TIMEOUT/CANCELLED on failure
     call UG_CFG_POLL_HOOK
     jr c,.outer_fail
     ENDIF
+    IFDEF UG_NO_DSS
+    ; No clock: the 8192-poll bound below lasts 2.4 s at 21 MHz.
+    IFDEF UG_POLL_HOOK
+    call UG_POLL_HOOK
+    jr c,.cancel
+    ENDIF
+    ELSE
     ld c,0x31
     rst 0x10
     cp 27
@@ -57,6 +68,7 @@ UG_CFG_SELECT: ; A=selector; CF=1 A=wire TIMEOUT/CANCELLED on failure
 .elapsed:
     cp 3
     jr nc,.timeout
+    ENDIF
     ld hl,(UGCFG.COUNT)
     inc hl
     ld (UGCFG.COUNT),hl

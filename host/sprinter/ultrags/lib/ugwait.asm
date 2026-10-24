@@ -1,4 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
+; Timed RPC waits. UG_DSS_TIMED reads the DSS clock (below); UG_NO_DSS
+; counts the same deadlines in polls, see UG_WAIT_NEXT at the end.
 ; Optional DSS timed RPC profile. All DSS calls with ISA window closed.
 ; Seconds are accumulated modulo 60, so minute/day rollover and >60s jobs
 ; work identically. Polling also has a finite stagnant-clock bound.
@@ -88,10 +90,12 @@ UG_WAIT_START:
     ld a,120
     ld (UGTM.LIMIT),a
 .clock:
+    IFNDEF UG_NO_DSS
     ld c,0x21
     rst 0x10
     ld a,b
     ld (UGTM.SEC),a
+    ENDIF
     xor a
     ld (UGTM.ELAPSED),a
     ld (UGTM.STAGNANT),a
@@ -104,6 +108,7 @@ UG_WAIT_START:
     pop bc
     pop af
     ret
+    IFNDEF UG_NO_DSS
 UG_WAIT_NEXT:
     push bc
     push de
@@ -170,3 +175,55 @@ UG_WAIT_NEXT:
     pop de
     pop bc
     ret
+    ELSE
+; Synthetic clock: UGTM.STAGNANT counts polls of the current second,
+; UG_SYNTH_PPS polls last at least one second at 21 MHz, so a deadline of
+; N seconds never expires early; on a slower CPU it expires later.
+UG_WAIT_NEXT:
+    push bc
+    push de
+    push hl
+    push ix
+    push iy
+    IFDEF UG_POLL_HOOK
+    ld a,(UGTM.NOESC)
+    or a
+    jr nz,.clock
+    call UG_POLL_HOOK		; CF=1: the program cancels
+    jr c,.cancel
+.clock:
+    ENDIF
+    ld hl,(UGTM.STAGNANT)
+    inc hl
+    ld (UGTM.STAGNANT),hl
+    ld de,UG_SYNTH_PPS
+    or a
+    sbc hl,de
+    jr c,.ok
+    ld (UGTM.STAGNANT),hl	; zero: the next second begins
+    ld hl,UGTM.ELAPSED
+    inc (hl)
+    ld a,(UGTM.LIMIT)
+    cp (hl)
+    jr z,.timeout
+    jr c,.timeout
+.ok:
+    xor a
+    jr .out
+    IFDEF UG_POLL_HOOK
+.cancel:
+    ld a,UG_ERR_CANCELLED
+    scf
+    jr .out
+    ENDIF
+.timeout:
+    ld a,UG_ERR_TIMEOUT
+    scf
+.out:
+    pop iy
+    pop ix
+    pop hl
+    pop de
+    pop bc
+    ret
+    ENDIF

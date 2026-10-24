@@ -7,17 +7,19 @@
 ;     is D4h+slot*2 (D7=1 D6=1 D4=1 enable, D2/D1 = slot, D0=0).
 ;   * PORT_SYSTEM 1FFDh is write-only (reads return mapper data).
 ;     DSS uses 11h while mapped and 01h after closing.
-;   * SYS_PORT.RAM 3Ch receives 2 before ISA (Turbo off), 3 after
-;     closing (DSS default Turbo on). Actual entry speed is unknowable
-;     without measurement; neither SYSTEM nor CONFIG_DE is a snapshot.
+;   * SYS_PORT.RAM 3Ch: only with UG_ISA_TURBO_OFF, 2 before ISA (Turbo
+;     off), 3 after closing (DSS default Turbo on). Actual entry speed is
+;     unknowable without measurement; neither SYSTEM nor CONFIG_DE is a
+;     snapshot.
 ;   * PORT_ISA 9FBDh holds A19..A14/AEN/RESET; writing 2 or C0h pulses the
 ;     ISA RESET line and is never done here.
 ; While the window is open, CPU addresses 0C000h+isa_addr hit the ISA bus;
 ; RAM there is unreachable - code and stack must live below 0C000h.
 ;
 ; Context contract: preserve PAGE3 and IFF on every window. Return to
-; DSS SYSTEM=01h / software Turbo enabled; hardware Turbo permission
-; remains independent. No BIOS calls or CONFIG_DE accesses are needed.
+; DSS SYSTEM=01h (and, with UG_ISA_TURBO_OFF, software Turbo enabled;
+; hardware Turbo permission remains independent). No BIOS calls or
+; CONFIG_DE accesses are needed.
 ; Code/stack stay below C000h, with DI across the complete mapping change.
 ;
 ; Valid slots on this platform are 0 and 1 only.  Public entries preserve
@@ -25,6 +27,24 @@
 
 	IFNDEF ISA_INC
 	DEFINE ISA_INC
+
+; CPU speed. By default the library never writes SYS_PORT.RAM: the windows
+; run at the speed the program chose, which the PIO-held card blocks (BASE,
+; bulk alias or 0380h, GS 00B3h/00BBh) accept in Turbo. UG_ISA_TURBO_OFF
+; restores the D03 contract: 2 (Turbo off) before every window, 3 (Turbo on,
+; the DSS default) after it. The software-held CONFIG ports need that
+; profile; the Turbo-in-window experiments below presume it as well.
+    IFNDEF UG_ISA_TURBO_OFF
+    IFDEF UG_GS_TURBO_SLOT
+    ASSERT 0, "UG_GS_TURBO_SLOT requires UG_ISA_TURBO_OFF"
+    ENDIF
+    IFDEF APP_OPL
+    ASSERT 0, "APP_OPL requires UG_ISA_TURBO_OFF"
+    ENDIF
+    IFDEF UG_EXPERIMENT_TURBO_WRITE
+    ASSERT 0, "UG_EXPERIMENT_TURBO_WRITE requires UG_ISA_TURBO_OFF"
+    ENDIF
+    ENDIF
 
 	INCLUDE	"ugmem.inc"
 	INCLUDE	"ug_wire.inc"
@@ -92,10 +112,12 @@ UG_ISA_OPEN:
 	inc	a
 .iffStore:
 	ld	(UGCTX.IFFSAVE),a
-	; Save PAGE3; disable Turbo directly while preserving the DSS RAM map.
+	; Save PAGE3; with UG_ISA_TURBO_OFF disable Turbo directly while
+	; preserving the DSS RAM map.
 	ld	bc,UG_PORT_PAGE3
 	in	a,(c)
 	ld	(UGCTX.PAGE3SAVE),a
+    IFDEF UG_ISA_TURBO_OFF
 	ld	bc,UG_PORT_SYS_RAM
 	ld	a,2
     IFDEF UG_GS_TURBO_SLOT
@@ -107,6 +129,7 @@ UG_ISA_OPEN:
     add a,2
     ENDIF
 	out	(c),a
+    ENDIF
 	ld	bc,UG_PORT_SYSTEM
 	; switch SYSTEM to the ISA mapping mode
 	ld	a,UG_SYSTEM_ISA
@@ -146,9 +169,11 @@ UG_ISA_CLOSE:
 	ld	bc,UG_PORT_PAGE3
 	ld	a,(UGCTX.PAGE3SAVE)
 	out	(c),a
+    IFDEF UG_ISA_TURBO_OFF
 	ld	bc,UG_PORT_SYS_RAM
 	ld	a,3
 	out	(c),a
+    ENDIF
 	xor	a
 	ld	(UGCTX.ISOPEN),a
 	; restore interrupt state

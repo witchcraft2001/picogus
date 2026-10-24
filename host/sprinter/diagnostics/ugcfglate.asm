@@ -141,6 +141,7 @@ done_text: DB "HEX fields; INDEX is zero-based. LATE>00: IOR ended before byte s
     DB "LATE=00 does not prove host received the byte. DIAGNOSTIC ONLY.",13,10,0
 wrong_text: DB "WRONG FIRMWARE / BASE / SLOT: R11 probe marker missing.",13,10,0
 fail_text: DB "DIAGNOSTIC FAILED: ISA window open",13,10,0
+    DEFINE UG_ISA_TURBO_OFF    ; D03: Turbo off inside ISA windows, CONFIG discovery
     INCLUDE "isa.asm"
     ASSERT $ < values
     END entry
