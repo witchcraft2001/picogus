@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Первый звук: загрузить свой массив, описать, проверить, проиграть, удалить.
-; Для этого урока карта изначально пуста, других управляющих программ нет.
+; Перед работой программа сбрасывает карту: чужие объекты и звук не сохраняются.
     IFNDEF DOC_SLOT
     DEFINE DOC_SLOT 0
     ENDIF
@@ -32,7 +32,7 @@ finish:
     ld (result),a
     call cleanup
     jr nc,.closed
-    ld (result),a             ; report cleanup failure too
+    ld (result),a             ; ошибку очистки тоже сообщить
 .closed:
     call UG_CLOSE
     ld a,(result)
@@ -59,10 +59,11 @@ open_card:
 ; docs:open-card:end
     ld a,1                   ; включить проверку целостности ответов
     call UG_FRAME_CRC
-    jp check_card            ; версия, возможности и свободная память
+    jp check_card            ; версия, возможности, затем сброс карты
 
-; Служебные проверки до первого изменения памяти карты.
+; Служебные проверки и сброс карты до первого изменения её памяти.
 ; Их подробный разбор находится после урока о загрузке звука.
+; docs:check-card-info:begin
 check_card:
     ld a,UG_OP_INFO
     ld bc,0
@@ -78,40 +79,50 @@ check_card:
     ld b,4
     call compare
     ret c
-; docs:save-session:begin
-    ld hl,response+12        ; поле session в ответе INFO
-    ld de,saved_session      ; место для его копии в памяти Z80
-    ld bc,8                  ; идентификатор занимает восемь байт
-    ldir                     ; сохранить, ничего не посылая карте
-; docs:save-session:end
+; docs:check-card-info:end
+; docs:check-card-caps:begin
     ld a,UG_OP_CAPS
     ld bc,0
     ld ix,UG_OP_CAPS_RESP_LEN
     call rpc
     ret c
     ld a,(response)
-    bit 0,a                  ; карта умеет воспроизводить PCM
+    bit 2,a                  ; бит 2: передача данных блоками
     jr z,.unsupported
     ld a,(response+4)
     bit 0,a                  ; карта понимает формат RAW8
     jr z,.unsupported
-    ld a,UG_OP_MEM_INFO
-    ld bc,0
-    ld ix,UG_OP_MEM_INFO_RESP_LEN
-    call rpc
-    ret c
-    ld hl,(response+16)      ; число уже загруженных объектов
-    ld a,h
-    or l
-    ld a,UG_ERR_BUSY         ; учебный пример требует пустую карту
-    scf
-    ret nz
-    xor a
-    ret
+    jp reset_card            ; начать с чистой карты
 .unsupported:
     ld a,UG_ERR_STATE
     scf
     ret
+; docs:check-card-caps:end
+
+; docs:reset-card:begin
+; Привести карту в исходное состояние: остановить всё, что играет, удалить
+; все объекты и отменить незавершённые передачи. Ответ - новый номер сеанса.
+reset_card:
+    ld a,UG_XC_TRANSPORT_RESET ; снять передачу, брошенную прошлой программой
+    call UG_XCTRL
+    ret c
+    ld a,UG_OP_RESET_STORE
+    ld hl,reset_request
+    ld bc,UG_RESET_STORE_REQ_LEN
+    ld ix,UG_OP_RESET_STORE_RESP_LEN
+    call rpc
+    ret c
+    ld hl,response           ; ответ целиком - новый session
+    ld de,saved_session      ; его копия в памяти Z80
+    ld bc,8                  ; идентификатор занимает восемь байт
+    ldir
+    xor a
+    ret
+
+reset_request:
+    DD UG_RESET_STORE_KEY    ; ключ 55475253h, буквы «UGRS»
+    DB 0                     ; уровень 0: тёплый сброс (настройки GS остаются)
+; docs:reset-card:end
 
 ; docs:tone-sequence:begin
 play_tone:
@@ -280,8 +291,8 @@ samples:
 ; docs:samples:end
 tone_parameters_end:
 
-; About 1..2 seconds; SCANKEY and SYSTIME are outside the ISA window.
-; A finite iteration bound also catches a stopped DSS clock.
+; Ждать 1-2 секунды. Клавиатура и часы DSS опрашиваются при закрытом окне ISA.
+; Число итераций ограничено: так замечается и остановившийся таймер DSS.
 wait_tone:
     ld c,0x21
     rst 0x10
@@ -311,10 +322,10 @@ wait_tone:
     ld (hl),a
     cp 2
     jr nc,.done
-    ; Polling a snapshot lets the caller also monitor card errors.
+    ; Снимок состояния заодно показывает ошибки звуковой части.
     call snapshot
     ret c
-    ld a,(response+50)        ; asynchronous audio error
+    ld a,(response+50)        ; код последней ошибки звуковой части
     or a
     scf
     ret nz
@@ -329,20 +340,21 @@ wait_tone:
     ld a,h
     or l
     jr nz,.poll
-    ld a,UG_ERR_TIMEOUT      ; TIMEOUT
+    ld a,UG_ERR_TIMEOUT      ; время ожидания истекло
     scf
     ret
 .cancel:
-    ld a,UG_ERR_CANCELLED    ; CANCELLED
+    ld a,UG_ERR_CANCELLED    ; нажата ESC
     scf
     ret
 .done:
     xor a
     ret
 
-; Common exit for success, ESC and errors. The empty-store precondition
-; plus exclusive host access makes the sole allocated object ours even
-; after a damaged ALLOC reply. Check saved_session before using any old ID.
+; Общий выход: при успехе, ESC и любой ошибке. Карта сброшена в начале, и
+; другие программы ею не управляют, поэтому единственный объект на ней наш,
+; даже если ответ ALLOC был потерян. Старые номера используются только
+; при прежнем сеансе (saved_session).
 cleanup:
     ld a,(allocated)
     or a
@@ -350,16 +362,18 @@ cleanup:
     ld a,UG_XC_TRANSPORT_RESET ; отменить незавершённый обмен
     call UG_XCTRL
     ret c
-    xor a
+; docs:check-session:begin
+    ld a,UG_OP_INFO          ; прочитать INFO заново
     ld bc,0
     ld ix,UG_OP_INFO_RESP_LEN
     call rpc
     ret c
-    ld hl,response+12
-    ld de,saved_session
+    ld hl,response+12        ; поле session в ответе INFO
+    ld de,saved_session      ; сеанс, сохранённый при сбросе карты
     ld b,8
     call compare
-    jr c,.changed            ; old objects no longer belong to this saved_session
+    jr c,.changed            ; сеанс сменился: старые номера забыть
+; docs:check-session:end
     ld a,UG_OP_OBJECT_ENUM   ; найти объект после потери ответа ALLOC
     ld hl,enum_request
     ld bc,2
@@ -370,15 +384,15 @@ cleanup:
     ld (sound_handle),hl
     ld a,h
     or l
-    ret z                    ; ALLOC did not take effect
+    ret z                    ; ALLOC не выполнился: удалять нечего
     call snapshot
     ret c
-    ld hl,(response+28)       ; stop only foreground using our sound_handle
+    ld hl,(response+28)       ; останавливать, только если играет наш объект
     ld de,(sound_handle)
     or a
     sbc hl,de
     jr nz,.free
-    ld hl,(response+20)       ; recovers a lost PLAY acknowledgement too
+    ld hl,(response+20)       ; play_id, даже если ответ PLAY был потерян
     ld a,h
     or l
     jr z,.free
@@ -389,13 +403,13 @@ cleanup:
     ld a,64
     ld (retries),a
 .retry:
-    call snapshot            ; wait for the audio side to apply STOP
+    call snapshot            ; пауза, пока звуковая часть выполняет STOP
     ret c
     call free_sound
     ret nc
-    cp UG_ERR_PINNED         ; PINNED until STOP has been applied
+    cp UG_ERR_PINNED         ; PINNED: STOP ещё не выполнен
     jr z,.again
-    cp UG_ERR_BUSY           ; BUSY is also retryable here
+    cp UG_ERR_BUSY           ; BUSY: тоже повторить
     ret nz
 .again:
     ld hl,retries
@@ -405,7 +419,7 @@ cleanup:
     scf
     ret
 .changed:
-    ld a,UG_ERR_STATE        ; STATE: never FREE IDs from a new saved_session
+    ld a,UG_ERR_STATE        ; сеанс сменился: старые номера не удалять
     scf
     ret
 snapshot:
@@ -413,18 +427,24 @@ snapshot:
     ld bc,0
     ld ix,UG_OP_SNAPSHOT_RESP_LEN
     jp rpc
+; docs:rpc:begin
+; A = команда, HL = аргументы, BC = их длина, IX = ожидаемая длина ответа.
+; Ответ попадает в response; другая длина ответа считается ошибкой LENGTH.
 rpc:
-    ld de,response
+    ld de,response           ; буфер ответа, 128 байт
     call UG_RPC
     ret c
     push ix
     pop hl
     or a
-    sbc hl,bc                ; require the exact response length
+    sbc hl,bc                ; длина ответа должна совпасть с ожидаемой
     ret z
-    ld a,UG_ERR_LENGTH       ; LENGTH
+    ld a,UG_ERR_LENGTH
     scf
     ret
+; docs:rpc:end
+; docs:compare:begin
+; HL и DE = два массива, B = число байт. При первом отличии CF=1, A = STATE.
 compare:
     ld a,(de)
     cp (hl)
@@ -435,16 +455,21 @@ compare:
     xor a
     ret
 .bad:
-    ld a,UG_ERR_STATE        ; STATE / unexpected bytes
+    ld a,UG_ERR_STATE        ; байты не совпали
     scf
     ret
+; docs:compare:end
 enum_request: DW 0
 ; docs:stop-params:begin
 stop_request:
     DW 0                     ; сюда stop_sound запишет play_id
     DB 0                     ; действие 0 = STOP (остановить)
 ; docs:stop-params:end
-signature: DB "UGS1",1,0,8,0,"VLS1"
+; docs:signature:begin
+signature:
+    DB "UGS1",1,0,8,0        ; magic, API 1.0, режим 8, boot_state 0
+    DB "VLS1"                ; раскладка, смещение 36 в ответе INFO
+; docs:signature:end
 ok_text: DB "PCM: uploaded, read back, played, freed",13,10,0
 error_text: DB "PCM: failed (DSS exit code = API error)",13,10,0
 saved_sp EQU 0xB900
@@ -457,8 +482,8 @@ second EQU 0xB910
 elapsed EQU 0xB911
 budget EQU 0xB912
 retries EQU 0xB914
-response EQU 0xBA00           ; 128 bytes, outside the library workspace
-readback EQU 0x5800           ; 256 bytes, outside the DSS resident area
+response EQU 0xBA00           ; 128 байт, вне рабочей области библиотеки
+readback EQU 0x5800           ; 256 байт, вне резидентной области DSS
     INCLUDE "ugproto.asm"
     ASSERT $ < 0xB700
     END start

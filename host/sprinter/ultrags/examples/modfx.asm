@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Музыка и эффект: загрузить MOD блоками, включить его с повтором, поверх
 ; него на секунду включить короткий гудок, затем всё остановить и освободить.
-; Для урока карта изначально пуста, других управляющих программ нет.
+; Перед работой программа сбрасывает карту: чужие объекты и звук не сохраняются.
     IFNDEF DOC_SLOT
     DEFINE DOC_SLOT 0
     ENDIF
@@ -68,10 +68,6 @@ open_card:
     ld b,8
     call compare
     ret c
-    ld hl,response+12
-    ld de,saved_session
-    ld bc,8
-    ldir
     ld a,UG_OP_CAPS
     ld bc,0
     ld ix,UG_OP_CAPS_RESP_LEN
@@ -84,23 +80,33 @@ open_card:
     and 0x09                 ; formats: RAW8 и MOD4
     cp 0x09
     jr nz,.unsupported
-    ld a,UG_OP_MEM_INFO
-    ld bc,0
-    ld ix,UG_OP_MEM_INFO_RESP_LEN
-    call rpc
-    ret c
-    ld hl,(response+16)      ; уже загруженные объекты
-    ld a,h
-    or l
-    ld a,UG_ERR_BUSY         ; урок требует пустую карту
-    scf
-    ret nz
-    xor a
-    ret
+    jp reset_card            ; начать с чистой карты (глава 3)
 .unsupported:
     ld a,UG_ERR_STATE
     scf
     ret
+
+; Сброс карты, как в главе 2: отменить чужую передачу, RESET_STORE уровня 0,
+; запомнить новый session.
+reset_card:
+    ld a,UG_XC_TRANSPORT_RESET
+    call UG_XCTRL
+    ret c
+    ld a,UG_OP_RESET_STORE
+    ld hl,reset_request
+    ld bc,UG_RESET_STORE_REQ_LEN
+    ld ix,UG_OP_RESET_STORE_RESP_LEN
+    call rpc
+    ret c
+    ld hl,response
+    ld de,saved_session
+    ld bc,8
+    ldir
+    xor a
+    ret
+reset_request:
+    DD UG_RESET_STORE_KEY
+    DB 0
 
 ; docs:modfx-sequence:begin
 play_lesson:
@@ -380,10 +386,13 @@ free_object:
     ret
 ; docs:modfx-cleanup:end
 
+; docs:snapshot:begin
 snapshot:
-    ld a,UG_OP_SNAPSHOT
+    ld a,UG_OP_SNAPSHOT      ; снимок состояния: 64 байта в response
     ld bc,0
     ld ix,UG_OP_SNAPSHOT_RESP_LEN
+    jp rpc
+; docs:snapshot:end
 rpc:
     ld de,response
     call UG_RPC
@@ -460,9 +469,11 @@ samples:
         EDUP
     EDUP
     ASSERT $-samples == TONE_BYTES
+; docs:music-data:begin
 music_data:
-    INCBIN "GUIDE.MOD"       ; четырёхканальный MOD, собранный docs-examples.py
-MUSIC_BYTES EQU $-music_data
+    INCBIN "GUIDE.MOD"       ; файл MOD включается в программу целиком
+MUSIC_BYTES EQU $-music_data ; его размер в байтах
+; docs:music-data:end
 signature: DB "UGS1",1,0,8,0
 ok_text: DB "MODFX: music looped, effect added and stopped, freed",13,10,0
 error_text: DB "MODFX: failed (DSS exit code = API error)",13,10,0

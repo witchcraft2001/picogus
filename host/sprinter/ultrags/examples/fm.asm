@@ -6,14 +6,16 @@
     ENDIF
     DEFINE UG_NO_DSS          ; библиотека UltraGS не вызывает DSS
 CARD_IO_BASE EQU 0x02A0
-; docs:fm-settings:begin
+; docs:fm-ports:begin
 OPL_ISA_BASE EQU 0x0388      ; порты OPL2: 0388h адрес/статус, 0389h данные
-OPL_ADDRESS  EQU 0xC388      ; те же порты в окне win3: C000h + номер порта
+OPL_ADDRESS  EQU 0xC388      ; те же порты в окне ISA: C000h + номер порта
 OPL_DATA     EQU 0xC389
+; docs:fm-ports:end
+; docs:fm-note:begin
 NOTE_FNUM_LO EQU 0x44        ; A-4 (440 Гц): f-number 244h при октаве 4
 NOTE_KEY_ON  EQU 0x32        ; бит 5 = клавиша нажата, октава 4, f-number[9:8]=2
 NOTE_KEY_OFF EQU 0x12        ; те же биты без бита 5
-; docs:fm-settings:end
+; docs:fm-note:end
     ORG 0x8000
 header:
     DB "EXE",1
@@ -156,6 +158,7 @@ write_registers:
     ret
 ; docs:fm-write:end
 
+; docs:fm-silence:begin
 ; Снять клавиши всех девяти каналов и выбрать мелодический режим.
 silence_all:
     ld a,0xB0
@@ -172,6 +175,7 @@ silence_all:
     ld a,0xBD
     ld e,0
     jp opl_write
+; docs:fm-silence:end
 
 ; docs:fm-instrument:begin
 instrument:
@@ -244,6 +248,7 @@ wait_seconds:
     xor a
     ret
 
+; docs:fm-cleanup:begin
 ; Общий выход: отпустить свою ноту, если она ещё нажата. Другие каналы
 ; программа не трогает: у OPL2 нет учёта владельцев, ноты снимает тот,
 ; кто их нажал.
@@ -254,6 +259,7 @@ cleanup:
     ld a,0xB0
     ld e,NOTE_KEY_OFF
     jp opl_write
+; docs:fm-cleanup:end
 
 snapshot:
     ld a,UG_OP_SNAPSHOT

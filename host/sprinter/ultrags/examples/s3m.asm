@@ -1,3 +1,3 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
-; Native S3M loading and monitoring; empty store and exclusive controller.
+; S3M через расширенный API: загрузка, проверка, наблюдение, очистка.
     INCLUDE "s3m_demo.inc"

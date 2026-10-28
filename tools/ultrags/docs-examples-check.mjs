@@ -40,11 +40,16 @@ function run(name,cli,{slot=0,iff=1,escAfter=Infinity,clock=true,expected=0,fore
  const r=runImage(Z80,m,{entry:h.entry,stack:h.stack,iff,budget:300000000});
  assert.equal(r.exitCode,expected,name+' '+cli+'\n'+m.text);
  assert.deepEqual(m.violations,[],name);if(lesson){assert.equal(m.turboWrites,0,name+' changed the CPU speed');assert.equal(m.turbo,!!iff);}assert(m.maxDiUs<10000&&m.maxWindowUs<10000);assert.equal(m.page3,m.page3Init);assert.equal(m.system,m.systemInit);assert.equal(!!r.end.iff1,!!iff);assert.equal(r.end.sp,h.stack-2);
- assert.deepEqual(Buffer.from(m.mem.slice(0x100,0x4000)),resident);assert.equal(m.fileHandles.size,0);assert.equal(reset,name==='GSFX'&&!foreign?1:0,'only the GS BUSY rejection probe may request reset');
- assert.equal(c.command(0)[1].subarray(12,20).toString('hex'),initialSession,'no reset may execute');
+ assert.deepEqual(Buffer.from(m.mem.slice(0x100,0x4000)),resident);assert.equal(m.fileHandles.size,0);
+ // Storage lessons issue one warm RESET_STORE once INFO and CAPS passed; the
+ // GS BUSY rejection probe requests one that must not execute.
+ const wipes=lesson&&/^(PCM|MODFX|GSMOD|S3M|GSS3M)/.test(name)&&mode===8&&!infoCorrupt;
+ assert.equal(reset,wipes||(name==='GSFX'&&!foreign)?1:0,name+' reset requests');
+ const session=c.command(0)[1].subarray(12,20).toString('hex');
+ if(wipes)assert.notEqual(session,initialSession,name+' must reset the card');else assert.equal(session,initialSession,'no reset may execute');
  c.tickUs(100000);
- assert.equal(c.command(2)[1].readUInt16LE(16),foreign?1:0,name+' owned cleanup');
- if(foreign)assert.equal(c.command(0x12,Buffer.from([foreignHandle,0]))[0],0);
+ assert.equal(c.command(2)[1].readUInt16LE(16),foreign&&!wipes?1:0,name+' owned cleanup');
+ if(foreign)assert.equal(c.command(0x12,Buffer.from([foreignHandle,0]))[0],wipes?7:0,name+' foreign object after the run');
  if(corrupt||infoCorrupt)assert(lost,'requested reply-CRC injection was exercised');
  if(/^PCM[01]$/.test(name)&&escAfter===100)assert(seenOps.has(0x30),'late ESC must follow PLAY_PCM');
  results.push({name,cli,slot,iff,clock,foreign,corrupt,escAfter:Number.isFinite(escAfter)?escAfter:null,expected,infoCorrupt,mode,sha256:sha256(b),steps:r.steps,maxDiUs:m.maxDiUs,text:m.text});
@@ -65,14 +70,14 @@ for(const slot of [0,1]){
  run('PCM',`FX /VERIFY /SLOT:${slot}`,{slot});
  run('PCM'+slot,'',{slot,escAfter:1,expected:21});
  run('PCM'+slot,'',{slot,escAfter:100,expected:21});
- run('PCM'+slot,'',{slot,foreign:true,expected:5});
+ run('PCM'+slot,'',{slot,foreign:true});
  // ESC during the first wait: CANCELLED (15h) after the lesson's own cleanup.
  for(const name of lessons)run(name+slot,'',{slot,escAfter:1,expected:21});
- // A foreign object: the storage lessons refuse with BUSY, the FM lesson
- // needs no storage and leaves the foreign object alone.
- for(const name of ['MODFX','GSMOD'])run(name+slot,'',{slot,foreign:true,expected:5});
+ // A foreign object: the storage lessons wipe it with their initial reset,
+ // the FM lesson needs no storage and leaves it alone.
+ for(const name of ['MODFX','GSMOD'])run(name+slot,'',{slot,foreign:true});
  run('FM'+slot,'',{slot,foreign:true,expected:0});
- for(const name of ['S3M','GSS3M']){run(name+slot,'',{slot,foreign:true,expected:5});run(name+slot,'',{slot,escAfter:10,expected:21});}
+ for(const name of ['S3M','GSS3M']){run(name+slot,'',{slot,foreign:true});run(name+slot,'',{slot,escAfter:10,expected:21});}
  run('S3M'+slot,'',{slot,corrupt:0x10,expected:4});
  run('S3M'+slot,'',{slot,corrupt:0x31,expected:4});
  run('PCM'+slot,'',{slot,corrupt:0x30,expected:4});

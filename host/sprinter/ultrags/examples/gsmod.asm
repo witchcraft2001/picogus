@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; MOD через команды General Sound: загрузить файл побайтно (30h ... D2h),
 ; включить (31h), приостановить (32h), продолжить (33h), освободить (37h).
-; Для урока карта изначально пуста, других управляющих программ нет.
+; Перед работой программа сбрасывает карту: чужие объекты и звук не сохраняются.
     IFNDEF DOC_SLOT
     DEFINE DOC_SLOT 0
     ENDIF
@@ -67,23 +67,29 @@ open_card:
     ld a,(response)
     bit 0,a                  ; features бит 0: музыкальные команды GS
     jr z,.unsupported
-    ld a,UG_OP_MEM_INFO
-    ld bc,0
-    ld ix,UG_OP_MEM_INFO_RESP_LEN
-    call rpc
-    ret c
-    ld hl,(response+16)
-    ld a,h
-    or l
-    ld a,UG_ERR_BUSY         ; урок требует пустую карту
-    scf
-    ret nz
-    xor a
-    ret
+    jp reset_card            ; начать с чистой карты (глава 3)
 .unsupported:
     ld a,UG_ERR_STATE
     scf
     ret
+
+; Сброс карты, как в главе 2: отменить чужую передачу и RESET_STORE уровня 0.
+; Программе, работающей только командами GS, то же даёт команда F3h.
+reset_card:
+    ld a,UG_XC_TRANSPORT_RESET
+    call UG_XCTRL
+    ret c
+    ld a,UG_OP_RESET_STORE
+    ld hl,reset_request
+    ld bc,UG_RESET_STORE_REQ_LEN
+    ld ix,UG_OP_RESET_STORE_RESP_LEN
+    call rpc
+    ret c
+    xor a
+    ret
+reset_request:
+    DD UG_RESET_STORE_KEY
+    DB 0
 
 ; docs:gs-sequence:begin
 play_lesson:
@@ -118,21 +124,21 @@ play_lesson:
 gs_command:
     ld (gs_desc),a           ; команда
     ld a,b
-    ld (gs_desc+1),a         ; has_pre
+    ld (gs_desc+1),a         ; есть ли предварительный байт
     ld a,c
-    ld (gs_desc+2),a         ; pre
+    ld (gs_desc+2),a         ; сам предварительный байт
     ld a,e
-    ld (gs_desc+6),a         ; reply_count
+    ld (gs_desc+6),a         ; сколько байт ответа прочитать
     ld hl,gs_desc
     jp UG_GS_COMMAND
 
 gs_desc:
-    DB 0                     ; command
+    DB 0                     ; код команды GS
     DB 0                     ; has_pre: 0 или 1
     DB 0                     ; pre: байт, который уходит до команды
     DB 0                     ; post_count: байтов после команды нет
-    DW 0                     ; post_ptr
-    DB 0                     ; reply_count
+    DW 0                     ; адрес байтов после команды
+    DB 0                     ; число байтов ответа
     DW gs_reply              ; куда положить ответ
 ; docs:gs-command:end
 

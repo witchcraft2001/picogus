@@ -111,7 +111,7 @@ for(const name of Object.keys(lessons))for(const slot of [0,1]){
 }
 for(const slot of [0,1]){
  run('PCM'+slot,{slot,escAfter:1,expected:21});
- run('MODFX'+slot,{slot,foreign:true,expected:5});
+ run('MODFX'+slot,{slot,foreign:true});
  // Without CONFIG another firmware mode is indistinguishable from no card.
  run('DISCOV'+slot,{slot,mode:1,expected:13});
  run('DISCOV'+slot+'S',{slot,mode:1,expected:6});

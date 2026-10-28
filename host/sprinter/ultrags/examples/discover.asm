@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
-; Minimal read-only API1/VLS1 probe. Assemble with -DDOC_SLOT=0 or 1.
-; UGCFG must select ULTRAGS and BASE 02A0 before this example.
+; Минимальная проверка карты API1/VLS1, только чтение. Сборка: -DDOC_SLOT=0 или 1.
+; Перед запуском UGCFG должна включить режим ULTRAGS и BASE 02A0.
     IFNDEF DOC_SLOT
     DEFINE DOC_SLOT 0
     ENDIF
@@ -19,7 +19,7 @@ start:
     ld hl,0x02A0
     call UG_OPEN
     jr c,failed
-    xor a                    ; INFO
+    xor a                    ; команда INFO
     ld hl,0
     ld bc,0
     ld de,response
@@ -34,7 +34,7 @@ start:
     jr nz,invalid
     ld hl,response
     ld de,signature
-    ld b,8                   ; UGS1, API1.0, mode8, boot ready
+    ld b,8                   ; UGS1, API 1.0, режим 8, загрузка без ошибок
 .check:
     ld a,(de)
     cp (hl)
@@ -54,12 +54,12 @@ start:
     xor a
     jr finish
 invalid:
-    ld a,6                   ; STATE: incompatible INFO
+    ld a,6                   ; STATE: ответ INFO не подходит
 failed:
-    ; A retains the error; do not reset the card to recover discovery.
+    ; В A остаётся код ошибки; проверка карту не сбрасывает.
 finish:
     ld (result),a
-    call UG_CLOSE            ; no objects or voices have been acquired
+    call UG_CLOSE            ; объектов и голосов программа не занимала
     ld a,(result)
     ld hl,pass_text
     or a
@@ -67,7 +67,7 @@ finish:
     ld hl,fail_text
 .print:
     ld c,0x5C
-    rst 0x10                 ; DSS, ISA window is closed
+    rst 0x10                 ; вызов DSS: окно ISA уже закрыто
     ld sp,(saved_sp)
     ld a,(result)
     ld b,a

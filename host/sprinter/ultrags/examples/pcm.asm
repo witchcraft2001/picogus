@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
-; Guide entry unit: PCM /VERIFY
-; Uses the complete DSS application and its owned-resource cleanup.
-; The command line selects the lesson; no private copy of the driver.
+; Пример руководства: UGTEST PCM /VERIFY
+; Собирается из полного приложения DSS вместе с его очисткой своих ресурсов.
+; Сценарий выбирает командная строка; отдельной копии драйвера нет.
     INCLUDE "ugtest.asm"
