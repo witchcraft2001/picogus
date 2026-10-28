@@ -26,8 +26,9 @@ void ug_mod_parser_init(ug_mod_parser *p,ug_mod_info *out,uint32_t size) {
 }
 int ug_mod_parser_step(ug_mod_parser *p,ug_mod_info *out,ug_mod_read_fn read,void *ctx) {
     uint8_t h[256];
-    if(!p || !out || !read || out->file_size<1084) return -1;
+    if(!p || !out || !read || out->file_size<600) return -1;
     if(p->stage==0) {
+        if(out->file_size<1084) { p->stage=5;return 0; }
         if(read(ctx,950,h,134)) return -2;
         out->flt8=!memcmp(h+130,"FLT8",4);
         out->channels=(out->flt8 || !memcmp(h+130,"8CHN",4))?8:
@@ -39,7 +40,8 @@ int ug_mod_parser_step(ug_mod_parser *p,ug_mod_info *out,ug_mod_read_fn read,voi
             else if(tag[0]>='1' && tag[0]<='3' && tag[1]>='0' && tag[1]<='9' && !memcmp(tag+2,"CH",2))
                 out->channels=(tag[0]-'0')*10+tag[1]-'0';
         }
-        if(!out->channels || out->channels>UG_MOD_CHANNELS) return -1;
+        if(!out->channels) { p->stage=5;return 0; }
+        if(out->channels>UG_MOD_CHANNELS) return -1;
         out->song_length=h[0];out->restart=h[1];
         if(!out->song_length || out->song_length>128) return -1;
         uint8_t max_pattern=0;
@@ -55,23 +57,52 @@ int ug_mod_parser_step(ug_mod_parser *p,ug_mod_info *out,ug_mod_read_fn read,voi
         out->sample_offset=1084+patterns;p->stage=1;
         return 0;
     }
+    if(p->stage==5) {
+        if(read(ctx,0,h,20)) return -2;
+        for(unsigned i=0;i<20;i++) if(h[i] && (h[i]<32 || h[i]>126)) return -1;
+        p->stage=4;return 0;
+    }
+    if(p->stage==4) {
+        if(read(ctx,470,h,130)) return -2;
+        out->channels=4;out->profile=UG_MOD_ST_IX;out->song_length=h[0];
+        out->restart=h[1];out->initial_bpm=h[1];p->ust=h[1]>=64;
+        if(!out->song_length || out->song_length>128) return -1;
+        uint8_t max_pattern=0;
+        for(unsigned i=0;i<128;i++) {
+            if(h[i+2]>=128) return -1;
+            out->order[i]=h[i+2];if(h[i+2]>max_pattern) max_pattern=h[i+2];
+        }
+        out->pattern_offset=600;
+        uint32_t patterns=(uint32_t)(max_pattern+1)*1024u;
+        if(patterns>out->file_size-600) return -1;
+        out->sample_offset=600+patterns;p->stage=1;return 0;
+    }
     if(p->stage==1) {
-        unsigned count=31-p->sample;if(count>8)count=8;
+        unsigned instruments=out->profile?15:31;
+        unsigned count=instruments-p->sample;if(count>8)count=8;
         if(read(ctx,20+p->sample*30,h,count*30)) return -2;
         for(unsigned i=0;i<count;i++) {
             const uint8_t *s=h+i*30;ug_mod_sample *o=&out->samples[p->sample+i];
             o->length=(uint32_t)be16(s+22)*2;
+            o->sample_bytes=o->length;
             o->finetune=(int8_t)(s[24]&15);if(o->finetune>7)o->finetune-=16;
             o->volume=s[25];o->loop_start=(uint32_t)be16(s+26)*2;o->loop_length=(uint32_t)be16(s+28)*2;
+            if(out->profile) {
+                uint32_t skip=be16(s+26);
+                for(unsigned j=0;j<22;j++) if(s[j] && (s[j]<32 || s[j]>126)) return -1;
+                if(s[24]>15 || be16(s+22)>0x8000 || be16(s+28)>0x8000 || skip>o->length || (o->length && skip==o->length)) return -1;
+                if(s[24] || be16(s+22)>0x1387 || skip>9999 || be16(s+28)>0x1387) p->ust=0;
+                o->sample_skip=skip;o->length-=skip;o->loop_start=0;
+            }
             if(o->volume>64) return -1;
             if(o->loop_length<=2) { o->loop_start=0;o->loop_length=0; }
             else if(o->loop_start>=o->length || o->loop_length>o->length-o->loop_start) return -1;
-            if(o->length>UINT32_MAX-p->total) return -1;
-            o->sample_bytes=o->length;p->total+=o->length;
+            if(o->sample_bytes>UINT32_MAX-p->total) return -1;
+            p->total+=o->sample_bytes;
         }
         p->sample+=(uint8_t)count;
-        if(p->sample==31) {
-            if(p->total>out->file_size-out->sample_offset) return -1;
+        if(p->sample==instruments) {
+            if((out->profile && p->total<8) || p->total>out->file_size-out->sample_offset) return -1;
             p->stage=2;p->cursor=out->pattern_offset;
         }
         return 0;
@@ -80,18 +111,38 @@ int ug_mod_parser_step(ug_mod_parser *p,ug_mod_info *out,ug_mod_read_fn read,voi
         unsigned n=out->sample_offset-p->cursor;if(n>sizeof(h))n=sizeof(h);
         if(read(ctx,p->cursor,h,n)) return -2;
         /* Every physical pattern still determines the sample offset, including
-         * inactive tail orders. Only patterns in the playable order list need
-         * valid events: old modules can retain arbitrary unused pattern bytes.
+         * inactive tail orders. Signature-bearing MODs may retain arbitrary unused
+         * pattern bytes; signatureless Soundtracker must validate every event.
          * Pattern sizes and each chunk are multiples of 256, so a chunk never
          * straddles patterns (also for FLT8's paired four-channel blocks). */
         unsigned pattern=(p->cursor-out->pattern_offset)/(256u*out->channels);
         bool used=false;
         for(unsigned order=0;order<out->song_length;order++)
             if(out->order[order]==pattern) { used=true;break; }
-        if(used) for(unsigned i=0;i<n;i+=4)
-            if(((h[i]&0xf0)|(h[i+2]>>4))>31) return -1;
+        if(used || out->profile) for(unsigned i=0;i<n;i+=4) {
+            unsigned sample=(h[i]&0xf0)|(h[i+2]>>4);
+            if(sample>(out->profile?15u:31u)) return -1;
+            if(out->profile) {
+                unsigned period=((h[i]&15)<<8)|h[i+1];
+                static const uint16_t valid[]={856,808,762,720,678,640,604,570,538,508,480,453,
+                    428,404,381,360,339,320,302,285,269,254,240,226,
+                    214,202,190,180,170,160,151,143,135,127,120,113,
+                    763,679,641,571,539,509,429,340,321,300,286,270,227,191,162};
+                bool valid_period=!period;
+                for(unsigned j=0;j<sizeof(valid)/sizeof(valid[0]);j++) if(period==valid[j])valid_period=true;
+                if(!valid_period)return -1;
+                unsigned fx=h[i+2]&15, param=h[i+3];
+                if(fx) p->fxused|=1u<<fx;else if(param)p->fxused|=1;
+                if((fx && fx!=1 && fx!=2) || (fx==1 && !param) ||
+                   (fx==2 && (param&15) && (param&0xf0))) p->ust=0;
+            }
+        }
         p->cursor+=n;
         if(p->cursor<out->sample_offset) return 0;
+        if(out->profile) {
+            if(p->ust && !(p->fxused&~0x0006)) { out->profile=UG_MOD_UST;out->restart=0; }
+            else { if(p->fxused&~0xd007u)return -1;out->initial_bpm=125;if(out->restart>=out->song_length)out->restart=0; }
+        }
         p->stage=3;
     }
     return 1;
@@ -101,7 +152,7 @@ int ug_mod_parse(ug_mod_info *out,ug_mod_read_fn read,void *ctx,uint32_t size) {
     /* PLAY re-reads the bounded header of an immutable, already sealed object.
      * Full pattern validation belongs to cooperative SEAL/D2, never PLAY. */
     ug_mod_parser p;ug_mod_parser_init(&p,out,size);
-    while(p.stage<2) { int rc=ug_mod_parser_step(&p,out,read,ctx);if(rc<0)return rc; }
+    while(p.stage!=2 && p.stage!=3) { int rc=ug_mod_parser_step(&p,out,read,ctx);if(rc<0)return rc; }
     return 0;
 }
 
@@ -161,8 +212,18 @@ static void apply_row(ug_mod_player *p) {
         const uint8_t *e=row+i*4;ug_mod_channel *c=&p->channel[i];
         uint8_t sample=(e[0]&0xf0)|(e[2]>>4);
         uint16_t period=(uint16_t)(((e[0]&15)<<8)|e[1]);
-        if(sample>31) { p->error=2;p->playing=0;return; }
+        if(sample>(p->info.profile?15:31)) { p->error=2;p->playing=0;return; }
+        /* The signatureless loader decodes its accepted historical period
+         * variants to notes, as Soundtracker/libxmp do, before applying bends. */
+        if(p->info.profile && period)period=note_period(period_note(period));
         c->effect=e[2]&15;c->param=e[3];c->delayed_note=0;
+        if(p->info.profile==UG_MOD_UST) {
+            if(c->effect==1)c->effect=0;
+            else if(c->effect==2 && !(c->param&0xf0))c->effect=1;
+            else if(c->effect==2 && !(c->param&15))c->param>>=4;
+        }
+        if(p->info.profile && c->effect!=0 && c->effect!=1 && c->effect!=2 &&
+           c->effect!=12 && c->effect!=15)c->effect=0,c->param=0;
         c->period=c->base_period;c->mix_volume=c->volume;
         uint8_t sub=c->param>>4,x=c->param&15;
         if(c->effect==14 && sub==4) c->wave_vibrato=x&7;
@@ -200,7 +261,8 @@ static void apply_row(ug_mod_player *p) {
             p->global_break_row=(int8_t)(sub>9 || x>9 || r>63?0:r);break;
         }
         case 15:
-            if(c->param>=32) p->bpm=c->param;
+            if(p->info.profile) { if(c->param)p->speed=c->param; }
+            else if(c->param>=32) p->bpm=c->param;
             else if(c->param) p->speed=c->param;
             else if(!p->f00_mode) p->paused=1;
             break;
@@ -265,6 +327,15 @@ static void vibrato(ug_mod_channel *c) {
         waveform(c,c->vibrato_pos,c->wave_vibrato)*c->vibrato_depth/128);
     c->vibrato_pos=(uint8_t)((c->vibrato_pos+c->vibrato_speed)&63);
 }
+/* Soundtracker uses the three-octave Amiga range, including after a bend.
+ * Keep the existing extended-period policy for signature-bearing MODs. */
+static uint16_t slide_period(const ug_mod_player *p,const ug_mod_channel *c,int period) {
+    if(p->info.profile) {
+        int low=tuned_period(113,c->fine),high=tuned_period(856,c->fine);
+        return (uint16_t)(period<low?low:period>high?high:period);
+    }
+    return clamp_period(period);
+}
 static void tick_effect(ug_mod_player *p,unsigned i) {
     ug_mod_channel *c=&p->channel[i];unsigned x=c->param>>4,y=c->param&15;
     c->period=c->base_period;c->mix_volume=c->volume;
@@ -277,8 +348,8 @@ static void tick_effect(ug_mod_player *p,unsigned i) {
             unsigned n=p->tick%3==1?x:p->tick%3==2?y:0;
             c->period=clamp_period((int)(((uint32_t)c->base_period*ratio[n]+32768u)>>16));
         }break;
-    case 1: if(c->base_period)c->base_period=clamp_period((int)c->base_period-c->param);c->period=c->base_period;break;
-    case 2: if(c->base_period)c->base_period=clamp_period((int)c->base_period+c->param);c->period=c->base_period;break;
+    case 1: if(c->base_period)c->base_period=slide_period(p,c,(int)c->base_period-c->param);c->period=c->base_period;break;
+    case 2: if(c->base_period)c->base_period=slide_period(p,c,(int)c->base_period+c->param);c->period=c->base_period;break;
     case 3: tone_porta(c);break;
     case 4: vibrato(c);break;
     case 5: tone_porta(c);volume_slide(c,x,y);break;
@@ -312,7 +383,7 @@ static void init_channels(ug_mod_player *p) {
 }
 void ug_mod_start(ug_mod_player *p,const ug_mod_info *info,ug_mod_read_fn read,void *ctx,uint8_t flags,uint8_t f00) {
     memset(p,0,sizeof(*p));p->info=*info;p->read=read;p->read_ctx=ctx;
-    p->speed=6;p->bpm=125;p->playing=1;p->loop_song=(flags&UG_MOD_LOOP)!=0;
+    p->speed=6;p->bpm=info->profile==UG_MOD_UST?info->initial_bpm:125;p->playing=1;p->loop_song=(flags&UG_MOD_LOOP)!=0;
     p->f00_policy=flags&(UG_MOD_IGNORE_F00|UG_MOD_PAUSE_F00);
     p->f00_mode=p->f00_policy?(p->f00_policy==UG_MOD_IGNORE_F00):f00;
     init_channels(p);apply_row(p); /* Tick zero starts at the PLAY boundary. */
@@ -360,7 +431,7 @@ void ug_mod_advance_frames(ug_mod_player *p,uint32_t n) {
 }
 int ug_mod_seek(ug_mod_player *p,uint16_t order,uint8_t row) {
     if(!p || !p->playing || order>=p->info.song_length || row>=64)return -1;
-    p->order=order;p->row=row;p->tick=0;p->speed=6;p->bpm=125;p->tempo_fraction=0;
+    p->order=order;p->row=row;p->tick=0;p->speed=6;p->bpm=p->info.profile==UG_MOD_UST?p->info.initial_bpm:125;p->tempo_fraction=0;
     p->pending_speed=0;p->pattern_delay=0;p->error=0;
     init_channels(p);apply_row(p);
     return 0;

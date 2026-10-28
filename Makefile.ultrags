@@ -583,3 +583,25 @@ s3m-package:
 	$(NODE) $(ROOT)/tools/ultrags/test-s3m-evidence.mjs $(ROOT)/build/reproducibility
 	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --s3m
 	$(NODE) $(ROOT)/tools/ultrags/package-gs105.mjs --s3m --verify-only
+
+# Soundtracker 15-instrument parser and tracker smoke test.
+.PHONY: mod15-host
+mod15-host:
+	@mkdir -p $(BUILD)/host/mod-compat/gen
+	$(NODE) $(ROOT)/tools/ultrags/gen-wire.mjs $(ROOT)/tools/ultrags/wire-schema.json $(BUILD)/host/mod-compat/gen
+	$(CC) -std=c11 -Wall -Wextra -I$(ROOT)/sw/ultrags -I$(ROOT)/common -I$(BUILD)/host/mod-compat/gen \
+		$(ROOT)/tests/ultrags/unit/test_mod15.c $(ROOT)/sw/ultrags/ug_mod.c -o $(BUILD)/host/mod-compat/test_mod15
+	$(BUILD)/host/mod-compat/test_mod15
+
+# Local private originals are optional inputs and are never packaged.
+UG_MOD15_AWESOME ?= $(BUILD)/host/mod-compat/AWESOME5.MOD
+UG_MOD15_AXELF ?= $(BUILD)/host/mod-compat/axelf.mod
+.PHONY: mod15-private
+mod15-private: mod15-host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/mod15-private.py --build $(BUILD)/host/mod-compat \
+		--awesome "$(UG_MOD15_AWESOME)" --axelf "$(UG_MOD15_AXELF)"
+
+# Reference checks with owned synthetic modules require libxmp 4.7.0.
+.PHONY: mod15-reference
+mod15-reference: mod15-host
+	$(UG_PYTHON) $(ROOT)/tools/ultrags/mod15-private.py --build $(BUILD)/host/mod-compat

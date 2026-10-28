@@ -140,7 +140,7 @@ static bool legacy_close(uint8_t *out,uint8_t *error) {
                     /* A completely valid MOD wins even with an SCRM string.
                      * The S3M parser validates the fallback, never a suffix. */
                     legacy.s3m=true;o->kind=5;s3m_seal_init(o);return false;
-                } else { o->mod_valid=1;o->mod_channels=legacy_mod_info.channels; }
+                } else { o->mod_valid=1;o->mod_channels=legacy_mod_info.channels;o->mod_profile=legacy_mod_info.profile; }
             } else {
                 int parsed=s3m_seal_step(o);if(!parsed)return false;
                 if(parsed<0)legacy.stream_error=(uint8_t)-parsed;

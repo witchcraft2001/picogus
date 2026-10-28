@@ -552,8 +552,8 @@ static uint64_t mod_step(uint16_t period) {
 }
 static uint32_t mod_sample_offset(unsigned sample) {
     uint32_t offset=mod_object.offset+tracker.engine.mod.info.sample_offset;
-    for(unsigned i=0;i<sample && i<31;i++) offset+=tracker.engine.mod.info.samples[i].length;
-    return offset;
+    for(unsigned i=0;i<sample && i<31;i++) offset+=tracker.engine.mod.info.samples[i].sample_bytes;
+    return offset+tracker.engine.mod.info.samples[sample].sample_skip;
 }
 static void mod_lane_sync(unsigned i,bool force) {
     ug_mod_channel *c=&tracker.engine.mod.channel[i]; ug_lane *l=music_lane(i);
@@ -740,7 +740,14 @@ static int start_mod(ug_object_t *o,uint8_t flags) {
             unsigned n=sizeof(pending_s3m_info)-off;if(n>256)n=256;
             if(ug_psram_read(ps,o->aux_offset+off,(uint8_t *)&pending_s3m_info+off,n)) { parsed=-2;break; }off+=n;
         }
-    } else parsed=ug_mod_parse(&pending_mod_info,mod_object_read,o,o->size);
+    } else {
+        parsed=ug_mod_parse(&pending_mod_info,mod_object_read,o,o->size);
+        if(!parsed && o->mod_profile) {
+            pending_mod_info.profile=o->mod_profile;
+            if(o->mod_profile==UG_MOD_UST)pending_mod_info.restart=0;
+            else pending_mod_info.initial_bpm=125;
+        }
+    }
     if(parsed) { if(parsed==-2)ug_stat_add(10,1);return parsed==-2?UG_ERR_PSRAM:UG_ERR_FORMAT; }
     project_playback();
     uint16_t id=instance_id(false);if(!id)return UG_ERR_NO_VOICE;
@@ -1071,7 +1078,7 @@ bool ug_storage_command(uint8_t op,const uint8_t *q,uint8_t n,uint8_t *r,
                 if(rc==-2)ug_stat_add(10,1);
             }
             else if(!rc) return false;
-            else { o->mod_valid=1;o->mod_channels=seal_mod_info.channels; }
+            else { o->mod_valid=1;o->mod_channels=seal_mod_info.channels;o->mod_profile=seal_mod_info.profile; }
         } else if(!*status && o->kind==5) {
             if(!sealing.parser_started) { s3m_seal_init(o);sealing.parser_started=true; }
             int rc=s3m_seal_step(o);

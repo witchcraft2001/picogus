@@ -18,7 +18,7 @@ typedef int (*ug_mod_read_fn)(void *ctx, uint32_t offset, uint8_t *dst, uint32_t
 
 typedef struct {
     uint32_t length, loop_start, loop_length;
-    uint32_t sample_bytes;
+    uint32_t sample_bytes, sample_skip; /* physical extent and playable prefix */
     int8_t finetune;
     uint8_t volume;
 } ug_mod_sample;
@@ -26,7 +26,8 @@ typedef struct {
 typedef struct {
     uint32_t pattern_offset, sample_offset, file_size;
     ug_mod_sample samples[31];
-    uint8_t song_length, restart, order[128], channels, flt8; /* paired four-channel blocks */
+    uint8_t song_length, restart, order[128], channels, flt8; /* FLT8: paired four-channel blocks */
+    uint8_t profile, initial_bpm;
 } ug_mod_info;
 
 typedef struct {
@@ -59,11 +60,14 @@ typedef struct {
 
 /* Cooperative SEAL validation: one <=256-byte read per step, including events.
  * The caller owns the descriptor and cursor until completion. */
-typedef struct { uint32_t cursor,total; uint8_t stage,sample; } ug_mod_parser;
+enum { UG_MOD_MODERN=0, UG_MOD_ST_IX=1, UG_MOD_UST=2 };
+typedef struct { uint32_t cursor,total; uint16_t fxused; uint8_t stage,sample,ust; } ug_mod_parser;
 void ug_mod_parser_init(ug_mod_parser *p, ug_mod_info *out, uint32_t size);
 /* 0=pending, 1=done, -1=format, -2=read error. */
 int ug_mod_parser_step(ug_mod_parser *p, ug_mod_info *out, ug_mod_read_fn read, void *ctx);
-/* Validate a 31-instrument M.K./M!K!/FLT4/FLT8 and 1CHN..9CHN/10CH..32CH header/layout. -1=format, -2=backend read error. */
+/* Read the bounded header of a sealed MOD. Full validation and Soundtracker
+ * classification are performed by the cooperative parser at SEAL/D2.
+ * -1=format, -2=backend read error. */
 int ug_mod_parse(ug_mod_info *out, ug_mod_read_fn read, void *ctx, uint32_t size);
 void ug_mod_start(ug_mod_player *p, const ug_mod_info *info, ug_mod_read_fn read,
                   void *ctx, uint8_t flags, uint8_t legacy_f00_mode);
